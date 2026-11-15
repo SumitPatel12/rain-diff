@@ -1,0 +1,20 @@
+[package]
+name = "rain-diagram"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[features]
+mermaid-compare = ["dep:rune-mermaid"]
+
+[dependencies]
+rain-core = { workspace = true }
+rune = { workspace = true }
+rune-kit = { workspace = true }
+rune-mermaid = { workspace = true, optional = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+
+[[example]]
+name = "diagram"

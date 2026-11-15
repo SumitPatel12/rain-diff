@@ -1,0 +1,654 @@
+{
+  "format": "difit-overview/v1",
+  "title": "ACME-0000 Vouchers at checkout (sample, with schema)",
+  "repos": [
+    {
+      "id": "server",
+      "dir": "acme-server",
+      "base": "1111111111111111111111111111111111111111",
+      "head": "2222222222222222222222222222222222222222"
+    },
+    {
+      "id": "app",
+      "dir": "acme-app",
+      "base": "3333333333333333333333333333333333333333",
+      "head": "WORKTREE"
+    }
+  ],
+  "graph": {
+    "schemaVersion": "0.3.0",
+    "kind": "graph",
+    "title": "Vouchers at checkout",
+    "summary": "Adds an optional voucher to account payments: a new VouchersController action, a VoucherService that validates and records the voucher, a Voucher entity, and an Angular voucher form wired into the account page.",
+    "lenses": ["architecture", "data-flow", "data-model"],
+    "provenance": {
+      "repo": {
+        "owner": "acme",
+        "name": "acme-server"
+      },
+      "base": {
+        "sha": "1111111111111111111111111111111111111111"
+      },
+      "head": {
+        "sha": "2222222222222222222222222222222222222222"
+      }
+    },
+    "lanes": [
+      {
+        "id": "web",
+        "label": "Web app",
+        "subtitle": "Angular",
+        "order": 0
+      },
+      {
+        "id": "api",
+        "label": "Server API",
+        "subtitle": "ASP.NET",
+        "order": 1
+      },
+      {
+        "id": "data",
+        "label": "Data",
+        "subtitle": "SQL Server",
+        "order": 2
+      }
+    ],
+    "nodes": [
+      {
+        "id": "account-page",
+        "label": "Account page",
+        "kind": "ui",
+        "delta": "unchanged",
+        "lane": "web",
+        "files": [
+          {
+            "path": "app/src/app/account/account-page.component.ts"
+          }
+        ]
+      },
+      {
+        "id": "voucher-form",
+        "label": "VoucherFormComponent",
+        "kind": "ui",
+        "delta": "added",
+        "lane": "web",
+        "files": [
+          {
+            "path": "app/src/app/vouchers/voucher-form.component.ts",
+            "startLine": 1,
+            "endLine": 40
+          }
+        ]
+      },
+      {
+        "id": "voucher-client",
+        "label": "VoucherService (client)",
+        "kind": "service",
+        "delta": "added",
+        "lane": "web",
+        "files": [
+          {
+            "path": "app/src/app/vouchers/voucher.service.ts",
+            "startLine": 8,
+            "endLine": 20
+          }
+        ]
+      },
+      {
+        "id": "vouchers-controller",
+        "label": "POST /api/accounts/{id}/voucher",
+        "kind": "route",
+        "delta": "added",
+        "lane": "api",
+        "files": [
+          {
+            "path": "server/src/Api/VouchersController.cs",
+            "startLine": 12,
+            "endLine": 30
+          }
+        ]
+      },
+      {
+        "id": "voucher-service",
+        "label": "VoucherService",
+        "kind": "service",
+        "delta": "added",
+        "lane": "api",
+        "files": [
+          {
+            "path": "server/src/Services/VoucherService.cs",
+            "startLine": 9,
+            "endLine": 34
+          }
+        ]
+      },
+      {
+        "id": "account-service",
+        "label": "AccountService",
+        "kind": "service",
+        "delta": "modified",
+        "lane": "api",
+        "files": [
+          {
+            "path": "server/src/Services/AccountService.cs",
+            "startLine": 40,
+            "endLine": 52
+          }
+        ]
+      },
+      {
+        "id": "voucher-table",
+        "label": "Voucher",
+        "kind": "datastore",
+        "delta": "added",
+        "lane": "data",
+        "files": [
+          {
+            "path": "server/src/Data/Voucher.cs",
+            "startLine": 1,
+            "endLine": 18
+          }
+        ]
+      }
+    ],
+    "edges": [
+      {
+        "id": "page-to-form",
+        "from": "account-page",
+        "to": "voucher-form",
+        "kind": "render",
+        "delta": "added"
+      },
+      {
+        "id": "form-to-client",
+        "from": "voucher-form",
+        "to": "voucher-client",
+        "kind": "call",
+        "delta": "added"
+      },
+      {
+        "id": "client-to-api",
+        "from": "voucher-client",
+        "to": "vouchers-controller",
+        "kind": "http",
+        "delta": "added",
+        "label": "POST voucher",
+        "emphasis": "hero",
+        "animated": true
+      },
+      {
+        "id": "controller-to-service",
+        "from": "vouchers-controller",
+        "to": "voucher-service",
+        "kind": "call",
+        "delta": "added"
+      },
+      {
+        "id": "service-to-account",
+        "from": "voucher-service",
+        "to": "account-service",
+        "kind": "call",
+        "delta": "modified"
+      },
+      {
+        "id": "service-to-table",
+        "from": "voucher-service",
+        "to": "voucher-table",
+        "kind": "data",
+        "delta": "added"
+      }
+    ],
+    "flows": [
+      {
+        "id": "add-voucher",
+        "title": "Adding a voucher",
+        "delta": "added",
+        "participants": [
+          {
+            "node": "voucher-form"
+          },
+          {
+            "node": "vouchers-controller"
+          },
+          {
+            "node": "voucher-service"
+          },
+          {
+            "node": "voucher-table"
+          }
+        ],
+        "messages": [
+          {
+            "id": "submit",
+            "from": "voucher-form",
+            "to": "vouchers-controller",
+            "label": "POST /api/accounts/{id}/voucher",
+            "kind": "sync",
+            "delta": "added",
+            "files": [
+              {
+                "path": "app/src/app/vouchers/voucher.service.ts",
+                "startLine": 14
+              }
+            ]
+          },
+          {
+            "id": "record",
+            "from": "vouchers-controller",
+            "to": "voucher-service",
+            "label": "RecordVoucher(accountId, amount)",
+            "kind": "sync",
+            "delta": "added",
+            "files": [
+              {
+                "path": "server/src/Api/VouchersController.cs",
+                "startLine": 22
+              }
+            ]
+          },
+          {
+            "id": "insert",
+            "from": "voucher-service",
+            "to": "voucher-table",
+            "label": "INSERT Voucher",
+            "kind": "sync",
+            "delta": "added",
+            "files": [
+              {
+                "path": "server/src/Services/VoucherService.cs",
+                "startLine": 27
+              }
+            ]
+          },
+          {
+            "id": "ok",
+            "from": "vouchers-controller",
+            "to": "voucher-form",
+            "label": "200 VoucherViewModel",
+            "kind": "return",
+            "delta": "added"
+          }
+        ]
+      }
+    ],
+    "views": [
+      {
+        "id": "overview",
+        "title": "Vouchers end to end",
+        "lens": "architecture",
+        "defaultOpen": true,
+        "scope": {
+          "kind": "all"
+        }
+      },
+      {
+        "id": "api-only",
+        "title": "Inside the API",
+        "lens": "architecture",
+        "scope": {
+          "kind": "selection",
+          "nodes": ["vouchers-controller", "voucher-service", "account-service", "voucher-table"]
+        }
+      },
+      {
+        "id": "add-voucher-flow",
+        "title": "Adding a voucher",
+        "lens": "data-flow",
+        "scope": {
+          "kind": "selection",
+          "flows": ["add-voucher"]
+        }
+      },
+      {
+        "id": "schema",
+        "title": "Voucher schema",
+        "lens": "data-model",
+        "scope": {
+          "kind": "all"
+        }
+      }
+    ],
+    "walkthrough": {
+      "steps": [
+        {
+          "id": "new-endpoint",
+          "heading": "Accounts now take a voucher",
+          "body": "A new endpoint records a voucher against an account; the web app posts it from a new form.",
+          "stage": {
+            "kind": "view",
+            "view": "overview"
+          },
+          "focus": {
+            "kind": "selection",
+            "nodes": ["vouchers-controller", "voucher-form"]
+          },
+          "detail": {
+            "text": "VoucherFormComponent posts to the new voucher endpoint, which hands the amount to VoucherService.",
+            "cites": [
+              {
+                "text": "VoucherFormComponent",
+                "ref": {
+                  "kind": "node",
+                  "node": "voucher-form"
+                }
+              },
+              {
+                "text": "voucher endpoint",
+                "ref": {
+                  "kind": "node",
+                  "node": "vouchers-controller"
+                }
+              },
+              {
+                "text": "VoucherService",
+                "ref": {
+                  "kind": "node",
+                  "node": "voucher-service"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "id": "flow",
+          "heading": "One request, one row",
+          "body": "The voucher is validated, then written as one Voucher row before the account total is refreshed.",
+          "stage": {
+            "kind": "flow",
+            "flow": "add-voucher"
+          },
+          "focus": {
+            "kind": "selection",
+            "messages": ["record", "insert"]
+          }
+        },
+        {
+          "id": "blast",
+          "heading": "4 parts added, 1 changed",
+          "body": "AccountService is the only existing code touched; it now includes vouchers in the total.",
+          "stage": {
+            "kind": "view",
+            "view": "overview"
+          },
+          "focus": {
+            "kind": "selection",
+            "nodes": ["account-service"]
+          }
+        },
+        {
+          "id": "schema",
+          "heading": "A Voucher row per account",
+          "body": "Vouchers hang off accounts through a new foreign key, and a unique index keeps one voucher per account per moment.",
+          "stage": {
+            "kind": "view",
+            "view": "schema"
+          },
+          "focus": {
+            "kind": "selection",
+            "tables": ["vouchers"]
+          },
+          "detail": {
+            "text": "Voucher.AccountId points at the account the voucher belongs to.",
+            "cites": [
+              {
+                "text": "Voucher.AccountId",
+                "ref": {
+                  "kind": "column",
+                  "table": "vouchers",
+                  "column": "AccountId"
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "dataModel": {
+      "stores": [
+        {
+          "id": "sql",
+          "label": "Acme DB",
+          "platform": "SQL Server"
+        }
+      ],
+      "tables": [
+        {
+          "id": "vouchers",
+          "label": "Voucher",
+          "store": "sql",
+          "name": "dbo.Vouchers",
+          "delta": "added",
+          "columns": [
+            {
+              "name": "Id",
+              "type": "int",
+              "key": "primary",
+              "delta": "added"
+            },
+            {
+              "name": "AccountId",
+              "type": "int",
+              "key": "foreign",
+              "delta": "added"
+            },
+            {
+              "name": "Amount",
+              "type": "decimal(18,2)",
+              "delta": "added"
+            },
+            {
+              "name": "CreatedAt",
+              "type": "datetime2",
+              "delta": "added"
+            }
+          ],
+          "indexes": [
+            {
+              "name": "UX_Vouchers_AccountId_Created",
+              "columns": ["AccountId", "CreatedAt"],
+              "unique": true,
+              "delta": "added",
+              "files": [
+                {
+                  "path": "server/src/Migrations/20260101000000_AddVoucher.cs",
+                  "startLine": 32,
+                  "endLine": 34
+                }
+              ]
+            }
+          ],
+          "files": [
+            {
+              "path": "server/src/Data/Voucher.cs",
+              "startLine": 1,
+              "endLine": 18
+            },
+            {
+              "path": "server/src/Migrations/20260101000000_AddVoucher.cs",
+              "startLine": 10,
+              "endLine": 30
+            }
+          ]
+        },
+        {
+          "id": "accounts",
+          "label": "Account",
+          "store": "sql",
+          "name": "dbo.Accounts",
+          "delta": "unchanged",
+          "columns": [
+            {
+              "name": "Id",
+              "type": "int",
+              "key": "primary",
+              "delta": "unchanged"
+            },
+            {
+              "name": "CustomerId",
+              "type": "int",
+              "key": "foreign",
+              "delta": "unchanged"
+            },
+            {
+              "name": "Total",
+              "type": "decimal(18,2)",
+              "delta": "unchanged"
+            }
+          ],
+          "indexes": [
+            {
+              "name": "IX_Accounts_CustomerId",
+              "columns": ["CustomerId"],
+              "unique": false,
+              "delta": "unchanged"
+            }
+          ]
+        },
+        {
+          "id": "customers",
+          "label": "Customer",
+          "store": "sql",
+          "name": "dbo.Customers",
+          "delta": "unchanged",
+          "columns": [
+            {
+              "name": "Id",
+              "type": "int",
+              "key": "primary",
+              "delta": "unchanged"
+            },
+            {
+              "name": "Name",
+              "type": "nvarchar(200)",
+              "delta": "unchanged"
+            }
+          ]
+        }
+      ],
+      "relations": [
+        {
+          "id": "voucher-account",
+          "from": {
+            "table": "vouchers",
+            "column": "AccountId"
+          },
+          "to": {
+            "table": "accounts",
+            "column": "Id"
+          },
+          "delta": "added"
+        },
+        {
+          "id": "account-customer",
+          "from": {
+            "table": "accounts",
+            "column": "CustomerId"
+          },
+          "to": {
+            "table": "customers",
+            "column": "Id"
+          },
+          "delta": "unchanged"
+        }
+      ]
+    }
+  },
+  "readingOrder": [
+    {
+      "repo": "server",
+      "review": [
+        {
+          "path": "src/Api/VouchersController.cs",
+          "why": "payments entry point",
+          "risk": "critical"
+        },
+        {
+          "path": "src/Services/VoucherService.cs",
+          "why": "validation and the write",
+          "risk": "high"
+        },
+        {
+          "path": "src/Services/AccountService.cs",
+          "why": "the one modified path",
+          "risk": "high"
+        },
+        {
+          "path": "src/Data/Voucher.cs",
+          "why": "new entity",
+          "risk": "medium"
+        },
+        {
+          "path": "src/Migrations/20260101000000_AddVoucher.cs",
+          "why": "creates the Vouchers table and its index",
+          "risk": "high"
+        }
+      ],
+      "ignore": [
+        {
+          "glob": "src/Migrations/*.Designer.cs",
+          "reason": "generated"
+        }
+      ]
+    },
+    {
+      "repo": "app",
+      "review": [
+        {
+          "path": "src/app/vouchers/voucher-form.component.ts",
+          "why": "new form",
+          "risk": "medium"
+        },
+        {
+          "path": "src/app/vouchers/voucher.service.ts",
+          "why": "the call",
+          "risk": "medium"
+        }
+      ],
+      "ignore": [
+        {
+          "glob": "src/app/generated/**",
+          "reason": "generated models"
+        }
+      ]
+    }
+  ],
+  "phases": [
+    {
+      "id": "api",
+      "title": "API records a voucher",
+      "status": "done",
+      "today": "Accounts have no voucher; payments carry the account total only.",
+      "proposed": "A voucher endpoint validates and stores a Voucher row and the account total includes it.",
+      "nodeIds": ["vouchers-controller", "voucher-service", "voucher-table", "account-service"]
+    },
+    {
+      "id": "ui",
+      "title": "Web app asks for a voucher",
+      "status": "pending",
+      "today": "The account page has no voucher control.",
+      "proposed": "A voucher form on the account page posts the voucher before payment.",
+      "nodeIds": ["voucher-form", "voucher-client", "account-page"]
+    }
+  ],
+  "notes": [
+    {
+      "id": "record-before-refresh",
+      "path": "server/src/Api/VouchersController.cs",
+      "startLine": 22,
+      "text": "RecordVoucher runs before the account total refresh so the refreshed total already includes the new voucher. Swapping the two calls would show the old total until the next reload."
+    },
+    {
+      "id": "single-insert",
+      "path": "server/src/Services/VoucherService.cs",
+      "startLine": 27,
+      "text": "The voucher is written as one row in the same unit of work as the validation. Likely kept in one transaction so a rejected amount never leaves a partial Voucher behind."
+    },
+    {
+      "id": "total-includes-vouchers",
+      "path": "server/src/Services/AccountService.cs",
+      "startLine": 44,
+      "endLine": 52,
+      "text": "Existing accounts have no Voucher rows, so adding vouchers to the total leaves their totals unchanged."
+    }
+  ]
+}

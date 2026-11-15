@@ -1,0 +1,28 @@
+
+📝 Comments from review session:
+==================================================
+src/app.ts:L2
+F1 issue (blocking): this throws when `items` is empty.
+Reply 1 (sumit)
+Agreed, will guard it.
+Reply 2 (Unknown)
+Done in the next round.
+=====
+src/app.ts:L4-L5
+Prefer const here.
+ORIGINAL:
+```
+let total = a + b;
+return total;
+```
+SUGGESTED:
+```
+const total = a + b;
+return total;
+```
+The value never changes.
+=====
+src/legacy.cs:L7 (old)
+Why was this removed?
+==================================================
+Total comments: 3

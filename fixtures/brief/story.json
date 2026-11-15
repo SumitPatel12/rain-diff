@@ -1,0 +1,52 @@
+{
+  "format": "rain-brief/v1",
+  "title": "Vouchers at checkout",
+  "intent": {
+    "id": "intent",
+    "text": "Adds an optional voucher to account payments: `VouchersController.cs:20-27` takes it, `VoucherService.cs:27-31` stores it, and account totals include it.",
+    "cites": [{ "path": "server/src/Api/VouchersController.cs", "lines": [20, 27] }]
+  },
+  "how": [
+    {
+      "id": "how.1",
+      "title": "The API records a voucher",
+      "text": "`POST /voucher` validates the amount in `VouchersController.cs:23` and hands it to `VoucherService.cs`.",
+      "cites": [
+        { "path": "server/src/Api/VouchersController.cs", "lines": [20, 27], "side": "new" },
+        { "path": "server/src/Services/VoucherService.cs", "lines": [25, 33] }
+      ]
+    },
+    {
+      "id": "how.2",
+      "title": "One Voucher row in the same unit of work",
+      "text": "The voucher row and the payment are saved in the same unit of work, so a failed payment never leaves a voucher behind.",
+      "cites": [
+        { "path": "server/src/Services/VoucherService.cs", "lines": [27, 31] },
+        { "path": "server/src/Data/Voucher.cs" }
+      ]
+    },
+    {
+      "id": "how.3",
+      "title": "Totals include vouchers",
+      "text": "`AccountService.cs:44-58` adds vouchers to the account total; the client page shows them.",
+      "cites": [
+        { "path": "server/src/Services/AccountService.cs", "lines": [44, 58] },
+        { "path": "server/src/Services/Missing.cs" }
+      ]
+    }
+  ],
+  "invariants": [
+    {
+      "id": "inv.1",
+      "text": "A voucher is never negative and never more than the account total.",
+      "enforced": [{ "path": "server/src/Api/VouchersController.cs", "lines": [23, 23] }]
+    }
+  ],
+  "notChanged": { "id": "not-changed", "text": "Refunds and inventory reports are untouched." },
+  "notCovered": {
+    "id": "not-covered",
+    "text": "Generated client models and the migration designer.",
+    "paths": ["app/src/app/generated/**", "server/src/Migrations/*.Designer.cs"]
+  },
+  "verify": { "id": "verify", "text": "Pay an account with a voucher of 0, a negative voucher and a voucher above the total." }
+}

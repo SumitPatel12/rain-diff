@@ -1,0 +1,68 @@
+{
+  "format": "rain-brief/v1",
+  "title": "Vouchers at checkout",
+  "writtenAgainst": [
+    { "repo": "server", "sha": "a1b2c3d" },
+    { "repo": "app", "sha": "e4f5a6b" }
+  ],
+  "intent": {
+    "id": "intent",
+    "text": "Adds an optional voucher to account payments (AC1–AC4). Vouchers are recorded with the payment and included in account totals.",
+    "cites": [{ "path": "server/src/Acme.Api/Controllers/Voucher2Controller.cs", "lines": [20, 27] }]
+  },
+  "how": [
+    {
+      "id": "how.1",
+      "title": "The API records a voucher",
+      "text": "`POST /voucher` validates the amount and records one voucher per payment.",
+      "cites": [
+        { "path": "server/src/Acme.Api/Controllers/Voucher2Controller.cs", "lines": [20, 27], "side": "new" },
+        { "path": "server/src/Acme.Services/Payment0/Payment0Service.cs", "lines": [25, 33] }
+      ]
+    },
+    {
+      "id": "how.2",
+      "title": "One Voucher row in the same unit of work",
+      "text": "The voucher row and the payment are saved in the same unit of work, so a failed payment never leaves a voucher behind.",
+      "cites": [
+        { "path": "server/src/Services/VoucherService.cs", "lines": [27, 31] },
+        { "path": "server/src/Acme.Data/Migrations/20260101000000_AddVoucherColumns.cs", "lines": [1, 30], "thread": "F1" }
+      ]
+    },
+    {
+      "id": "how.3",
+      "title": "The form shows the voucher",
+      "text": "The voucher form adds an amount field; the account screen shows vouchers in the total.",
+      "cites": [{ "path": "app/src/app/voucher0/voucher0-form.component.html" }]
+    }
+  ],
+  "invariants": [
+    {
+      "id": "inv.1",
+      "text": "A voucher is never more than the account total.",
+      "enforced": [{ "path": "server/src/Acme.Api/Controllers/Voucher2Controller.cs", "lines": [23, 23] }],
+      "tested": [{ "path": "app/src/app/voucher1/services/voucher1.service.spec.ts" }]
+    }
+  ],
+  "notChanged": { "id": "not-changed", "text": "Refunds and inventory reports are untouched." },
+  "notCovered": {
+    "id": "not-covered",
+    "text": "Generated i18n files and form styles.",
+    "paths": ["app/src/assets/i18n/*.json", "app/src/app/**/*.scss"]
+  },
+  "verify": { "id": "verify", "text": "Pay an account with a voucher of 0, a negative voucher and a voucher above the total." },
+  "tour": [
+    {
+      "id": "tour.1",
+      "title": "The endpoint",
+      "text": "Start where a voucher enters the system.",
+      "cite": { "path": "server/src/Acme.Api/Controllers/Voucher2Controller.cs", "lines": [20, 27] }
+    },
+    {
+      "id": "tour.2",
+      "title": "The schema",
+      "text": "The migration adds the voucher columns.",
+      "cite": { "path": "server/src/Acme.Data/Migrations/20260101000000_AddVoucherColumns.cs", "lines": [1, 30] }
+    }
+  ]
+}

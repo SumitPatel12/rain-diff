@@ -1,0 +1,47 @@
+[
+  {
+    "type": "thread",
+    "id": "t-line",
+    "filePath": "src/app.ts",
+    "position": { "side": "new", "line": 2 },
+    "body": "F1 issue (blocking): this throws when `items` is empty.",
+    "author": "claude",
+    "createdAt": "2026-11-06T10:00:00.000Z",
+    "codeSnapshot": { "content": "const first = items[0].name;" }
+  },
+  {
+    "type": "thread",
+    "id": "t-range",
+    "filePath": "src/app.ts",
+    "position": { "side": "new", "line": { "start": 4, "end": 5 } },
+    "body": "Prefer const here.\n```suggestion\nconst total = a + b;\nreturn total;\n```\nThe value never changes.",
+    "author": "claude",
+    "createdAt": "2026-11-06T10:01:00.000Z",
+    "codeSnapshot": { "content": "let total = a + b;\nreturn total;", "language": "typescript" }
+  },
+  {
+    "type": "thread",
+    "id": "t-old",
+    "filePath": "src/legacy.cs",
+    "position": { "side": "old", "line": 7 },
+    "body": "Why was this removed?",
+    "createdAt": "2026-11-06T10:02:00.000Z"
+  },
+  {
+    "type": "reply",
+    "id": "r-1",
+    "filePath": "src/app.ts",
+    "position": { "side": "new", "line": 2 },
+    "body": "Agreed, will guard it.",
+    "author": "sumit",
+    "createdAt": "2026-11-06T10:03:00.000Z"
+  },
+  {
+    "type": "reply",
+    "id": "r-2",
+    "filePath": "src/app.ts",
+    "position": { "side": "new", "line": 2 },
+    "body": "Done in the next round.",
+    "createdAt": "2026-11-06T10:04:00.000Z"
+  }
+]

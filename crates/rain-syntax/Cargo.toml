@@ -1,0 +1,11 @@
+[package]
+name = "rain-syntax"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+rune = { workspace = true }
+rune-kit = { workspace = true }
+syntect = { workspace = true }
+two-face = { workspace = true }

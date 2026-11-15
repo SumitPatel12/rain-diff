@@ -1,0 +1,11 @@
+[package]
+name = "rain-git"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+rain-core = { workspace = true }
+regex = { workspace = true }
+sha2 = { workspace = true }
+notify-debouncer-full = { workspace = true }

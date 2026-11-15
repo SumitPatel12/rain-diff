@@ -1,0 +1,155 @@
+{
+  "id": "ACME-1234",
+  "repos": [
+    {
+      "id": "server",
+      "repositoryId": "C:/src/acme-server",
+      "base": "development",
+      "target": "a1b2c3d"
+    },
+    {
+      "id": "app",
+      "repositoryId": "C:/src/acme-app",
+      "base": "development",
+      "target": "e4f5a6b"
+    }
+  ],
+  "threads": [
+    {
+      "id": "k3x9f2",
+      "filePath": "src/Api/VouchersController.cs",
+      "createdAt": "2026-11-07T10:00:00.000Z",
+      "updatedAt": "2026-11-07T10:05:00.000Z",
+      "position": {
+        "side": "new",
+        "line": 23
+      },
+      "codeSnapshot": {
+        "content": "  if (dto.Amount <= 0) return BadRequest();",
+        "language": "csharp"
+      },
+      "messages": [
+        {
+          "id": "m1",
+          "body": "F1 issue (blocking): The amount is validated for <= 0 but not against the account total.",
+          "author": "claude",
+          "createdAt": "2026-11-07T10:00:00.000Z",
+          "updatedAt": "2026-11-07T10:00:00.000Z"
+        },
+        {
+          "id": "m2",
+          "body": "Agreed, will fix.",
+          "createdAt": "2026-11-07T10:05:00.000Z",
+          "updatedAt": "2026-11-07T10:05:00.000Z"
+        }
+      ],
+      "disposition": "agree",
+      "repo": "server",
+      "commit": "a1b2c3d"
+    },
+    {
+      "id": "p8q2w1",
+      "filePath": "src/app/voucher0/voucher0-form.component.html",
+      "createdAt": "2026-11-07T10:10:00.000Z",
+      "updatedAt": "2026-11-07T10:10:00.000Z",
+      "position": {
+        "side": "new",
+        "line": {
+          "start": 4,
+          "end": 6
+        }
+      },
+      "span": {
+        "startLine": 4,
+        "startCol": 2,
+        "endLine": 6,
+        "endCol": 10
+      },
+      "messages": [
+        {
+          "id": "m3",
+          "body": "Why is the label above the input here?",
+          "createdAt": "2026-11-07T10:10:00.000Z",
+          "updatedAt": "2026-11-07T10:10:00.000Z"
+        }
+      ],
+      "disposition": "ask",
+      "repo": "app"
+    },
+    {
+      "id": "z7y6x5",
+      "filePath": "src/Services/AccountService.cs",
+      "createdAt": "2026-11-07T10:20:00.000Z",
+      "updatedAt": "2026-11-07T10:20:00.000Z",
+      "position": {
+        "side": "old",
+        "line": 50
+      },
+      "codeSnapshot": {
+        "content": "var total = calc.Sum(payments);"
+      },
+      "messages": [
+        {
+          "id": "m4",
+          "body": "nit: name this subtotal",
+          "author": "claude",
+          "createdAt": "2026-11-07T10:20:00.000Z",
+          "updatedAt": "2026-11-07T10:20:00.000Z"
+        }
+      ],
+      "repo": "server",
+      "outdated": true,
+      "commit": "0f0f0f0",
+      "original": {
+        "position": {
+          "side": "old",
+          "line": 48
+        }
+      }
+    }
+  ],
+  "viewed": [
+    {
+      "repo": "server",
+      "filePath": "src/Api/VouchersController.cs",
+      "viewedAt": "2026-11-07T10:06:00.000Z",
+      "diffContentHash": "9f86d081884c7d65"
+    }
+  ],
+  "drafts": [
+    {
+      "repo": "app",
+      "filePath": "src/app/voucher0/voucher0-form.component.html",
+      "position": {
+        "side": "new",
+        "line": 12
+      },
+      "text": "half-written"
+    }
+  ],
+  "overview": null,
+  "selfRepo": "server",
+  "links": {
+    "server": "https://example.test/pr/1"
+  },
+  "overviewVersion": 0,
+  "version": 7,
+  "commentsVersion": 5,
+  "notes": [
+    {
+      "id": "k7p2qa",
+      "kind": "line",
+      "repo": "server",
+      "filePath": "src/Api/VouchersController.cs",
+      "position": {
+        "side": "new",
+        "line": 22
+      },
+      "body": "Order matters: validate before recording.",
+      "author": "claude",
+      "createdAt": "2026-11-07T09:00:00.000Z",
+      "updatedAt": "2026-11-07T09:00:00.000Z"
+    }
+  ],
+  "notesVersion": 1
+}

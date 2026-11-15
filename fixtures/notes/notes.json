@@ -1,0 +1,35 @@
+[
+  {
+    "kind": "story",
+    "title": "Vouchers at checkout",
+    "body": "Adds **vouchers** to accounts: a `Voucher` row per payment, recorded before the total refresh so the account total includes it.\n\nRead the controller first, then the service.",
+    "author": "claude"
+  },
+  {
+    "kind": "file",
+    "filePath": "server/src/Services/VoucherService.cs",
+    "body": "New service. Validates the amount and writes one `Voucher` row in the caller's unit of work.",
+    "author": "claude"
+  },
+  {
+    "kind": "file",
+    "filePath": "app/src/app/vouchers/voucher-form.component.ts",
+    "body": "Formatting only, apart from the new `amount` validator.",
+    "author": "claude"
+  },
+  {
+    "kind": "line",
+    "filePath": "server/src/Api/VouchersController.cs",
+    "position": { "side": "new", "line": 22 },
+    "body": "Order matters: the voucher is recorded before `RefreshTotal`.",
+    "author": "claude"
+  },
+  {
+    "kind": "line",
+    "filePath": "server/src/Services/AccountService.cs",
+    "position": { "side": "old", "line": { "start": 44, "end": 52 } },
+    "title": "Old total",
+    "body": "The old total ignored vouchers entirely.",
+    "author": "claude"
+  }
+]

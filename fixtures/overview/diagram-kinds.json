@@ -1,0 +1,115 @@
+{
+  "format": "difit-overview/v1",
+  "title": "Every shape the diagram crate draws (Rain fixture)",
+  "repos": [
+    { "id": "server", "dir": "acme-server", "base": "1111111111111111111111111111111111111111", "head": "2222222222222222222222222222222222222222" }
+  ],
+  "graph": {
+    "schemaVersion": "0.3.0",
+    "kind": "graph",
+    "title": "Payments with a retrying webhook",
+    "lenses": ["architecture", "data-flow", "data-model"],
+    "provenance": { "repo": { "owner": "acme", "name": "acme-server" }, "base": { "sha": "1111111111111111111111111111111111111111" }, "head": { "sha": "2222222222222222222222222222222222222222" } },
+    "lanes": [
+      { "id": "web", "label": "Customer site", "subtitle": "Vue", "order": 0 },
+      { "id": "api", "label": "Server API", "subtitle": "ASP.NET", "order": 1 },
+      { "id": "jobs", "label": "Background jobs", "subtitle": "Hangfire", "order": 2 },
+      { "id": "ext", "label": "Payment provider", "order": 3, "delta": "added" }
+    ],
+    "nodes": [
+      { "id": "pay-page", "label": "Pay order page", "kind": "ui", "delta": "modified", "lane": "web", "subtitle": "admin/src/pay/PayPage.vue" },
+      { "id": "pay-ctrl", "label": "PaymentsController", "kind": "route", "delta": "modified", "lane": "api", "badges": ["hot path"] },
+      { "id": "pay-svc", "label": "PaymentService", "kind": "service", "delta": "modified", "lane": "api", "group": "core" },
+      { "id": "ledger", "label": "LedgerService", "kind": "service", "delta": "unchanged", "lane": "api", "group": "core" },
+      { "id": "legacy-gw", "label": "LegacyGatewayClient", "kind": "service", "delta": "removed", "lane": "api" },
+      { "id": "hook-job", "label": "WebhookRetryJob", "kind": "job", "delta": "added", "lane": "jobs" },
+      { "id": "provider", "label": "Stripe", "kind": "external", "delta": "added", "lane": "ext", "subtitle": "api.stripe.com" },
+      { "id": "a-very-long-node", "label": "AVeryLongServiceNameThatWillNotFitOnACardOfThisWidthAtAll", "kind": "service", "delta": "added", "lane": "jobs" }
+    ],
+    "edges": [
+      { "id": "page-ctrl", "from": "pay-page", "to": "pay-ctrl", "kind": "http", "delta": "modified", "label": "POST /pay" },
+      { "id": "ctrl-svc", "from": "pay-ctrl", "to": "pay-svc", "kind": "call", "delta": "unchanged" },
+      { "id": "svc-ledger", "from": "pay-svc", "to": "ledger", "kind": "call", "delta": "unchanged", "emphasis": "muted" },
+      { "id": "svc-provider", "from": "pay-svc", "to": "provider", "kind": "http", "delta": "added", "label": "charge", "emphasis": "hero", "animated": true },
+      { "id": "svc-legacy", "from": "pay-svc", "to": "legacy-gw", "kind": "call", "delta": "removed" },
+      { "id": "provider-job", "from": "provider", "to": "hook-job", "kind": "event", "delta": "added", "label": "webhook" },
+      { "id": "job-ledger", "from": "hook-job", "to": "ledger", "kind": "call", "delta": "added" },
+      { "id": "ledger-svc", "from": "ledger", "to": "pay-svc", "kind": "call", "delta": "added", "label": "cycle back" },
+      { "id": "page-job", "from": "pay-page", "to": "hook-job", "kind": "http", "delta": "added" },
+      { "id": "self-retry", "from": "hook-job", "to": "hook-job", "kind": "event", "delta": "added" }
+    ],
+    "flows": [
+      {
+        "id": "charge",
+        "title": "Charging a card",
+        "delta": "modified",
+        "participants": [ { "node": "pay-page", "label": "Admin" }, { "node": "pay-ctrl" }, { "node": "pay-svc" }, { "node": "provider" }, { "node": "hook-job" } ],
+        "messages": [
+          { "id": "m1", "from": "pay-page", "to": "pay-ctrl", "label": "POST /pay", "kind": "sync", "delta": "modified" },
+          { "id": "m2", "from": "pay-ctrl", "to": "pay-svc", "label": "Charge(order)", "kind": "sync", "delta": "unchanged" },
+          { "id": "m3", "from": "pay-svc", "to": "pay-svc", "label": "Validate()", "kind": "self", "delta": "added" },
+          { "id": "m4", "from": "pay-svc", "to": "provider", "label": "create charge", "kind": "sync", "delta": "added", "note": "Idempotency key is the order id plus attempt number." },
+          { "id": "m5", "from": "provider", "to": "pay-svc", "label": "charge id", "kind": "return", "delta": "added" },
+          { "id": "m6", "from": "provider", "to": "hook-job", "label": "charge.succeeded", "kind": "async", "delta": "added", "repeat": 3 },
+          { "id": "m7", "from": "pay-svc", "to": "pay-ctrl", "label": "200", "kind": "return", "delta": "unchanged" },
+          { "id": "m8", "from": "pay-ctrl", "to": "pay-page", "label": "receipt", "kind": "return", "delta": "removed" }
+        ]
+      }
+    ],
+    "views": [
+      { "id": "all", "title": "Everything", "lens": "architecture", "defaultOpen": true },
+      { "id": "edges-only", "title": "Two edges", "lens": "architecture", "scope": { "kind": "selection", "edges": ["svc-provider", "provider-job"] } },
+      { "id": "charge-flow", "title": "Charging", "lens": "data-flow", "scope": { "kind": "selection", "flows": ["charge"] } },
+      { "id": "model", "title": "Schema", "lens": "data-model" },
+      { "id": "ledger-only", "title": "Ledger tables", "lens": "data-model", "scope": { "kind": "selection", "tables": ["entries", "accounts"] } }
+    ],
+    "dataModel": {
+      "stores": [
+        { "id": "sql", "label": "Main DB", "platform": "SQL Server", "order": 0 },
+        { "id": "ledger-db", "label": "Ledger DB", "platform": "PostgreSQL", "delta": "added", "order": 1 },
+        { "id": "cache", "label": "Cache", "platform": "Redis", "order": 2 }
+      ],
+      "tables": [
+        {
+          "id": "payments", "label": "Payment", "store": "sql", "name": "dbo.Payments", "delta": "modified",
+          "columns": [
+            { "name": "Id", "type": "int", "key": "primary", "delta": "unchanged" },
+            { "name": "OrderId", "type": "int", "key": "foreign", "delta": "unchanged" },
+            { "name": "ProviderChargeId", "type": "nvarchar(64)", "delta": "added" },
+            { "name": "Amount", "type": "decimal(18,2)", "previousType": "money", "delta": "modified" },
+            { "name": "GatewayRef", "type": "nvarchar(40)", "delta": "removed" },
+            { "name": "C1", "type": "int", "delta": "unchanged" }, { "name": "C2", "type": "int", "delta": "unchanged" },
+            { "name": "C3", "type": "int", "delta": "unchanged" }, { "name": "C4", "type": "int", "delta": "unchanged" },
+            { "name": "C5", "type": "int", "delta": "unchanged" }, { "name": "C6", "type": "int", "delta": "unchanged" },
+            { "name": "C7", "type": "int", "delta": "unchanged" }, { "name": "C8", "type": "int", "delta": "unchanged" },
+            { "name": "C9", "type": "int", "delta": "unchanged" }, { "name": "C10", "type": "int", "delta": "unchanged" },
+            { "name": "C11", "type": "int", "delta": "unchanged" }, { "name": "C12", "type": "int", "delta": "unchanged" }
+          ],
+          "indexes": [
+            { "name": "IX_Payments_Order", "columns": ["OrderId"], "delta": "unchanged" },
+            { "name": "UX_Payments_Charge", "columns": ["ProviderChargeId"], "unique": true, "delta": "added" },
+            { "name": "IX_a", "columns": ["C1"], "delta": "unchanged" }, { "name": "IX_b", "columns": ["C2"], "delta": "unchanged" },
+            { "name": "IX_c", "columns": ["C3"], "delta": "unchanged" }, { "name": "IX_d", "columns": ["C4"], "delta": "unchanged" }
+          ]
+        },
+        { "id": "orders", "label": "Order", "store": "sql", "delta": "unchanged", "columns": [ { "name": "Id", "type": "int", "key": "primary", "delta": "unchanged" } ] },
+        {
+          "id": "entries", "label": "LedgerEntry", "store": "ledger-db", "name": "ledger.entries", "delta": "added",
+          "columns": [
+            { "name": "id", "type": "uuid", "key": "primary", "delta": "added" },
+            { "name": "payment_id", "type": "int", "key": "foreign", "delta": "added" },
+            { "name": "account_id", "type": "uuid", "key": "foreign", "delta": "added" }
+          ]
+        },
+        { "id": "accounts", "label": "Account", "store": "ledger-db", "delta": "added", "columns": [ { "name": "id", "type": "uuid", "key": "primary", "delta": "added" } ] },
+        { "id": "charge-cache", "label": "ChargeCache", "store": "cache", "delta": "added", "columns": [ { "name": "order_id", "type": "string", "key": "foreign", "delta": "added" } ] }
+      ],
+      "relations": [
+        { "id": "pay-order", "from": { "table": "payments", "column": "OrderId" }, "to": { "table": "orders", "column": "Id" }, "delta": "unchanged" },
+        { "id": "entry-payment", "from": { "table": "entries", "column": "payment_id" }, "to": { "table": "payments", "column": "Id" }, "delta": "added", "enforced": false, "label": "cross-db" },
+        { "id": "entry-account", "from": { "table": "entries", "column": "account_id" }, "to": { "table": "accounts", "column": "id" }, "delta": "added" },
+        { "id": "cache-order", "from": { "table": "charge-cache", "column": "order_id" }, "to": { "table": "orders", "column": "Id" }, "delta": "added", "enforced": false }
+      ]
+    }
+  }
+}

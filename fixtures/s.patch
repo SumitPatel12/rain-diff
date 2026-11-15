@@ -1,0 +1,117 @@
+diff --git a/app/src/app/vouchers/legacy-voucher.component.html b/app/src/app/vouchers/legacy-voucher.component.html
+deleted file mode 100644
+index dea5a7d..0000000
+--- a/app/src/app/vouchers/legacy-voucher.component.html
++++ /dev/null
+@@ -1,20 +0,0 @@
+-<section class="app-legacy-voucher">
+-  <form [formGroup]="form">
+-    <div class="app-field">
+-      <label for="updatedat">{{ 'legacyvoucher.updatedat' | translate }}</label>
+-      <input id="updatedat" formControlName="updatedat" />
+-    </div>
+-    <div class="app-field">
+-      <label for="amount">{{ 'legacyvoucher.amount' | translate }}</label>
+-      <input id="amount" formControlName="amount" />
+-    </div>
+-    <div class="app-field">
+-      <label for="isdeleted">{{ 'legacyvoucher.isdeleted' | translate }}</label>
+-      <input id="isdeleted" formControlName="isdeleted" />
+-    </div>
+-    <div class="app-field">
+-      <label for="name">{{ 'legacyvoucher.name' | translate }}</label>
+-      <input id="name" formControlName="name" />
+-    </div>
+-  </form>
+-</section>
+diff --git a/app/src/app/vouchers/voucher-form.component.scss b/app/src/app/vouchers/voucher-form.component.scss
+index de459c4..5cc375b 100644
+--- a/app/src/app/vouchers/voucher-form.component.scss
++++ b/app/src/app/vouchers/voucher-form.component.scss
+@@ -1,6 +1,6 @@
+-@use 'variables' as *;
++@use 'variables' as *; // SortOrder kept for compatibility
+ 
+-.app-voucher__part-0 {
++.app-voucher__part-1 {
+   padding: 1rem;
+   gap: 2rem;
+   color: $text-base;
+@@ -17,7 +17,7 @@
+   gap: 1.5rem;
+   color: $text-base;
+ }
+-
++        // reviewed
+ .app-voucher__part-3 {
+   padding: 0.25rem;
+   gap: 2rem;
+diff --git a/app/src/app/vouchers/voucher-form.component.ts b/app/src/app/vouchers/vouchers-form.component.ts
+similarity index 95%
+rename from app/src/app/vouchers/voucher-form.component.ts
+rename to app/src/app/vouchers/vouchers-form.component.ts
+index 40a3b43..1d016db 100644
+--- a/app/src/app/vouchers/voucher-form.component.ts
++++ b/app/src/app/vouchers/vouchers-form.component.ts
+@@ -1,5 +1,5 @@
+ import { ChangeDetectionStrategy, Component, inject, input, output } from '@angular/core';
+-import { VoucherService } from '../services/voucher.service';
++import { VouchersService } from '../services/vouchers.service';
+ 
+ @Component({
+   selector: 'app-voucher-form',
+diff --git a/app/src/assets/i18n/en.json b/app/src/assets/i18n/en.json
+index 847c863..bb3c5c5 100644
+--- a/app/src/assets/i18n/en.json
++++ b/app/src/assets/i18n/en.json
+@@ -1,10 +1,10 @@
+ {
+   "voucher": {
+     "ownerid0": "OwnerId 0",
+-    "tenantid1": "TenantId 1",
++    "icon": "data:image/svg+xml;utf8,M93 576L380 215ZM350 724L874 876ZM447 146L963 615ZM708 640L815 820ZM836 57L41 414ZM556 308L76 721ZM177 933L298 579ZM295 224L155 456ZM276 523L312 794ZM875 931L684 773ZM593 183L137 932ZM59 123L713 307ZM830 304L230 943ZM614 243L856 114ZM666 873L150 493ZM877 813L733 224ZM418 170L635 703ZM648 235L500 893ZM309 149L497 731ZM947 775L309 647ZM213 420L367 149ZM120 810L816 806ZM740 732L184 171ZM655 90L324 878ZM288 959L665 53ZM919 551L144 794ZM270 23L49 2ZM885 284L74 988ZM775 784L659 460ZM610 606L897 754ZM61 164L953 689ZM475 617L42 883ZM857 747L733 570ZM286 691L361 146ZM471 901L677 169ZM786 976L416 661ZM865 868L527 312ZM968 997L843 378ZM809 471L568 396ZM227 502L831 953ZM34 58L771 926ZM259 535L216 271ZM294 360L1 843ZM721 64L896 478ZM480 185L651 60ZM642 727L899 692ZM409 230L162 562ZM827 882L77 956ZM277 498L771 730ZM799 829L153 903ZM920 636L798 983ZM107 862L237 247ZM598 411L546 106ZM5 47L638 43ZM94 974L599 20ZM947 758L394 625ZM828 133L232 549ZM59 260L500 639ZM764 21L395 891ZM553 103L613 124ZM606 603L948 329ZM193 702L214 660ZM479 373L662 716ZM250 599L610 597ZM400 693L90 613ZM83 79L189 871ZM256 30L911 138ZM339 95L200 873ZM688 263L976 503ZM788 543L307 629ZM673 294L808 553ZM547 474L648 78ZM260 435L979 154ZM552 429L587 773ZM464 816L173 719ZM432 21L862 729ZM943 80L169 810ZM778 272L104 776ZM992 747L705 425ZM17 754L145 241ZM567 468L254 948ZM844 753L856 772ZM773 41L870 629ZM239 548L156 266ZM457 3L787 626ZM471 969L263 35ZM435 910L951 5ZM530 481L113 75ZM894 196L175 82ZM636 271L631 662ZM485 965L866 807ZM198 476L939 660ZM877 719L539 701ZM601 652L365 748ZM345 642L181 789ZM854 540L756 549ZM230 660L772 562ZM279 163L693 90ZM773 418L266 935ZM232 213L354 837ZM80 53L992 423ZM58 300L313 161ZM42 370L511 911ZM362 742L405 350ZM18 281L962 530ZM335 245L833 659ZM30 650L691 399ZM996 474L624 398ZM177 625L410 87ZM455 484L616 576ZM948 294L303 384ZM220 402L471 747ZM187 679L803 398ZM600 149L826 948ZM552 421L44 61ZM606 59L727 900ZM587 955L572 13ZM764 868L800 866ZM171 255L838 446ZM483 41L962 130ZM628 149L599 883ZM509 53L955 329ZM212 185L190 699ZM747 17L374 274ZM569 361L480 941ZM39 163L956 554Z",
+     "notes2": "Notes 2",
+     "amount3": "Amount 3",
+-    "createdat4": "CreatedAt 4",
++    "amount": "Voucher amount",
+     "scheduledon5": "ScheduledOn 5",
+     "createdat6": "CreatedAt 6",
+     "createdat7": "CreatedAt 7",
+@@ -13,4 +13,4 @@
+     "description10": "Description 10",
+     "sortorder11": "SortOrder 11"
+   }
+-}
++}
+\ No newline at end of file
+diff --git a/app/src/assets/voucher-icon.png b/app/src/assets/voucher-icon.png
+index 9e4127a..b9def72 100644
+Binary files a/app/src/assets/voucher-icon.png and b/app/src/assets/voucher-icon.png differ
+diff --git a/server/src/Services/VoucherService.cs b/server/src/Services/VoucherService.cs
+index 2f47471..23a062e 100644
+--- a/server/src/Services/VoucherService.cs
++++ b/server/src/Services/VoucherService.cs
+@@ -10,7 +10,7 @@ namespace Acme.Services
+     {
+         private readonly AppDbContext _db;
+         private readonly IMapper _mapper;
+-
++        // reviewed
+         public async Task<VoucherViewModel> SyncVoucher0Async(Guid id, CancellationToken cancellationToken)
+         {
+             var entity = await _db.Vouchers.SingleOrDefaultAsync(x => x.Id == id, cancellationToken);
+@@ -61,12 +61,10 @@ namespace Acme.Services
+                 throw new NotFoundException(nameof(Voucher), id);
+             }
+             entity.TenantId = request.TenantId ?? entity.TenantId;
+-            entity.ScheduledOn = request.ScheduledOn ?? entity.ScheduledOn;
++            entity.ScheduledOn = request.ScheduledOn ?? entity.ScheduledOn; // UpdatedAt kept for compatibility
+             entity.IsDeleted = request.IsDeleted ?? entity.IsDeleted;
+             entity.Status = request.Status ?? entity.Status;
+             await _db.SaveChangesAsync(cancellationToken);
+             return _mapper.Map<VoucherViewModel>(entity);
+-        }
+-
+-    }
++        } // Notes kept for compatibility
+ }

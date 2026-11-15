@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2E3556"/>
+      <stop offset="1" stop-color="#121729"/>
+    </linearGradient>
+    <radialGradient id="gl" gradientUnits="userSpaceOnUse" cx="64" cy="40" r="100">
+      <stop offset="0" stop-color="#B07CFF"/>
+      <stop offset="1" stop-color="#B07CFF" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="gr" gradientUnits="userSpaceOnUse" cx="192" cy="40" r="100">
+      <stop offset="0" stop-color="#6FF0B0" stop-opacity="0.95"/>
+      <stop offset="1" stop-color="#6FF0B0" stop-opacity="0"/>
+    </radialGradient>
+    <clipPath id="frame"><rect width="256" height="256" rx="48"/></clipPath>
+    <clipPath id="left"><polygon points="0,0 132,0 108,256 0,256"/></clipPath>
+    <clipPath id="right"><polygon points="148,0 256,0 256,256 124,256"/></clipPath>
+    <path id="cloud" d="M0 -32 H256 V44 A44 44 0 0 1 172 56 A44 44 0 0 1 86 60 A44 44 0 0 1 0 52 Z"/>
+    <clipPath id="cc"><use href="#cloud"/><use href="#cloud" transform="translate(0 10)"/></clipPath>
+    <g id="art">
+      <use href="#cloud" transform="translate(0 10)" fill="#4B5473"/>
+      <use href="#cloud" fill="#7E88A6"/>
+      <g clip-path="url(#cc)">
+        <rect y="-32" width="256" height="160" fill="url(#gl)"/>
+        <rect y="-32" width="256" height="160" fill="url(#gr)"/>
+        <g fill="none" stroke-width="14" stroke-linejoin="round" stroke-linecap="round">
+          <polyline points="40,0 64,30 46,40 70,72" stroke="#E2CCFF"/>
+          <polyline points="216,0 192,30 210,40 186,72" stroke="#C2FBE0"/>
+        </g>
+      </g>
+      <g stroke-width="24" stroke-linecap="round">
+        <line x1="44" y1="146" x2="40" y2="182" stroke="#E5605A"/>
+        <line x1="88" y1="178" x2="84" y2="214" stroke="#E5605A"/>
+        <line x1="178" y1="146" x2="174" y2="182" stroke="#3FBF7F"/>
+        <line x1="218" y1="178" x2="214" y2="214" stroke="#3FBF7F"/>
+      </g>
+    </g>
+  </defs>
+  <g clip-path="url(#frame)">
+    <rect width="256" height="256" fill="url(#sky)"/>
+    <g clip-path="url(#left)"><use href="#art" transform="translate(0 -6)"/></g>
+    <g clip-path="url(#right)"><use href="#art" transform="translate(0 6)"/></g>
+    <line x1="140" y1="-8" x2="116" y2="264" stroke="#0B0F1A" stroke-width="16"/>
+  </g>
+</svg>

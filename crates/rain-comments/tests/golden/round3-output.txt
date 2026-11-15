@@ -1,0 +1,49 @@
+
+📝 Comments from review session:
+==================================================
+src/a.rs:L2
+[id q1] kind: question · state: open · anchor: placed
+Answer: answered by claude (attached)
+Code:
+```
+  a
+> b
+  c
+  d
+```
+Why is b computed twice?
+Reply 1 (claude)
+It is not; the second call is cached.
+=====
+src/a.rs:L3
+[id f1] kind: issue (blocking) · state: open · anchor: orphaned(line deleted)
+Last seen at a1b2c3d (src/a.rs:L3):
+```
+  a
+  b
+> c
+  d
+```
+F1 issue (blocking): c overflows.
+=====
+Brief › How 2 "One Voucher row in the same unit of work" (quote: "same unit of work")
+[id b1] kind: comment · state: open · anchor: placed
+Is the unit of work shared with refunds?
+=====
+Map › node voucher-service (VoucherService, server/src/Services/VoucherService.cs)
+[id m1] kind: comment · state: open · anchor: placed
+Only writer?
+=====
+Note k7p2qa on src/a.rs:L2 "Order matters: b before c."
+[id n1] kind: comment · state: open · anchor: placed
+Which order?
+=====
+src/a.rs (file)
+[id fl] kind: comment · state: open · anchor: placed
+Split this file.
+=====
+Review (whole change)
+[id pr] kind: comment · state: open · anchor: placed
+Ship it after F1.
+==================================================
+Total comments: 7

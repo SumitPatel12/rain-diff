@@ -1,0 +1,66 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2E3556"/>
+      <stop offset="1" stop-color="#121729"/>
+    </linearGradient>
+    <radialGradient id="gl" gradientUnits="userSpaceOnUse" cx="60" cy="40" r="60">
+      <stop offset="0" stop-color="#B07CFF" stop-opacity="0.6"/>
+      <stop offset="1" stop-color="#B07CFF" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="gr" gradientUnits="userSpaceOnUse" cx="196" cy="40" r="60">
+      <stop offset="0" stop-color="#6FF0B0" stop-opacity="0.5"/>
+      <stop offset="1" stop-color="#6FF0B0" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="fx" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="3" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <clipPath id="frame"><rect x="4" y="12" width="248" height="232" rx="28"/></clipPath>
+    <clipPath id="left"><polygon points="0,0 130,0 106,256 0,256"/></clipPath>
+    <clipPath id="right"><polygon points="150,0 256,0 256,256 126,256"/></clipPath>
+    <path id="cloud" d="M0 -24 H256 V52 A27 27 0 0 1 206 66 A27 27 0 0 1 154 70 A27 27 0 0 1 102 68 A27 27 0 0 1 50 64 A27 27 0 0 1 0 58 Z"/>
+    <clipPath id="cc"><use href="#cloud"/><use href="#cloud" transform="translate(0 12)"/></clipPath>
+    <g id="art" clip-path="url(#frame)">
+      <rect width="256" height="256" fill="url(#sky)"/>
+      <use href="#cloud" transform="translate(0 12)" fill="#4B5473"/>
+      <use href="#cloud" fill="#7E88A6"/>
+      <g clip-path="url(#cc)">
+        <rect width="256" height="120" fill="url(#gl)"/>
+        <rect width="256" height="120" fill="url(#gr)"/>
+        <g fill="none" stroke-linecap="round" stroke-linejoin="round" filter="url(#fx)">
+          <g stroke="#D2B2FF">
+            <polyline points="36,16 54,36 42,44 62,68" stroke-width="5"/>
+            <polyline points="54,36 76,40 84,54" stroke-width="3.5"/>
+            <polyline points="98,22 88,38 100,48" stroke-width="3.5"/>
+          </g>
+          <g stroke="#A8F8D0">
+            <polyline points="214,16 194,36 208,44 188,68" stroke-width="5"/>
+            <polyline points="194,36 172,40 164,54" stroke-width="3.5"/>
+            <polyline points="160,20 170,34 158,44" stroke-width="3.5"/>
+          </g>
+        </g>
+      </g>
+      <g stroke-width="8" stroke-linecap="round">
+        <g stroke="#E5605A">
+          <line x1="34" y1="128" x2="31" y2="156"/>
+          <line x1="68" y1="144" x2="65" y2="172"/>
+          <line x1="98" y1="124" x2="95" y2="152"/>
+          <line x1="40" y1="190" x2="37" y2="216"/>
+          <line x1="78" y1="204" x2="75" y2="230"/>
+          <line x1="102" y1="178" x2="99" y2="200"/>
+        </g>
+        <g stroke="#3FBF7F">
+          <line x1="162" y1="126" x2="159" y2="154"/>
+          <line x1="194" y1="142" x2="191" y2="170"/>
+          <line x1="226" y1="124" x2="223" y2="152"/>
+          <line x1="152" y1="186" x2="149" y2="212"/>
+          <line x1="188" y1="198" x2="185" y2="224"/>
+          <line x1="222" y1="184" x2="219" y2="210"/>
+        </g>
+      </g>
+    </g>
+  </defs>
+  <g clip-path="url(#left)"><use href="#art" transform="translate(0 -8)"/></g>
+  <g clip-path="url(#right)"><use href="#art" transform="translate(0 8)"/></g>
+</svg>

@@ -1,0 +1,16 @@
+[package]
+name = "rain-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+rain-core = { path = "../rain-core" }
+rain-comments = { workspace = true }
+rain-overview = { workspace = true }
+rain-server = { workspace = true }
+rain-app = { workspace = true }
+clap = { workspace = true }
+ureq = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }

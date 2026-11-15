@@ -1,0 +1,66 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/rain-core",
+    "crates/rain-git",
+    "crates/rain-diffview",
+    "crates/rain-syntax",
+    "crates/rain-comments",
+    "crates/rain-tree",
+    "crates/rain-diagram",
+    "crates/rain-overview",
+    "crates/rain-triage",
+    "crates/rain-ask",
+    "crates/rain-server",
+    "crates/rain-cli",
+    "crates/rain-app",
+    "crates/rain",
+    "xtask",
+]
+
+[workspace.package]
+edition = "2024"
+license = "AGPL-3.0-only"
+version = "0.1.0"
+rust-version = "1.95"
+
+[workspace.dependencies]
+rune = { git = "https://github.com/anomalyco/rune", rev = "781e2b6d87cd5f32d6f4365956fad4baaf24ee50", default-features = false, features = ["accessibility", "embedded-fonts"] }
+rune-kit = { git = "https://github.com/anomalyco/rune", rev = "781e2b6d87cd5f32d6f4365956fad4baaf24ee50", features = ["markdown"] }
+rune-mermaid = { git = "https://github.com/anomalyco/rune", rev = "781e2b6d87cd5f32d6f4365956fad4baaf24ee50" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+clap = { version = "4.5", features = ["derive"] }
+tiny_http = "0.12"
+ureq = { version = "3", default-features = false }
+blake3 = "1"
+globset = "0.4"
+regex = "1"
+sha2 = "0.10"
+serde_path_to_error = "0.1"
+syntect = { version = "5.3", default-features = false, features = ["default-onig", "parsing"] }
+two-face = { version = "0.5.1", features = ["syntect-onig"] }
+unicode-width = "0.2"
+pulldown-cmark = { version = "0.13", default-features = false }
+notify-debouncer-full = { version = "0.7", default-features = false }
+
+rain-core = { path = "crates/rain-core" }
+rain-git = { path = "crates/rain-git" }
+rain-diffview = { path = "crates/rain-diffview" }
+rain-syntax = { path = "crates/rain-syntax" }
+rain-comments = { path = "crates/rain-comments" }
+rain-tree = { path = "crates/rain-tree" }
+rain-diagram = { path = "crates/rain-diagram" }
+rain-overview = { path = "crates/rain-overview" }
+rain-triage = { path = "crates/rain-triage" }
+rain-ask = { path = "crates/rain-ask" }
+rain-server = { path = "crates/rain-server" }
+rain-cli = { path = "crates/rain-cli" }
+rain-app = { path = "crates/rain-app" }
+
+[profile.dev.package."*"]
+debug = false
+
+[profile.release]
+incremental = true
+codegen-units = 16

@@ -1,0 +1,13 @@
+[package]
+name = "rain-tree"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+rain-core = { workspace = true }
+rune = { workspace = true }
+rune-kit = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }

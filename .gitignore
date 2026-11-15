@@ -1,0 +1,4 @@
+/target
+/fixtures/gen/
+/fixtures/**/*.png
+*.log
