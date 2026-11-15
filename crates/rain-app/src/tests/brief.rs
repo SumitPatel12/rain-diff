@@ -324,7 +324,7 @@ fn map_tabs_never_repeat_and_a_press_still_opens_the_file() {
     let names = rain_overview::tab_names(&rt.state.overview.as_ref().unwrap().targets);
     let unique: std::collections::BTreeSet<&String> = names.iter().collect();
     assert_eq!(unique.len(), names.len(), "{names:?}");
-    assert!(rt.find("target-0").is_some());
+    assert!(rt.find("map-tabs-0").is_some());
     assert!(rt.find("map-legend").is_some());
     rt.update(|s, tx| s.diagram_event(rain_diagram::DiagramEvent::Node("voucher-service".into()), tx));
     settle(&mut rt);

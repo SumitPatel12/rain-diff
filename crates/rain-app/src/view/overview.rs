@@ -9,38 +9,32 @@ use rain_core::{Side, Thread};
 use rune::{El, ScrollSpec, TextStyle, Tx, col, el, row, text};
 use rune_kit::{Button, ButtonVariant, ControlSize, Kit, Markdown, SegmentedControl};
 
-use super::{messages, muted, notes};
+use super::ui::{outline, sr};
+use super::{icons, messages, muted, notes};
 use crate::app::{App, ArtifactDraft, ComposeMode, PeekTarget};
+use crate::theme::{TYPE, radius};
 
 /// The scheme of a cite link the page rewrites a code span into.
 pub(crate) const CITE_SCHEME: &str = "rain-cite:";
 /// Windows at least this wide put Facts and Map in a column beside the text.
 const SIDE_COLUMN_MIN: f32 = 1400.0;
-const READING_MAX: f32 = 820.0;
-const SIDE_W: f32 = 280.0;
+const READING_MAX: f32 = 680.0;
+const SIDE_W: f32 = 300.0;
 
-fn heading(t: impl Into<String>, size: f32, line: f32, k: &Kit) -> El {
-    text(t.into())
-        .font(TextStyle {
-            size,
-            line_height: line,
-            ..k.ty.ui_medium
-        })
-        .color(k.c.text_base)
-        .wrap()
-        .role("heading")
+fn heading(t: impl Into<String>, style: TextStyle, k: &Kit) -> El {
+    text(t.into()).font(style).color(k.c.text_base).wrap().role("heading")
 }
 
 fn h1(t: impl Into<String>, k: &Kit) -> El {
-    heading(t, 24.0, 32.0, k)
+    heading(t, TYPE.h1, k)
 }
 
 fn h2(t: impl Into<String>, k: &Kit) -> El {
-    heading(t, 18.0, 26.0, k)
+    heading(t, TYPE.h2, k)
 }
 
 fn h3(t: impl Into<String>, k: &Kit) -> El {
-    heading(t, 15.0, 22.0, k)
+    heading(t, TextStyle::new(14.0, 600.0).lh(22.0), k)
 }
 
 /// The Overview page, scrolling on its own.
@@ -59,11 +53,11 @@ pub(super) fn page(s: &App, k: &Kit) -> El {
     if let Some(d) = doc
         && let Some(stale) = stale_line(s, d)
     {
-        reading = reading.child(messages::banner(
+        reading = reading.child(messages::inset_banner(
             "brief-stale",
             stale,
             messages::Tone::Warning,
-            Some(("Refresh brief", |s: &mut App, tx: &mut Tx| s.refresh_brief(tx))),
+            &[("Refresh brief", |s: &mut App, tx: &mut Tx| s.refresh_brief(tx))],
             k,
         ));
     }
@@ -90,11 +84,11 @@ pub(super) fn page(s: &App, k: &Kit) -> El {
     let mut body = row()
         .key("overview-body")
         .w_full()
-        .pl(32.0)
-        .pr(24.0)
+        .pl(36.0)
+        .pr(28.0)
         .pt(24.0)
         .pb(48.0)
-        .gap(32.0)
+        .gap(28.0)
         .items_start()
         .on_layout(|s: &mut App, r: [f32; 4]| s.peek_page_moved(r[1]))
         .child(reading);
@@ -120,30 +114,54 @@ pub(super) fn page(s: &App, k: &Kit) -> El {
 
 /// The title, then the tour as the page's one primary action.
 fn title_row(s: &App, doc: Option<&BriefDoc>, k: &Kit) -> El {
-    let title = doc.map(|d| d.title.trim()).filter(|t| !t.is_empty()).unwrap_or("Overview");
-    let mut c = col()
+    let named = s.overview.as_ref().map(|l| l.document.title.trim()).filter(|t| !t.is_empty());
+    let title = doc
+        .map(|d| d.title.trim())
+        .filter(|t| !t.is_empty())
+        .or(named)
+        .unwrap_or("Overview");
+    let mut c = row()
         .key("overview-title")
         .w_full()
         .gap(12.0)
-        .items_start()
-        .child(h1(title.to_owned(), k).w_full());
-    if doc.is_some() {
+        .items_center()
+        .pb(2.0)
+        .child(h1(title.to_owned(), k).grow(1.0).shrink().min_w(0.0));
+    {
         let steps = s.tour_steps().len();
         let label = match steps {
             0 => "Start tour".to_owned(),
             1 => "Start tour · 1 step".to_owned(),
             n => format!("Start tour · {n} steps"),
         };
-        c = c.child(
-            Button::new(label)
-                .variant(ButtonVariant::Submit)
-                .disabled(steps == 0)
-                .shortcut("T")
-                .help(format!("A guided pass over {steps} steps, the code spotlit"))
-                .on_press_tx(|s: &mut App, tx: &mut Tx| s.start_tour(tx))
-                .build(k)
-                .key("brief-tour"),
-        );
+        let (_, r) = sr(k);
+        let b = k
+            .interactive_with(
+                row()
+                    .key("brief-tour")
+                    .role("button")
+                    .label(label.clone())
+                    .help(format!("A guided pass over {steps} steps, the code spotlit  Shift+T"))
+                    .h(28.0)
+                    .px(14.0)
+                    .gap(8.0)
+                    .center()
+                    .radius(radius::BUTTON)
+                    .fill(r.accent)
+                    .cursor(rune::Cursor::Pointer)
+                    .focusable(true)
+                    .child(icons::draw(&icons::PLAY, 14.0, r.on_accent))
+                    .child(text(label).font(TYPE.strong).color(r.on_accent).a11y_hidden())
+                    .child(text("Shift+T").font(TYPE.micro_mono).color(r.on_accent).a11y_hidden()),
+                k.c.contrast_hover,
+                k.c.contrast_pressed,
+            )
+            .press_scale(0.97);
+        c = c.child(if steps == 0 {
+            b.opacity(0.45).disabled(true)
+        } else {
+            b.on_press_tx(|s: &mut App, tx: &mut Tx| s.start_tour(tx))
+        });
     }
     c
 }
@@ -169,93 +187,100 @@ fn short(sha: &str) -> &str {
     &sha[..sha.len().min(7)]
 }
 
-fn card(key: &str, title: &str, body: El, k: &Kit) -> El {
+/// A card on the well: `Title · subtitle`, then its body.
+fn card(key: &str, title: &str, sub: &str, body: El, k: &Kit) -> El {
+    let (surf, _) = sr(k);
     col()
         .key(key.to_owned())
         .role("group")
         .label(title.to_owned())
-        .w(SIDE_W)
-        .radius(k.radius.lg)
-        .border(1.0, k.c.border_base)
-        .clip_rounded(k.radius.lg)
+        .w_full()
+        .max_w(SIDE_W)
+        .pl(12.0)
+        .pr(12.0)
+        .pt(10.0)
+        .pb(12.0)
+        .gap(6.0)
+        .radius(radius::CARD)
+        .fill(surf.well)
+        .border(1.0, surf.hairline)
         .child(
             row()
-                .w_full()
-                .px(12.0)
-                .py(6.0)
-                .fill(k.c.layer_01)
-                .child(text(title.to_owned()).font(k.ty.small_medium).color(k.c.text_muted)),
+                .gap(4.0)
+                .child(text(title.to_owned()).font(TYPE.label).color(k.c.text_base))
+                .child(text(sub.to_owned()).font(TYPE.small).color(k.c.text_faint)),
         )
-        .child(body.w_full().px(12.0).py(8.0))
+        .child(body.w_full())
 }
 
 /// The facts the diff itself proves; its own look, never the agent's.
 fn facts(s: &App, k: &Kit) -> El {
     let f = &s.brief.facts;
     let group = |g: rain_triage::Group| s.brief.groups.iter().find(|c| c.group == g).map_or(0, |c| c.count);
-    let plural = |n: usize, one: &str, many: &str| format!("{n} {}", if n == 1 { one } else { many });
-    let mut items: Vec<(String, bool)> = vec![
-        (plural(f.files, "file", "files"), false),
-        (format!("{} real changes", f.real), false),
-        (format!("{} tests (+{} −{})", f.tests, f.tests_added, f.tests_removed), false),
+    let mut items: Vec<(&str, String, bool)> = vec![
+        ("Files", f.files.to_string(), false),
+        ("Real changes", f.real.to_string(), false),
+        ("Tests", format!("{} (+{} −{})", f.tests, f.tests_added, f.tests_removed), false),
     ];
     if f.migrations > 0 {
-        items.push((plural(f.migrations, "migration", "migrations"), true));
+        items.push(("Migrations", f.migrations.to_string(), true));
     }
-    for (g, one, many) in [
-        (rain_triage::Group::Generated, "generated", "generated"),
-        (rain_triage::Group::Lockfile, "lockfile", "lockfiles"),
-        (rain_triage::Group::FormattingOnly, "formatting-only", "formatting-only"),
-        (rain_triage::Group::Moves, "move", "moves"),
+    for (g, name) in [
+        (rain_triage::Group::Generated, "Generated"),
+        (rain_triage::Group::Lockfile, "Lockfiles"),
+        (rain_triage::Group::FormattingOnly, "Formatting-only"),
+        (rain_triage::Group::Moves, "Moves"),
     ] {
         let n = group(g);
         if n > 0 {
-            items.push((plural(n, one, many), false));
+            items.push((name, n.to_string(), false));
         }
     }
-    items.push((plural(f.tests_off.len(), "test off", "tests off"), !f.tests_off.is_empty()));
+    items.push(("Tests off", f.tests_off.len().to_string(), !f.tests_off.is_empty()));
     if let Some(c) = s.brief_check()
         && !c.files_not_cited.is_empty()
     {
-        items.push((format!("{} not in the brief", c.files_not_cited.len()), true));
+        items.push(("Not in the brief", c.files_not_cited.len().to_string(), true));
     }
-    let mut list = col().gap(2.0);
-    for (i, (t, warn)) in items.into_iter().enumerate() {
+    let mut list = col();
+    for (i, (name, value, warn)) in items.into_iter().enumerate() {
+        let ink = if warn { k.c.warning.fg } else { k.c.text_muted };
         list = list.child(
-            text(t)
+            row()
                 .key(format!("fact-{i}"))
-                .font(k.ty.ui)
-                .color(if warn { k.c.warning.fg } else { k.c.text_base }),
+                .label(format!("{value} {name}"))
+                .h(24.0)
+                .items_center()
+                .child(text(name).font(TYPE.small).color(ink).grow(1.0).a11y_hidden())
+                .child(
+                    text(value)
+                        .font(TextStyle {
+                            weight: 600.0,
+                            ..TYPE.small.features("'tnum' 1")
+                        })
+                        .color(if warn { k.c.warning.fg } else { k.c.text_base })
+                        .a11y_hidden(),
+                ),
         );
     }
-    card("brief-facts", "Facts", list, k)
+    card("brief-facts", "Facts", "from the diff", list, k)
 }
 
 fn map_card(s: &App, k: &Kit) -> Option<El> {
     let n = s.overview.as_ref()?.document.graph.nodes.len();
-    let body = row()
-        .gap(8.0)
-        .items_center()
-        .child(text(format!("{n} nodes")).font(k.ty.ui).color(k.c.text_base).grow(1.0))
-        .child(
-            Button::new("Open map")
-                .variant(ButtonVariant::Outline)
-                .control_size(ControlSize::Small)
-                .shortcut("m")
-                .on_press(|s: &mut App| s.toggle_map())
-                .build(k)
-                .key("open-map-card"),
-        );
-    Some(card("overview-map", "Map", body, k))
+    let body = row().pt(4.0).child(
+        outline("open-map-card", "Open map", Some("m"), 24.0, k)
+            .help("Open the Map  m")
+            .on_press(|s: &mut App| s.toggle_map()),
+    );
+    let sub = if n == 1 { "· 1 node".to_owned() } else { format!("· {n} nodes") };
+    Some(card("overview-map", "Map", &sub, body, k))
 }
 
-/// The rule above an H2 (none above the first).
-fn rule(key: &str, first: bool, k: &Kit) -> El {
+/// The space above an H2 (none above the first).
+fn rule(key: &str, first: bool, _: &Kit) -> El {
     let c = col().key(key.to_owned()).w_full();
-    if first {
-        return c;
-    }
-    c.child(el().w_full().h(1.0).fill(k.c.border_strong).mt(12.0))
+    if first { c } else { c.pt(8.0) }
 }
 
 /// A rule above an H2 (except the first), then the heading.
@@ -459,12 +484,18 @@ fn section(s: &App, k: &Kit, id: &str, title: Option<(&str, bool)>, label: &str,
         .label(label.to_owned())
         .w_full()
         .gap(6.0)
-        .padding(6.0)
-        .mx(-6.0)
-        .radius(k.radius.md)
+        .pl(12.0)
+        .pr(12.0)
+        .pt(8.0)
+        .pb(4.0)
+        .mx(-12.0)
+        .radius(radius::CARD)
         .child(section_head(s, k, id, title, threads.len()));
+    if s.brief.hover_section.as_deref() == Some(id) {
+        c = c.fill(k.c.hover);
+    }
     if s.brief.focus.as_deref() == Some(id) {
-        c = c.border(1.0, k.c.border_focus);
+        c = c.outline(2.0, 2.0, k.c.border_focus);
     }
     if !body.trim().is_empty() {
         c = c.child(md_body(s, id, body, k));
@@ -510,14 +541,20 @@ fn invariant(s: &App, k: &Kit, n: usize, id: &str, body: &str, extra: El) -> El 
         .label(format!("Invariant {n}"))
         .w_full()
         .gap(8.0)
-        .padding(6.0)
-        .mx(-6.0)
-        .radius(k.radius.md)
+        .pl(12.0)
+        .pr(12.0)
+        .pt(6.0)
+        .pb(4.0)
+        .mx(-12.0)
+        .radius(radius::CARD)
         .items_start()
-        .child(text(format!("{n}.")).font(k.ty.body).color(k.c.text_muted).w(20.0).pt(24.0))
+        .child(text(format!("{n}.")).font(TYPE.body).color(k.c.text_muted).w(20.0).pt(24.0))
         .child(item);
+    if s.brief.hover_section.as_deref() == Some(id) {
+        c = c.fill(k.c.hover);
+    }
     if s.brief.focus.as_deref() == Some(id) {
-        c = c.border(1.0, k.c.border_focus);
+        c = c.outline(2.0, 2.0, k.c.border_focus);
     }
     hoverable(c, id)
 }
@@ -541,35 +578,25 @@ fn mode_buttons(k: &Kit, id: String) -> El {
         .key("sec-actions")
         .gap(4.0)
         .child(
-            Button::new("Comment")
-                .variant(ButtonVariant::Ghost)
-                .control_size(ControlSize::Small)
-                .shortcut("c")
-                .on_press(move |s: &mut App| s.comment_on_section(&id, None, ComposeMode::Comment))
-                .build(k)
-                .key("sec-comment"),
+            outline("sec-comment", "Comment", Some("c"), 22.0, k)
+                .on_press(move |s: &mut App| s.comment_on_section(&id, None, ComposeMode::Comment)),
         )
         .child(
-            Button::new("Ask")
-                .variant(ButtonVariant::Ghost)
-                .control_size(ControlSize::Small)
-                .shortcut("?")
-                .on_press(move |s: &mut App| s.comment_on_section(&ask, None, ComposeMode::Question))
-                .build(k)
-                .key("sec-ask"),
+            outline("sec-ask", "Ask", Some("?"), 22.0, k)
+                .on_press(move |s: &mut App| s.comment_on_section(&ask, None, ComposeMode::Question)),
         )
 }
 
-/// A thread-count dot on a section header or note.
+/// A thread-count chip on a section head.
 pub(super) fn dot(n: usize, k: &Kit) -> El {
     row()
-        .h(16.0)
-        .px(5.0)
-        .radius(8.0)
-        .fill(notes::note_purple(k))
+        .h(18.0)
+        .px(6.0)
+        .radius(radius::CHIP)
+        .fill(k.c.info.bg)
         .items_center()
         .label(format!("{n} thread(s)"))
-        .child(text(n.to_string()).font(k.ty.small_medium).color(notes::on_note_purple(k)))
+        .child(text(n.to_string()).font(TYPE.micro).color(k.c.info.fg))
 }
 
 /// Byte ranges of `src` inside fenced code blocks (``` or ~~~), fences included.
@@ -974,9 +1001,27 @@ pub(super) fn artifact_composer(_s: &App, d: &ArtifactDraft, k: &Kit) -> El {
 
 /// No brief yet: the story notes with Comment / Ask per note, and how to get a brief.
 fn fallback(s: &App, k: &Kit) -> El {
-    let mut c = col().key("brief-fallback").w_full().gap(10.0);
+    let (surf, _) = sr(k);
+    let mut c = col().key("brief-fallback").w_full().gap(16.0).child(
+        col()
+            .key("overview-empty")
+            .w_full()
+            .px(20.0)
+            .py(16.0)
+            .gap(8.0)
+            .radius(radius::CARD)
+            .fill(surf.panel)
+            .border(1.0, surf.card_border)
+            .child(
+                Markdown::new(
+                    "**No brief yet.** Ask the agent to run `rain brief set` (see docs/agent.md).\n\nUntil then, the agent's story notes stand in below, and Facts and the Map come from the diff.",
+                )
+                .selectable(true)
+                .build(k),
+            ),
+    );
     if let Some(story) = notes::story_card(s, k) {
-        c = c.child(h2_block("h2-story", "Story", true, k)).child(story);
+        c = c.child(story);
     }
     for n in s.story_notes() {
         let (id, ask) = (n.id.clone(), n.id.clone());
@@ -1017,11 +1062,5 @@ fn fallback(s: &App, k: &Kit) -> El {
         }
         c = c.child(note);
     }
-    c.child(
-        col().key("overview-empty").w_full().pt(8.0).child(
-            Markdown::new("No brief yet. Ask the agent to run `rain brief set` (see `docs/agent.md`).")
-                .selectable(true)
-                .build(k),
-        ),
-    )
+    c
 }

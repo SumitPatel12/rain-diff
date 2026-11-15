@@ -52,7 +52,7 @@ pub(super) fn ruler(s: &App, k: &Kit) -> El {
         .w(W)
         .h_full()
         .min_h(0.0)
-        .fill(k.c.layer_01)
+        .fill(k.c.bg_base)
         .on_layout_tx(|s: &mut App, r: [f32; 4], tx| s.set_ruler_track(r[3], tx))
         .on_drag(|s: &mut App, d, tx| s.ruler_drag(d, tx))
         .on_pointer_move_local(|s: &mut App, p, tx| s.ruler_hover(Some(p.y), tx))
@@ -76,22 +76,29 @@ pub(super) fn ruler(s: &App, k: &Kit) -> El {
                 .a11y_hidden(),
         );
     }
-    strip.child(
-        el().key("ruler-thumb")
-            .absolute(0.0, 0.0)
-            .live_rect(&s.ruler.thumb)
-            .fill(k.alpha(k.c.text_base, 0.12))
-            .border(1.0, k.alpha(k.c.text_base, 0.5))
-            .radius(2.0)
-            .a11y_hidden()
-            .child(
-                el().w_full()
-                    .h_full()
-                    .radius(2.0)
-                    .fill(k.alpha(k.c.text_base, 0.07))
-                    .live_opacity(s.ruler.hot.smooth(Spring::new(0.12, 0.0))),
-            ),
-    )
+    strip
+        .child(
+            el().key("ruler-thumb")
+                .absolute(0.0, 0.0)
+                .live_rect(&s.ruler.thumb)
+                .fill(k.alpha(k.c.text_base, 0.09))
+                .radius(3.0)
+                .a11y_hidden()
+                .child(
+                    el().w_full()
+                        .h_full()
+                        .radius(3.0)
+                        .fill(k.alpha(k.c.text_base, 0.07))
+                        .live_opacity(s.ruler.hot.smooth(Spring::new(0.12, 0.0))),
+                ),
+        )
+        .child(
+            el().key("ruler-line")
+                .pin(Some(0.0), Some(0.0), None, Some(0.0))
+                .w(1.0)
+                .fill(k.c.border_weak)
+                .a11y_hidden(),
+        )
 }
 
 /// Hooks the diff view's scroll offset to the ruler's thumb, with no view run per frame.

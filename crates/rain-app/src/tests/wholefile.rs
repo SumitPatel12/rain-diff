@@ -92,7 +92,7 @@ fn e_shows_the_current_file_whole_and_e_again_folds_it_and_drops_the_texts() {
     assert!(!rt.state.diff.expandable(a));
     assert_eq!(
         help_of(&mut rt, &format!("whole-{a}")).as_deref(),
-        Some("Show the whole file with changes inline (e)")
+        Some("Show the whole file with changes inline  e")
     );
 
     typed(&mut rt, "e");
@@ -101,10 +101,7 @@ fn e_shows_the_current_file_whole_and_e_again_folds_it_and_drops_the_texts() {
     assert_eq!(rows_of(&rt, a), 1 + 80 + 1, "header, every new line and the removed one");
     assert!(rows_of(&rt, a) > folded);
     assert_eq!(rt.state.current(), Some(a), "the cursor's file stays the current one");
-    assert_eq!(
-        help_of(&mut rt, &format!("whole-{a}")).as_deref(),
-        Some("Show only the changes (e)")
-    );
+    assert_eq!(help_of(&mut rt, &format!("whole-{a}")).as_deref(), Some("Show only the changes  e"));
 
     typed(&mut rt, "e");
     assert!(!rt.state.diff.whole(a));
@@ -120,12 +117,8 @@ fn the_header_button_toggles_the_file_whole() {
     let b = file(&rt, "b.cs");
     rt.update(|s, tx| s.active_mut().scroll_to_file(b, tx));
     settle(&mut rt);
-    let more = rt.find(&format!("file-more-{b}")).expect("the header's ⋯");
-    rt.pointer_down(more.0, more.1);
-    rt.pointer_up(more.0, more.1);
-    settle(&mut rt);
     let key = format!("whole-{b}");
-    let (x, y) = rt.find(&key).expect("the file's ⋯ menu shows the toggle");
+    let (x, y) = rt.find(&key).expect("the file's header row shows Whole file");
     rt.pointer_down(x, y);
     rt.pointer_up(x, y);
     settle(&mut rt);

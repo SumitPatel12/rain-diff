@@ -62,7 +62,7 @@ fn act(d: &mut Demo, id: &str, a: CardAction, _: &mut Tx) {
                 d.expanded.insert(id.to_owned());
             }
         }
-        CardAction::OpenReply => {
+        CardAction::OpenReply | CardAction::AskReply => {
             d.expanded.insert(id.to_owned());
             d.replying = Some(id.to_owned());
         }

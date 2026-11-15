@@ -27,6 +27,14 @@ impl App {
     pub fn close_find(&mut self) {
         self.find.open = false;
         self.find.edit.focused = false;
+        self.active_mut().set_find("", None);
+    }
+
+    /// Marks the query's matches in the diff, the current hit brighter.
+    fn mark_find(&mut self) {
+        let q = self.find.query.clone();
+        let cur = self.find.hits.get(self.find.at).copied();
+        self.active_mut().set_find(&q, cur);
     }
 
     /// Recomputes matches of the find box's text over the active diff's lines (case-insensitive
@@ -35,6 +43,7 @@ impl App {
         let q = self.find.edit.text.clone();
         let scope: Vec<usize> = self.active().files().iter().map(|f| std::sync::Arc::as_ptr(f) as usize).collect();
         if q == self.find.query && scope == self.find.scope {
+            self.mark_find();
             return;
         }
         self.find.query = q.clone();
@@ -42,6 +51,7 @@ impl App {
         self.find.hits.clear();
         self.find.at = 0;
         if q.is_empty() {
+            self.mark_find();
             return;
         }
         let fold = q.is_ascii();
@@ -68,6 +78,7 @@ impl App {
             }
         }
         self.find.hits = hits;
+        self.mark_find();
     }
 
     pub fn find_step(&mut self, forward: bool, tx: &mut Tx) {
@@ -82,6 +93,7 @@ impl App {
         } else {
             (self.find.at + n - 1) % n
         };
+        self.mark_find();
         let (f, i) = self.find.hits[self.find.at];
         let Some(rec) = self.active().files().get(f).and_then(|x| x.lines.get(i as usize)).copied() else {
             return;

@@ -1,0 +1,198 @@
+//! Small parts the redesign repeats: key caps, ghost and outlined buttons, chips, separators.
+
+use rune::{Cursor, El, Icon, el, row, text};
+use rune_kit::Kit;
+
+use super::icons;
+use crate::theme::{Roles, Surfaces, TYPE, radius, roles_of, surfaces_of};
+
+/// The scheme's surfaces and roles for a kit from `theme::look`.
+pub(crate) fn sr(k: &Kit) -> (Surfaces, Roles) {
+    (surfaces_of(k), roles_of(k))
+}
+
+/// A key cap: `Space`, `]`, `w` (11/16 faint on the well, hairline ring).
+pub(crate) fn kbd(t: impl Into<String>, k: &Kit) -> El {
+    let s = surfaces_of(k);
+    row()
+        .h(16.0)
+        .px(4.0)
+        .items_center()
+        .radius(radius::KEY)
+        .fill(s.well)
+        .border(1.0, s.hairline)
+        .a11y_hidden()
+        .child(text(t.into()).font(TYPE.micro).color(k.c.text_faint))
+}
+
+/// A key without its cap, for inside buttons and menu rows.
+pub(crate) fn kbd_bare(t: impl Into<String>, k: &Kit) -> El {
+    text(t.into()).font(TYPE.micro).color(k.c.text_faint).a11y_hidden()
+}
+
+/// A 1 × 16 point divider between toolbar groups.
+pub(crate) fn vsep(k: &Kit) -> El {
+    el().w(1.0).h(16.0).mx(4.0).fill(surfaces_of(k).hairline).a11y_hidden()
+}
+
+/// A ghost button: icon and/or label in muted 12 point text, the hover overlay, `on` pressed.
+pub(crate) struct Ghost {
+    key: String,
+    icon: Option<&'static Icon>,
+    label: Option<String>,
+    hint: Option<String>,
+    help: Option<String>,
+    on: bool,
+    height: f32,
+    extra: Vec<El>,
+}
+
+impl Ghost {
+    pub(crate) fn new(key: impl Into<String>) -> Ghost {
+        Ghost {
+            key: key.into(),
+            icon: None,
+            label: None,
+            hint: None,
+            help: None,
+            on: false,
+            height: 28.0,
+            extra: Vec::new(),
+        }
+    }
+
+    pub(crate) fn icon(mut self, i: &'static Icon) -> Self {
+        self.icon = Some(i);
+        self
+    }
+
+    pub(crate) fn label(mut self, l: impl Into<String>) -> Self {
+        self.label = Some(l.into());
+        self
+    }
+
+    /// A key shown after the label, without a cap.
+    pub(crate) fn hint(mut self, k: impl Into<String>) -> Self {
+        self.hint = Some(k.into());
+        self
+    }
+
+    pub(crate) fn help(mut self, h: impl Into<String>) -> Self {
+        self.help = Some(h.into());
+        self
+    }
+
+    pub(crate) fn on(mut self, on: bool) -> Self {
+        self.on = on;
+        self
+    }
+
+    pub(crate) fn height(mut self, h: f32) -> Self {
+        self.height = h;
+        self
+    }
+
+    pub(crate) fn child(mut self, e: El) -> Self {
+        self.extra.push(e);
+        self
+    }
+
+    pub(crate) fn build(self, k: &Kit) -> El {
+        let ink = if self.on { k.c.text_base } else { k.c.text_muted };
+        let name = self.label.clone().or(self.help.clone()).unwrap_or_default();
+        let mut b = row()
+            .key(self.key)
+            .role("button")
+            .label(name)
+            .h(self.height)
+            .min_w(self.height)
+            .px(6.0)
+            .gap(6.0)
+            .center()
+            .radius(radius::BUTTON)
+            .cursor(Cursor::Pointer)
+            .focusable(true);
+        if self.on {
+            b = b.fill(k.c.pressed).checked(true);
+        }
+        if let Some(h) = self.help {
+            b = b.help(h);
+        }
+        if let Some(i) = self.icon {
+            b = b.child(icons::draw(i, 16.0, ink));
+        }
+        if let Some(l) = self.label {
+            b = b.child(text(l).font(TYPE.small).color(ink).a11y_hidden());
+        }
+        if let Some(h) = self.hint {
+            b = b.child(kbd_bare(h, k));
+        }
+        k.interactive(b.children(self.extra)).press_scale(0.97)
+    }
+}
+
+/// An outlined small button (`Accept 2`, thread actions): 12 point text, a card-border ring.
+pub(crate) fn outline(key: impl Into<String>, label: impl Into<String>, hint: Option<&str>, h: f32, k: &Kit) -> El {
+    let s = surfaces_of(k);
+    let label = label.into();
+    let mut b = row()
+        .key(key.into())
+        .role("button")
+        .label(label.clone())
+        .h(h)
+        .px(8.0)
+        .gap(6.0)
+        .center()
+        .radius(radius::SMALL)
+        .border(1.0, s.card_border)
+        .cursor(Cursor::Pointer)
+        .focusable(true)
+        .child(text(label).font(TYPE.small).color(k.c.text_base).a11y_hidden());
+    if let Some(h) = hint {
+        b = b.child(kbd_bare(h, k));
+    }
+    k.interactive(b).press_scale(0.97)
+}
+
+/// The one filled button of a context: accent fill, 13/20/600.
+pub(crate) fn primary(key: impl Into<String>, label: impl Into<String>, k: &Kit) -> El {
+    let r = roles_of(k);
+    let label = label.into();
+    k.interactive_with(
+        row()
+            .key(key.into())
+            .role("button")
+            .label(label.clone())
+            .h(28.0)
+            .px(14.0)
+            .center()
+            .radius(radius::BUTTON)
+            .fill(r.accent)
+            .cursor(Cursor::Pointer)
+            .focusable(true)
+            .child(text(label).font(TYPE.strong).color(r.on_accent).a11y_hidden()),
+        k.c.contrast_hover,
+        k.c.contrast_pressed,
+    )
+    .press_scale(0.97)
+}
+
+/// The `Must` tag: a danger chip with its ring, 600.
+pub(crate) fn must_tag(k: &Kit) -> El {
+    row()
+        .key("must")
+        .h(18.0)
+        .px(6.0)
+        .items_center()
+        .radius(radius::CHIP)
+        .fill(k.c.danger.bg)
+        .border(1.0, k.c.danger.border)
+        .child(
+            text("Must")
+                .font(rune::tok::TextStyle {
+                    weight: 600.0,
+                    ..TYPE.micro
+                })
+                .color(k.c.danger.fg),
+        )
+}

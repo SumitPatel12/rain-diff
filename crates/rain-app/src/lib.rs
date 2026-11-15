@@ -8,6 +8,7 @@ mod app;
 mod icon;
 mod keys;
 mod load;
+mod note_window;
 mod palette;
 mod peek_window;
 mod render;
@@ -343,6 +344,25 @@ fn scene_whole(s: &mut App) {
     s.goto_later(s.keys.get(g).cloned().unwrap_or_default());
 }
 
+/// The reader as the redesign's spec draws it: two threads and the notes on the first
+/// must-review file, its question folded into the gutter, the next file viewed.
+fn scene_reader(s: &mut App) {
+    scene_base(s);
+    seed_threads(s);
+    seed_notes(s);
+    if let Some(q) = s.mirror.threads.get(1).map(|t| t.id.clone()) {
+        s.folded.insert(q);
+    }
+    let g = scene_file(s);
+    if g + 1 < s.keys.len() {
+        s.set_viewed(g + 1, true);
+    }
+    if let Some(k) = s.keys.get(g).cloned() {
+        s.goto_later(k);
+    }
+    s.status.clear();
+}
+
 fn spec() -> AppSpec<App> {
     let (fonts, families) = fonts();
     let size = Settings::load(&Settings::default_path()).window;
@@ -351,6 +371,16 @@ fn spec() -> AppSpec<App> {
             ("files", |s| {
                 scene_base(s);
                 seed_threads(s);
+            }),
+            ("reader", scene_reader),
+            ("one-at-a-time", |s| {
+                scene_reader(s);
+                s.toggle_reader_mode(&mut rune::Tx::default());
+                s.show_pick(app::board::Pick::Landing);
+            }),
+            ("reader-comfortable", |s| {
+                scene_reader(s);
+                s.set_density(Density::Comfortable);
             }),
             ("split", |s| {
                 scene_base(s);
@@ -564,6 +594,8 @@ pub fn run(launch: Launch, shared: Arc<Shared>) -> bool {
     let _ = START.set((launch, shared, Instant::now()));
     let mut app = rune::App::new(spec()).modifier_keys().on_close(on_close).on_window(icon::apply);
     peek_window::register(&mut app);
+    let main = app.handle();
+    note_window::register(&mut app, main);
     app.run();
     CLOSE_REQUESTED.load(Ordering::SeqCst)
 }

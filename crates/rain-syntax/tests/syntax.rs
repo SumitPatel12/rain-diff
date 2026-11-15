@@ -252,7 +252,7 @@ fn bench_chunks_and_warm() {
 fn everforest_and_gruvbox_paint_only_their_palette_hexes() {
     let hex = |p: Palette, t| p.color(t).hex()[..7].to_owned();
     let everforest = [
-        "#859289", "#83c092", "#d699b6", "#e67e80", "#dbbc7f", "#a7c080", "#7fbbb3", "#9da9a0", "#e69875", "#dbbc7f",
+        "#859289", "#dbbc7f", "#d699b6", "#e69875", "#7fbbb3", "#83c092", "#d3c6aa", "#a59c86", "#e69875", "#dbbc7f",
     ];
     let gruvbox = [
         "#928374", "#b8bb26", "#d3869b", "#fb4934", "#fabd2f", "#b8bb26", "#83a598", "#a89984", "#83a598", "#8ec07c",

@@ -269,10 +269,12 @@ impl<S: 'static> TreeView<S> {
                 panel = panel.child(header(st, k, &hooks, self.progress));
             }
             if self.chips {
+                // Alone (a popover), the toggles read as a checklist.
+                let checklist = !self.filter_box && !self.rows;
                 if st.repos().len() > 1 {
-                    panel = panel.child(repo_chips(st, k, &hooks));
+                    panel = panel.child(repo_chips(st, k, &hooks, checklist));
                 }
-                panel = panel.child(chips(st, k, &hooks));
+                panel = panel.child(chips(st, k, &hooks, checklist));
             }
             if self.rows
                 && let Some(tag) = st.filter.single_tag()
@@ -376,7 +378,7 @@ fn header<S: 'static>(st: &TreeState, k: &Kit, hooks: &Rc<Hooks<S>>, with_progre
     let get_mut = hooks.get_mut;
     let input = TextInput::new(&st.filter_edit)
         .label("Filter files")
-        .placeholder("Filter files  (f)")
+        .placeholder("Filter files    f")
         .leading_icon(&glyphs::SEARCH)
         .width(None)
         .clear_button()
@@ -396,13 +398,16 @@ fn header<S: 'static>(st: &TreeState, k: &Kit, hooks: &Rc<Hooks<S>>, with_progre
         })
         .build(k)
         .key("filter");
-    let mut c = col().key("tree-header").w_full().px(8.0).pt(8.0).gap(6.0);
+    let mut c = col().key("tree-header").w_full().pl(10.0).pr(6.0).pt(10.0).gap(6.0);
     if with_progress {
         c = c.child(progress);
     }
     c.child(input)
 }
 
+/// One filter toggle: a chip in the tree's wrap, or in a checklist a row with a box, the label,
+/// then (the caller's) count at the end.
+#[allow(clippy::too_many_arguments)]
 fn chip<S: 'static>(
     key: String,
     label: String,
@@ -411,30 +416,72 @@ fn chip<S: 'static>(
     k: &Kit,
     press: impl Fn(&mut S, &mut Tx) + 'static,
     parts: Vec<El>,
+    checklist: bool,
 ) -> El {
     let c = &k.c;
+    if !checklist {
+        let e = row()
+            .key(key)
+            .role("toggle")
+            .label(said)
+            .checked(on)
+            .focusable(true)
+            .h(22.0)
+            .px(6.0)
+            .gap(4.0)
+            .center_y()
+            .radius(k.radius.sm)
+            .border(1.0, if on { c.border_focus } else { c.border_weak })
+            .fill(if on { k.alpha(c.text_accent, 0.18) } else { Color::TRANSPARENT })
+            .focus_ring(1.0, 1.0, c.border_active)
+            .children(parts)
+            .child(text(label).font(k.ty.text_xsmall_medium).color(c.text_base).a11y_hidden())
+            .on_press_tx(press);
+        return k.interactive(e);
+    }
+    let mut boxed = row().key("box").size(14.0, 14.0).center().radius(3.0).a11y_hidden();
+    boxed = if on {
+        boxed.fill(c.bg_accent).child(icon(&CHECK, 12.0).color(c.submit_fg))
+    } else {
+        boxed.border(1.5, c.text_muted)
+    };
     let e = row()
         .key(key)
         .role("toggle")
         .label(said)
         .checked(on)
         .focusable(true)
-        .h(22.0)
-        .px(6.0)
-        .gap(4.0)
+        .w_full()
+        .h(26.0)
+        .px(8.0)
+        .gap(10.0)
         .center_y()
-        .radius(k.radius.sm)
-        .border(1.0, if on { c.border_focus } else { c.border_weak })
-        .fill(if on { k.alpha(c.text_accent, 0.18) } else { Color::TRANSPARENT })
+        .radius(5.0)
         .focus_ring(1.0, 1.0, c.border_active)
-        .children(parts)
-        .child(text(label).font(k.ty.text_xsmall_medium).color(c.text_base).a11y_hidden())
+        .child(boxed)
+        .child(text(label).font(k.ty.ui).color(c.text_base).a11y_hidden())
+        .child(el().grow(1.0).a11y_hidden())
         .on_press_tx(press);
     k.interactive(e)
 }
 
-fn repo_chips<S: 'static>(st: &TreeState, k: &Kit, hooks: &Rc<Hooks<S>>) -> El {
-    let mut wrap = row().key("repo-chips").w_full().px(8.0).pt(6.0).flex_wrap().gaps(4.0, 4.0);
+static CHECK: rune::Icon = rune::Icon {
+    name: "tree-check",
+    view: 16.0,
+    body: r#"<path d="m3.5 8.5 3 3 6-7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>"#,
+};
+
+/// A small label over a group of toggles.
+fn group_label(t: &str, k: &Kit) -> El {
+    text(t.to_owned()).font(k.ty.small).color(k.c.text_faint).px(8.0).pt(6.0).pb(2.0)
+}
+
+fn repo_chips<S: 'static>(st: &TreeState, k: &Kit, hooks: &Rc<Hooks<S>>, checklist: bool) -> El {
+    let mut wrap = if checklist {
+        col().key("repo-chips").w_full().px(4.0).child(group_label("Repo", k))
+    } else {
+        row().key("repo-chips").w_full().px(8.0).pt(6.0).flex_wrap().gaps(4.0, 4.0)
+    };
     for (r, name) in st.repos() {
         let r = *r;
         let n = st.repo_count(r);
@@ -444,10 +491,7 @@ fn repo_chips<S: 'static>(st: &TreeState, k: &Kit, hooks: &Rc<Hooks<S>>) -> El {
         }
         let h = hooks.clone();
         let dot = el().size(8.0, 8.0).radius(4.0).fill(repo_color(r, k)).self_center().a11y_hidden();
-        let count = text(n.to_string())
-            .font(k.ty.text_xsmall.features("'tnum' 1"))
-            .color(k.c.text_muted)
-            .a11y_hidden();
+        let count = text(n.to_string()).font(k.ty.small.mono()).color(k.c.text_faint).a11y_hidden();
         let press = move |s: &mut S, tx: &mut Tx| {
             h.set_filter(s, tx, |f| {
                 if !f.repos.remove(&r) {
@@ -456,14 +500,18 @@ fn repo_chips<S: 'static>(st: &TreeState, k: &Kit, hooks: &Rc<Hooks<S>>) -> El {
             })
         };
         let said = format!("{name}, {n} files");
-        let e = chip(format!("chip-repo-{r}"), name.clone(), said, on, k, press, vec![dot]);
+        let e = chip(format!("chip-repo-{r}"), name.clone(), said, on, k, press, vec![dot], checklist);
         wrap = wrap.child(e.child(count));
     }
     wrap
 }
 
-fn chips<S: 'static>(st: &TreeState, k: &Kit, hooks: &Rc<Hooks<S>>) -> El {
-    let mut wrap = row().key("chips").w_full().px(8.0).py(6.0).flex_wrap().gaps(4.0, 4.0);
+fn chips<S: 'static>(st: &TreeState, k: &Kit, hooks: &Rc<Hooks<S>>, checklist: bool) -> El {
+    let mut wrap = if checklist {
+        col().key("chips").w_full().px(4.0).pb(4.0).child(group_label("Tag", k))
+    } else {
+        row().key("chips").w_full().px(8.0).py(6.0).flex_wrap().gaps(4.0, 4.0)
+    };
     for t in FileTag::ALL {
         let n = st.tag_count(t);
         let on = st.filter.tags.contains(&t);
@@ -475,10 +523,7 @@ fn chips<S: 'static>(st: &TreeState, k: &Kit, hooks: &Rc<Hooks<S>>) -> El {
             .font(k.ty.text_xsmall_medium.mono())
             .color(tag_color(t, k))
             .a11y_hidden();
-        let count = text(n.to_string())
-            .font(k.ty.text_xsmall.features("'tnum' 1"))
-            .color(k.c.text_muted)
-            .a11y_hidden();
+        let count = text(n.to_string()).font(k.ty.small.mono()).color(k.c.text_faint).a11y_hidden();
         let press = move |s: &mut S, tx: &mut Tx| {
             h.set_filter(s, tx, |f| {
                 if !f.tags.remove(&t) {
@@ -488,11 +533,14 @@ fn chips<S: 'static>(st: &TreeState, k: &Kit, hooks: &Rc<Hooks<S>>) -> El {
         };
         let said = format!("{}, {n} files", t.label());
         let label = t.label().to_owned();
-        let e = chip(format!("chip-{}", tag_slug(t)), label, said, on, k, press, vec![glyph]);
+        let e = chip(format!("chip-{}", tag_slug(t)), label, said, on, k, press, vec![glyph], checklist);
         wrap = wrap.child(e.child(count));
     }
     let (h1, h2) = (hooks.clone(), hooks.clone());
     let f = &st.filter;
+    if checklist {
+        wrap = wrap.child(el().w_full().h(1.0).my(4.0).fill(k.c.border_weak).a11y_hidden());
+    }
     wrap = wrap.child(chip(
         "chip-unviewed".into(),
         "Unviewed".into(),
@@ -501,6 +549,7 @@ fn chips<S: 'static>(st: &TreeState, k: &Kit, hooks: &Rc<Hooks<S>>) -> El {
         k,
         move |s: &mut S, tx: &mut Tx| h1.set_filter(s, tx, |f| f.unviewed_only = !f.unviewed_only),
         vec![icon(&glyphs::EYE_OFF, 14.0).color(k.c.icon_muted).a11y_hidden()],
+        checklist,
     ));
     wrap.child(chip(
         "chip-commented".into(),
@@ -510,6 +559,7 @@ fn chips<S: 'static>(st: &TreeState, k: &Kit, hooks: &Rc<Hooks<S>>) -> El {
         k,
         move |s: &mut S, tx: &mut Tx| h2.set_filter(s, tx, |f| f.commented_only = !f.commented_only),
         vec![icon(&COMMENT, 14.0).color(k.c.icon_muted).a11y_hidden()],
+        checklist,
     ))
 }
 

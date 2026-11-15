@@ -64,7 +64,8 @@ impl Token {
 
 /// sRGB hex per token, in [`Token::ALL`] order, one row per [`Palette`]. GitHub dark and light
 /// follow Primer's "prettylights" syntax colours, with distinct picks where Primer reuses one.
-/// Everforest and Gruvbox take only their palettes' own hexes, as their Vim themes assign them.
+/// Everforest follows Rain's redesign roles (Everforest hexes, with a warm grey for
+/// punctuation); Gruvbox takes only its palette's own hexes, as its Vim theme assigns them.
 const HEX: [[&str; 10]; 4] = [
     [
         "#8b949e", "#a5d6ff", "#79c0ff", "#ff7b72", "#ffa657", "#d2a8ff", "#e3b341", "#9198a1", "#7ee787", "#56d4dd",
@@ -72,9 +73,9 @@ const HEX: [[&str; 10]; 4] = [
     [
         "#6e7781", "#0a3069", "#0550ae", "#cf222e", "#953800", "#8250df", "#7d4e00", "#57606a", "#116329", "#1b7c83",
     ],
-    // grey1, aqua, purple, red, yellow, green, blue, grey2, orange, yellow
+    // grey1, yellow, purple, orange, blue, aqua, fg, punct, orange, yellow
     [
-        "#859289", "#83c092", "#d699b6", "#e67e80", "#dbbc7f", "#a7c080", "#7fbbb3", "#9da9a0", "#e69875", "#dbbc7f",
+        "#859289", "#dbbc7f", "#d699b6", "#e69875", "#7fbbb3", "#83c092", "#d3c6aa", "#a59c86", "#e69875", "#dbbc7f",
     ],
     // gray, green, purple, red, yellow, green, blue, fg4, blue, aqua
     [

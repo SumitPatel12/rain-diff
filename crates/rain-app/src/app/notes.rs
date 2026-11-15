@@ -76,6 +76,72 @@ impl App {
         }
     }
 
+    /// Whether note `id` is open in the Intent window.
+    pub fn note_popped(&self, id: &str) -> bool {
+        self.popped_note.as_deref() == Some(id)
+    }
+
+    /// What the Intent window shows for note `id`.
+    pub fn note_content(&self, id: &str) -> Option<crate::note_window::NoteContent> {
+        let n = self.note(id)?;
+        let place = self.file_of_note(&n).map(|g| match n.anchor {
+            Some(a) => {
+                let (lo, hi) = a.lines();
+                if lo == hi {
+                    format!("{}:{lo}", self.keys[g])
+                } else {
+                    format!("{}:{lo}-{hi}", self.keys[g])
+                }
+            }
+            None => self.keys[g].clone(),
+        });
+        let mut meta = Vec::new();
+        if let Some(a) = n.author.as_deref().map(str::trim).filter(|a| !a.is_empty()) {
+            meta.push(a.to_owned());
+        }
+        if let Some(a) = n.anchor {
+            let (lo, hi) = a.lines();
+            meta.push(if lo == hi { format!("L{lo}") } else { format!("L{lo}–{hi}") });
+        }
+        Some(crate::note_window::NoteContent {
+            id: n.id.clone(),
+            label: if n.is_overview() { "Intent".into() } else { "Note".into() },
+            meta: meta.iter().map(|m| format!("· {m}")).collect::<Vec<_>>().join(" "),
+            title: n.title.clone().filter(|t| !t.trim().is_empty()),
+            body: n.body.clone(),
+            place,
+        })
+    }
+
+    /// Pop out: the note opens in the Intent window (replacing any other) and collapses inline.
+    pub fn pop_out_note(&mut self, id: &str) {
+        let Some(c) = self.note_content(id) else { return };
+        if crate::note_window::show(c, self.seen_scheme.get()) {
+            self.status = "Note opened in its own window · Bring back returns it".into();
+        }
+        self.popped_note = Some(id.to_owned());
+    }
+
+    /// Bring back: the note shows inline again and the window closes.
+    pub fn bring_back_note(&mut self, id: &str) {
+        if self.note_popped(id) {
+            self.popped_note = None;
+            crate::note_window::hide();
+        }
+    }
+
+    /// The Intent window's Show in diff: the Changes, scrolled to the note's line.
+    pub fn goto_note(&mut self, id: &str, tx: &mut rune::Tx) {
+        let Some(n) = self.note(id) else { return };
+        let Some(g) = self.file_of_note(&n) else { return };
+        self.set_reader_tab(super::ReaderTab::Changes);
+        self.folded.remove(&format!("note:{id}"));
+        if let (Some(l), Some(a)) = (self.local(g), n.anchor) {
+            let at = rain_diffview::LineRef::new(a.side(), a.end_line());
+            self.active_mut().scroll_to_line(l, at, tx);
+        }
+    }
+
     /// Runs after the session's notes changed (from `before` notes), before the annotations are
     /// rebuilt.
     pub(crate) fn on_notes_changed(&mut self, before: usize) {

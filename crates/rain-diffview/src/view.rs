@@ -1,6 +1,9 @@
 //! Drawing a [`DiffState`]: a virtual list of file headers, hunk separators and lines, a sticky
 //! header for the file being read, and the handlers that feed selection, expansion, text spans
 //! and the reading position back into the state.
+//!
+//! A line reads left to right: a marks column (folded threads and notes, and the hover's
+//! comment and ask buttons), the old and new numbers, the `+`/`−` sign, then the code.
 
 use std::borrow::Cow;
 use std::hash::{Hash, Hasher};
@@ -9,16 +12,14 @@ use std::rc::Rc;
 
 use rain_core::diff::{FileStatus, LineKind, Side};
 use rune::{
-    Color, Cursor, Drag, El, GrowthSpec, Icon, Live, Phase, ScrollPos, ScrollSpec, Span, TextHighlight, TextStyle, Tx, col, icon, memo,
+    Color, Cursor, Drag, El, GrowthSpec, Icon, Live, Phase, ScrollPos, ScrollSpec, Span, TextHighlight, TextStyle, Tx, col, el, icon, memo,
     rich, row, text,
 };
 use rune_kit::Kit;
 use rune_kit::syntax::SyntaxTheme;
 
 use crate::model;
-use crate::state::{
-    Annotation, DiffState, Draw, EXPAND_STEP, Expand, GAP_H, HEADER_H, LINE_H, LineRange, LineRef, NOTE_H, Row, SpanSelection,
-};
+use crate::state::{Annotation, DiffState, Draw, EXPAND_STEP, Expand, LineRange, LineRef, Metrics, Row, SpanSelection};
 
 static EXPAND_UP: Icon = Icon {
     name: "kit-diff-expand-up",
@@ -35,18 +36,29 @@ static EXPAND_ALL: Icon = Icon {
     view: 16.0,
     body: r#"<path d="M5 5.5L8 2.5L11 5.5M5 10.5L8 13.5L11 10.5" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round" fill="none"/>"#,
 };
-static PLUS: Icon = Icon {
-    name: "kit-diff-plus",
+static CHEVRON_DOWN: Icon = Icon {
+    name: "kit-diff-chevron-down",
     view: 16.0,
-    body: r#"<path d="M8 4V12M4 8H12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>"#,
+    body: r#"<path d="M4.5 6.25L8 9.75L11.5 6.25" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>"#,
+};
+static CHEVRON_RIGHT: Icon = Icon {
+    name: "kit-diff-chevron-right",
+    view: 16.0,
+    body: r#"<path d="M6.25 4.5L9.75 8L6.25 11.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>"#,
 };
 
-/// Width of the coloured bar that marks an added or removed line (and the cursor's line).
-const BAR: f32 = 3.0;
+/// The marks column: folded threads and notes, and the hover's `+` and `?`.
+const MARKS: f32 = 22.0;
+/// The `+` / `−` sign column, unified and split.
+const SIGN: (f32, f32) = (18.0, 16.0);
+/// The least a line-number column takes.
+const NUMBER_MIN: f32 = 38.0;
+/// The cursor's bar at the line's left edge.
+const CURSOR_BAR: f32 = 2.0;
 /// Width of the bar that marks the lines a range or span comment covers.
 const RANGE_BAR: f32 = 3.0;
-/// Space between the line numbers and the code, and after the code.
-const CODE_PAD: (f32, f32) = (12.0, 24.0);
+/// Space before and after the code.
+const CODE_PAD: (f32, f32) = (0.0, 24.0);
 /// An all-added file this long draws calm (`DiffView::calm_added_files`).
 const CALM_LINES: u32 = 200;
 /// How much rows outside a spotlight keep of their opacity.
@@ -58,6 +70,34 @@ const SPOT_W: f32 = 2.0;
 /// `tx.scroll_to_y(SCROLL_KEY, y)`. A view keyed `k` scrolls as `"{k}/scroll"`.
 pub const SCROLL_KEY: &str = "diff/scroll";
 
+/// A theme's colours for the diff, in place of tints derived from the kit.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DiffColors {
+    pub add_line: Color,
+    pub del_line: Color,
+    pub add_word: Color,
+    pub del_word: Color,
+    /// The empty side of a split row.
+    pub filler: Color,
+    /// The hunk separator's band.
+    pub gap: Color,
+    /// The file header's band.
+    pub header: Color,
+    pub hairline: Color,
+    /// The cursor's bar.
+    pub cursor: Color,
+    /// An unchanged line under the cursor.
+    pub cursor_line: Color,
+    pub selection: Color,
+    /// The hover's `+` (comment) and `?` (ask) buttons, and the text on them.
+    pub comment: Color,
+    pub ask: Color,
+    pub on_button: Color,
+    /// Find's matches, and the current one.
+    pub find_hit: Color,
+    pub find_current: Color,
+}
+
 /// Fills a theme gives added and removed lines in place of the kit-derived tints.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct ChangeFills {
@@ -67,6 +107,7 @@ struct ChangeFills {
 
 type Get<S> = Rc<dyn Fn(&S) -> &DiffState>;
 type GetMut<S> = Rc<dyn Fn(&mut S) -> &mut DiffState>;
+type LinesFn<S> = Rc<dyn Fn(&mut S, LineRange, &mut Tx)>;
 
 /// Draws the [`DiffState`] an app keeps in its state: give it the state's accessors and build it
 /// in the view. It fills the height it's given and scrolls; Cmd-C, `j`/`k`, `n`/`p` and `]`/`[`
@@ -88,11 +129,14 @@ pub struct DiffView<S> {
     calm: bool,
     fills: Option<ChangeFills>,
     selection: Option<Color>,
+    colors: Option<DiffColors>,
     annotation: Option<Rc<dyn Fn(&S, &Annotation) -> El>>,
+    gutter_mark: Option<Rc<dyn Fn(&S, &[&Annotation]) -> Option<El>>>,
     header: Option<Rc<dyn Fn(&S, usize) -> El>>,
     header_annotation: Option<Rc<dyn Fn(&S, usize) -> Option<El>>>,
     on_select: Option<Rc<dyn Fn(&mut S, Option<LineRange>, &mut Tx)>>,
-    on_comment: Option<Rc<dyn Fn(&mut S, LineRange, &mut Tx)>>,
+    on_comment: Option<LinesFn<S>>,
+    on_ask: Option<LinesFn<S>>,
     on_span_select: Option<Rc<dyn Fn(&mut S, Option<SpanSelection>, &mut Tx)>>,
     on_visible_file: Option<Rc<dyn Fn(&mut S, usize)>>,
     on_need_texts: Option<Rc<dyn Fn(&mut S, usize)>>,
@@ -109,11 +153,14 @@ impl<S: 'static> DiffView<S> {
             calm: false,
             fills: None,
             selection: None,
+            colors: None,
             annotation: None,
+            gutter_mark: None,
             header: None,
             header_annotation: None,
             on_select: None,
             on_comment: None,
+            on_ask: None,
             on_span_select: None,
             on_visible_file: None,
             on_need_texts: None,
@@ -150,7 +197,7 @@ impl<S: 'static> DiffView<S> {
         self
     }
 
-    /// Draw files of 200 lines or more that are all added with only the bar by their lines,
+    /// Draw files of 200 lines or more that are all added with only the sign by their lines,
     /// not the full green wash: a new file reads as text, not as a wall of change.
     pub fn calm_added_files(mut self, on: bool) -> Self {
         self.calm = on;
@@ -158,7 +205,7 @@ impl<S: 'static> DiffView<S> {
     }
 
     /// Paint added and removed lines `add` and `del` rather than tints of the kit's success and
-    /// danger colours; their gutters and changed words mix those colours in, as the tints do.
+    /// danger colours; their changed words mix those colours in, as the tints do.
     pub fn change_fills(mut self, add: Color, del: Color) -> Self {
         self.fills = Some(ChangeFills { add, del });
         self
@@ -170,10 +217,23 @@ impl<S: 'static> DiffView<S> {
         self
     }
 
+    /// Every colour the diff paints, from a theme's roles.
+    pub fn colors(mut self, c: DiffColors) -> Self {
+        self.colors = Some(c);
+        self
+    }
+
     /// Build each [`Annotation`] under its last line. Rows holding annotations are built every
     /// commit, so a widget can read app state (a composer's text) freely.
     pub fn annotation(mut self, f: impl Fn(&S, &Annotation) -> El + 'static) -> Self {
         self.annotation = Some(Rc::new(f));
+        self
+    }
+
+    /// What the marks column shows by a line that carries annotations (a folded thread's badge),
+    /// given the annotations under that line; `None` leaves it to the hover's buttons.
+    pub fn gutter_mark(mut self, f: impl Fn(&S, &[&Annotation]) -> Option<El> + 'static) -> Self {
+        self.gutter_mark = Some(Rc::new(f));
         self
     }
 
@@ -196,10 +256,17 @@ impl<S: 'static> DiffView<S> {
         self
     }
 
-    /// Show a "+" by the line numbers of the hovered line, and call `f` with the lines it stands
+    /// Show a `+` in the marks column of the hovered line, and call `f` with the lines it stands
     /// for when pressed: the selection when the line is in it, else that line.
     pub fn on_comment(mut self, f: impl Fn(&mut S, LineRange, &mut Tx) + 'static) -> Self {
         self.on_comment = Some(Rc::new(f));
+        self
+    }
+
+    /// Show a `?` beside the hover's `+`, and call `f` with the lines it stands for, as
+    /// [`DiffView::on_comment`] does.
+    pub fn on_ask(mut self, f: impl Fn(&mut S, LineRange, &mut Tx) + 'static) -> Self {
+        self.on_ask = Some(Rc::new(f));
         self
     }
 
@@ -220,7 +287,7 @@ impl<S: 'static> DiffView<S> {
 
     pub fn build(self, s: &S, k: &Kit) -> El {
         let st = (self.get)(s);
-        let look = Look::new(k, self.fills, self.selection);
+        let look = Look::new(k, self.fills, self.selection, self.colors, st.metrics());
         let wrap = st.wraps();
         let key = self.key.clone();
         if !wrap && let Some(r) = rune::memo::layout(&format!("{key}/scroll")) {
@@ -244,7 +311,7 @@ impl<S: 'static> DiffView<S> {
         let sel_mut = v.d.get_mut.clone();
         let on_span = v.d.on_span_select.clone();
         let list = list
-            .virtual_rows(count, LINE_H, keys(v.d.get.clone()), move |s: &S, i| build.row(s, i))
+            .virtual_rows(count, v.look.m.line, keys(v.d.get.clone()), move |s: &S, i| build.row(s, i))
             .virtual_rows_version(st.keys_rev)
             .on_visible_rows(move |s: &mut S, rows| {
                 let (reported, sticky_changed) = vis_mut(s).set_visible_rows(rows);
@@ -294,7 +361,7 @@ impl<S: 'static> DiffView<S> {
         let mut root = col().key(key.clone()).w_full().grow(1.0).min_h(0.0).fill(v.look.bg).child(scroll);
         if st.min_split_columns() > 0 {
             let digits = (0..st.files().len()).map(|f| st.digits(f)).max().unwrap_or(3);
-            let (adv, gutter) = (v.look.adv, BAR + v.look.number_w(digits) + CODE_PAD.0 + CODE_PAD.1);
+            let (adv, gutter) = (v.look.adv, MARKS + v.look.number_w(digits) + SIGN.1 + CODE_PAD.0 + CODE_PAD.1);
             let fit = v.d.get_mut.clone();
             root = root.on_layout_tx(move |s: &mut S, r, tx| {
                 let cols = (((r[2] - 1.0) / 2.0 - gutter) / adv).max(0.0) as u32;
@@ -340,11 +407,15 @@ fn srgb_mix(a: Color, b: Color, t: f32) -> Color {
     }
 }
 
-/// Colours and type, from the kit's palette so themes restyle them.
+/// Colours and type, from the kit's palette (or a theme's [`DiffColors`]) so themes restyle them.
 struct Look {
+    m: Metrics,
     font: TextStyle,
+    number: TextStyle,
     label: TextStyle,
+    strong: TextStyle,
     small: TextStyle,
+    small_sans: TextStyle,
     /// The advance of a mono column.
     adv: f32,
     bg: Color,
@@ -358,15 +429,17 @@ struct Look {
     del: Tints,
     gap_bg: Color,
     empty_bg: Color,
+    cursor_line: Color,
     selected: Color,
-    selected_gutter: Color,
     selection: Color,
     accent: Color,
     on_accent: Color,
+    comment: Color,
+    ask: Color,
     range_bar: Color,
     span_mark: Color,
-    triangle_down: &'static Icon,
-    triangle_right: &'static Icon,
+    find_hit: Color,
+    find_current: Color,
     syntax: SyntaxTheme,
     /// Changes when anything above does, for memoised rows.
     version: u64,
@@ -375,76 +448,95 @@ struct Look {
 #[derive(Clone, Copy)]
 struct Tints {
     line: Color,
-    gutter: Color,
     word: Color,
-    number: Color,
-    bar: Color,
+    sign: Color,
     count: Color,
 }
 
 impl Look {
-    fn new(k: &Kit, fills: Option<ChangeFills>, selection: Option<Color>) -> Look {
+    fn new(k: &Kit, fills: Option<ChangeFills>, selection: Option<Color>, colors: Option<DiffColors>, m: Metrics) -> Look {
         let c = &k.c;
         let bg = c.bg_base;
         let dark = k.dark;
-        let tints = |hue: Color, fg: Color, fill: Option<Color>| {
-            let (line, gutter, word) = match fill {
-                Some(line) => (line, srgb_mix(line, hue, 0.12), srgb_mix(line, hue, 0.25)),
+        let tints = |hue: Color, fg: Color, fill: Option<Color>, word: Option<Color>| {
+            let (line, derived) = match fill {
+                Some(line) => (line, srgb_mix(line, hue, 0.25)),
                 None => (
                     tint(bg, hue, if dark { 0.13 } else { 0.1 }),
-                    tint(bg, hue, if dark { 0.2 } else { 0.17 }),
                     tint(bg, hue, if dark { 0.32 } else { 0.27 }),
                 ),
             };
             Tints {
                 line,
-                gutter,
-                word,
-                number: tint(c.text_muted, hue, 0.7),
-                bar: hue,
+                word: word.unwrap_or(derived),
+                sign: fg,
                 count: fg,
             }
         };
         let font = TextStyle {
             size: 13.0,
-            line_height: LINE_H,
+            line_height: m.line,
             ..k.ty.mono
         };
         let info = c.info.icon;
         let warn = c.warning.icon;
+        let (add_fill, del_fill) = match (colors, fills) {
+            (Some(d), _) => (Some(d.add_line), Some(d.del_line)),
+            (None, Some(f)) => (Some(f.add), Some(f.del)),
+            (None, None) => (None, None),
+        };
         let mut look = Look {
+            m,
             font,
+            number: TextStyle {
+                size: 12.0,
+                line_height: m.line,
+                ..k.ty.mono
+            },
             label: TextStyle {
                 size: 13.0,
                 line_height: 20.0,
-                ..k.ty.ui_medium
+                ..k.ty.ui
+            },
+            strong: TextStyle {
+                size: 13.0,
+                line_height: 20.0,
+                weight: 600.0,
+                ..k.ty.ui
             },
             small: TextStyle {
                 size: 12.0,
-                line_height: 16.0,
+                line_height: 18.0,
                 ..k.ty.mono
+            },
+            small_sans: TextStyle {
+                size: 12.0,
+                line_height: 18.0,
+                ..k.ty.ui
             },
             adv: 0.6 * font.size,
             bg,
             text: c.text_base,
             muted: c.text_muted,
             faint: c.text_faint,
-            border: c.border_weak,
-            header_bg: c.layer_01,
+            border: colors.map_or(c.border_weak, |d| d.hairline),
+            header_bg: colors.map_or(c.layer_01, |d| d.header),
             hover: k.alpha(c.text_base, if dark { 0.06 } else { 0.035 }),
-            add: tints(c.success.icon, c.success.fg, fills.map(|f| f.add)),
-            del: tints(c.danger.icon, c.danger.fg, fills.map(|f| f.del)),
-            gap_bg: tint(bg, info, if dark { 0.1 } else { 0.06 }),
-            empty_bg: tint(bg, c.text_base, if dark { 0.03 } else { 0.025 }),
+            add: tints(c.success.icon, c.success.fg, add_fill, colors.map(|d| d.add_word)),
+            del: tints(c.danger.icon, c.danger.fg, del_fill, colors.map(|d| d.del_word)),
+            gap_bg: colors.map_or_else(|| tint(bg, info, if dark { 0.1 } else { 0.06 }), |d| d.gap),
+            empty_bg: colors.map_or_else(|| tint(bg, c.text_base, if dark { 0.03 } else { 0.025 }), |d| d.filler),
+            cursor_line: colors.map_or_else(|| tint(bg, c.text_base, if dark { 0.05 } else { 0.04 }), |d| d.cursor_line),
             selected: tint(bg, info, if dark { 0.2 } else { 0.14 }),
-            selected_gutter: tint(bg, info, if dark { 0.32 } else { 0.26 }),
-            selection: selection.unwrap_or_else(|| k.selection()),
-            accent: info,
-            on_accent: c.white,
+            selection: colors.map(|d| d.selection).or(selection).unwrap_or_else(|| k.selection()),
+            accent: colors.map_or(info, |d| d.cursor),
+            on_accent: colors.map_or(c.white, |d| d.on_button),
+            comment: colors.map_or(info, |d| d.comment),
+            ask: colors.map_or(info, |d| d.ask),
             range_bar: warn,
             span_mark: k.alpha(warn, if dark { 0.3 } else { 0.25 }),
-            triangle_down: k.glyph.triangle_down,
-            triangle_right: k.glyph.triangle_right,
+            find_hit: colors.map_or_else(|| k.alpha(warn, 0.35), |d| d.find_hit),
+            find_current: colors.map_or_else(|| k.alpha(warn, 0.7), |d| d.find_current),
             syntax: SyntaxTheme::from_kit(k),
             version: 0,
         };
@@ -452,18 +544,22 @@ impl Look {
         for c in [
             look.bg,
             look.text,
-            look.add.bar,
-            look.del.bar,
             look.add.line,
             look.del.line,
+            look.add.word,
+            look.del.word,
             look.selection,
             look.accent,
             look.header_bg,
             look.range_bar,
+            look.empty_bg,
+            look.gap_bg,
         ] {
             [c.r, c.g, c.b, c.a].map(f32::to_bits).hash(&mut h);
         }
         look.font.size.to_bits().hash(&mut h);
+        m.line.to_bits().hash(&mut h);
+        m.header.to_bits().hash(&mut h);
         look.version = h.finish();
         look
     }
@@ -476,31 +572,26 @@ impl Look {
         }
     }
 
-    fn gutter_fill(&self, kind: LineKind, selected: bool, calm: bool) -> Color {
-        match (selected, self.tints(kind)) {
-            (true, _) => self.selected_gutter,
-            (false, Some(t)) if !calm => t.gutter,
-            _ => self.bg,
-        }
-    }
-
-    fn line_fill(&self, kind: LineKind, selected: bool, calm: bool) -> Color {
+    fn line_fill(&self, kind: LineKind, selected: bool, calm: bool, cursor: bool) -> Color {
         match (selected, self.tints(kind)) {
             (true, _) => self.selected,
             (false, Some(t)) if !calm => t.line,
+            _ if cursor => self.cursor_line,
             _ => self.bg,
         }
     }
 
     /// One line-number column for numbers of `digits` digits.
     fn number_w(&self, digits: u32) -> f32 {
-        (digits as f32 * self.adv + 16.0).ceil()
+        (digits as f32 * 0.6 * self.number.size + 16.0).ceil().max(NUMBER_MIN)
     }
 }
 
 /// One side's line in a row: what a cell draws.
 #[derive(Clone)]
 struct Cell<'a> {
+    /// Its index in the file's lines (none for unchanged lines between hunks).
+    idx: Option<u32>,
     kind: LineKind,
     old: Option<u32>,
     new: Option<u32>,
@@ -517,6 +608,16 @@ impl Cell<'_> {
             (_, _, Some(n)) => (Side::New, n),
             (_, Some(n), None) => (Side::Old, n),
             _ => (Side::New, 1),
+        }
+    }
+
+    /// The line a comment or mark on this cell anchors to: the new side unless removed.
+    fn anchor(&self) -> Option<LineRef> {
+        match (self.kind, self.old, self.new) {
+            (LineKind::Removed, Some(n), _) => Some(LineRef::new(Side::Old, n)),
+            (_, _, Some(n)) => Some(LineRef::new(Side::New, n)),
+            (_, Some(n), None) => Some(LineRef::new(Side::Old, n)),
+            _ => None,
         }
     }
 
@@ -550,14 +651,14 @@ impl<S: 'static> View<S> {
     fn content_width(&self, st: &DiffState) -> f32 {
         let l = &self.look;
         let digits = (0..st.files().len()).map(|f| st.digits(f)).max().unwrap_or(3);
-        BAR + 2.0 * l.number_w(digits) + st.columns() as f32 * l.adv + CODE_PAD.0 + CODE_PAD.1
+        MARKS + 2.0 * l.number_w(digits) + SIGN.0 + st.columns() as f32 * l.adv + CODE_PAD.0 + CODE_PAD.1
     }
 
     /// The most a full-width part of a row (a header, an annotation) spans: the viewport, not
     /// the unwrapped content.
-    fn view_w(&self, st: &DiffState, split_half: bool) -> Option<f32> {
+    fn view_w(&self, st: &DiffState) -> Option<f32> {
         let w = st.view_width();
-        (w > 0.0 && !st.wraps()).then_some(if split_half { (w / 2.0).floor() } else { w })
+        (w > 0.0 && !st.wraps()).then_some(w)
     }
 
     fn calm(&self, st: &DiffState, f: usize) -> bool {
@@ -602,7 +703,9 @@ impl<S: 'static> View<S> {
             Row::Gap { f, gap } => memo(&key, (self.look.version, st.rev, st.view_width().to_bits(), dim), || {
                 lit(self.gap(st, f as usize, gap as usize))
             }),
-            _ if !st.annotations().is_empty() && self.d.annotation.is_some() && self.annotated(st, r) => lit(self.line(s, st, i, &key)),
+            _ if !st.annotations().is_empty() && self.d.annotation.is_some() && self.annotated(st, r) => {
+                lit(self.line(s, st, i, &key, true))
+            }
             _ => {
                 let version = (
                     self.look.version,
@@ -614,7 +717,7 @@ impl<S: 'static> View<S> {
                     self.d.calm,
                     dim,
                 );
-                memo(&key, version, || lit(self.line(s, st, i, &key)))
+                memo(&key, version, || lit(self.line(s, st, i, &key, false)))
             }
         }
     }
@@ -637,6 +740,7 @@ impl<S: 'static> View<S> {
                 st.word_changes(f as usize, i)
             };
             Cell {
+                idx: Some(i),
                 kind: l.kind,
                 old: (l.old != 0).then_some(l.old),
                 new: (l.new != 0).then_some(l.new),
@@ -652,6 +756,7 @@ impl<S: 'static> View<S> {
                     .or_else(|| st.side_line(f as usize, Side::Old, old))
                     .unwrap_or("");
                 let c = Cell {
+                    idx: None,
                     kind: LineKind::Context,
                     old: Some(old),
                     new: Some(new),
@@ -667,7 +772,18 @@ impl<S: 'static> View<S> {
         }
     }
 
-    fn line(&self, s: &S, st: &DiffState, i: usize, key: &str) -> El {
+    /// A line's mark from the app, only for lines that carry annotations.
+    fn mark(&self, s: &S, f: usize, at: Option<LineRef>, annotated: bool) -> Option<El> {
+        let build = self.d.gutter_mark.as_ref().filter(|_| annotated)?;
+        let st = (self.d.get)(s);
+        let here: Vec<&Annotation> = st.annotations_at(f, at?).collect();
+        if here.is_empty() {
+            return None;
+        }
+        build(s, &here)
+    }
+
+    fn line(&self, s: &S, st: &DiffState, i: usize, key: &str, annotated: bool) -> El {
         let r = st.rows[i];
         let f = r.file();
         let (a, b) = self.cells(st, r);
@@ -675,8 +791,14 @@ impl<S: 'static> View<S> {
         let marks = self.marks(st, i, r);
         let draw = st.draw(f);
         let line = match draw {
-            Draw::Unified => self.unified(st, i, f, a, marks, key, None),
-            Draw::One(side) => self.unified(st, i, f, a, marks, key, Some(side)),
+            Draw::Unified => {
+                let mark = self.mark(s, f, a.anchor(), annotated);
+                self.unified(st, i, f, a, marks, key, None, mark)
+            }
+            Draw::One(side) => {
+                let mark = self.mark(s, f, a.anchor(), annotated);
+                self.unified(st, i, f, a, marks, key, Some(side), mark)
+            }
             Draw::Split => {
                 let (old, new) = match (b, a.kind) {
                     (Some(b), _) => (Some(a), Some(b)),
@@ -684,71 +806,128 @@ impl<S: 'static> View<S> {
                     (None, LineKind::Added) => (None, Some(a)),
                     (None, LineKind::Context) => (Some(a.clone()), Some(a)),
                 };
-                self.split(st, i, f, old, new, marks, key)
+                let old_mark = old
+                    .as_ref()
+                    .and_then(|c| c.old)
+                    .and_then(|n| self.mark(s, f, Some(LineRef::new(Side::Old, n)), annotated));
+                let new_mark = new
+                    .as_ref()
+                    .and_then(|c| c.new)
+                    .and_then(|n| self.mark(s, f, Some(LineRef::new(Side::New, n)), annotated));
+                self.split(st, i, f, old, new, marks, key, [old_mark, new_mark])
             }
         };
         let Some(build) = self.d.annotation.as_ref() else { return line };
-        let notes = |side: Side| -> Vec<El> {
-            st.row_line(r, side).map_or(Vec::new(), |n| {
-                st.annotations_at(f, LineRef::new(side, n)).map(|a| note(build(s, a), a)).collect()
-            })
-        };
-        let has = |side: Side| {
-            st.row_line(r, side)
-                .is_some_and(|n| st.annotations_at(f, LineRef::new(side, n)).next().is_some())
-        };
-        if !has(Side::Old) && !has(Side::New) {
+        if !annotated {
             return line;
         }
-        let mut out = col().w_full().child(line.key("line"));
-        match draw {
-            Draw::Unified | Draw::One(_) => {
-                let mut c = col().key("notes").w_full();
-                if let Some(w) = self.view_w(st, false) {
-                    c = c.w(w).sticky_left(0.0);
-                }
-                let mut seen = std::collections::HashSet::new();
-                let all = st
-                    .row_line(r, Side::Old)
-                    .into_iter()
-                    .flat_map(|n| st.annotations_at(f, LineRef::new(Side::Old, n)))
-                    .chain(
-                        st.row_line(r, Side::New)
-                            .into_iter()
-                            .flat_map(|n| st.annotations_at(f, LineRef::new(Side::New, n))),
-                    )
-                    .filter(|a| seen.insert(a.id.clone()));
-                out = out.child(c.children(all.map(|a| note(build(s, a), a))));
-            }
-            Draw::Split => {
-                let half = |key: &'static str, els: Vec<El>| {
-                    let mut c = col().key(key).w_frac(0.5).min_w(0.0);
-                    if let Some(w) = self.view_w(st, true) {
-                        c = c.max_w(w);
-                    }
-                    c.children(els)
-                };
-                out = out.child(
-                    row()
-                        .key("notes")
-                        .w_full()
-                        .items_start()
-                        .child(half("old", notes(Side::Old)))
-                        .child(half("new", notes(Side::New))),
-                );
-            }
+        // Annotations run the reader's full width under the line, in unified and split alike.
+        let mut c = col().key("notes").w_full();
+        if let Some(w) = self.view_w(st) {
+            c = c.w(w).sticky_left(0.0);
         }
-        out
+        let mut seen = std::collections::HashSet::new();
+        let all = st
+            .row_line(r, Side::Old)
+            .into_iter()
+            .flat_map(|n| st.annotations_at(f, LineRef::new(Side::Old, n)))
+            .chain(
+                st.row_line(r, Side::New)
+                    .into_iter()
+                    .flat_map(|n| st.annotations_at(f, LineRef::new(Side::New, n))),
+            )
+            .filter(|a| seen.insert(a.id.clone()));
+        col()
+            .w_full()
+            .child(line.key("line"))
+            .child(c.children(all.map(|a| note(build(s, a), a))))
+    }
+
+    /// The marks column: the app's mark, else the hover's `+` and `?`.
+    fn marks_cell(&self, f: usize, at: Option<LineRef>, mark: Option<El>) -> El {
+        let l = &self.look;
+        let mut cell = row().key("mk").w(MARKS).h(l.m.line).center().a11y_hidden();
+        if let Some(m) = mark {
+            return cell.child(m);
+        }
+        if let Some(at) = at
+            && (self.d.on_comment.is_some() || self.d.on_ask.is_some())
+        {
+            let mut add = row()
+                .key("hover-add")
+                .absolute(2.0, ((l.m.line - 16.0) / 2.0).floor())
+                .gap(2.0)
+                .group_opacity(0.0, 1.0);
+            if let Some(cb) = self.d.on_comment.clone() {
+                add = add.child(self.hover_button(f, at, "plus", "+", "Comment on this line (c)", l.comment, cb));
+            }
+            if let Some(cb) = self.d.on_ask.clone() {
+                add = add.child(self.hover_button(f, at, "ask", "?", "Ask about this line (?)", l.ask, cb));
+            }
+            cell = cell.child(add);
+        }
+        cell
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn hover_button(&self, f: usize, at: LineRef, key: &str, glyph: &str, label: &str, fill: Color, cb: LinesFn<S>) -> El {
+        let l = &self.look;
+        let get = self.d.get_mut.clone();
+        row()
+            .key(key.to_owned())
+            .size(18.0, 16.0)
+            .center()
+            .radius(4.0)
+            .fill(fill)
+            .cursor(Cursor::Pointer)
+            .role("button")
+            .label(label.to_owned())
+            .help(label.to_owned())
+            .child(
+                text(glyph.to_owned())
+                    .font(TextStyle {
+                        size: 11.0,
+                        line_height: 16.0,
+                        weight: 700.0,
+                        ..l.label
+                    })
+                    .color(l.on_accent),
+            )
+            .on_press_tx(move |s: &mut S, tx| {
+                let st = get(s);
+                let lines = match st.selection() {
+                    Some(sel) if sel.file == f && st.contains(&sel, at) => sel,
+                    _ => LineRange::line(f, at),
+                };
+                cb(s, lines, tx);
+            })
+    }
+
+    /// The `+` or `−` before the code.
+    fn sign(&self, kind: LineKind, w: f32) -> El {
+        let l = &self.look;
+        let (glyph, color) = match (kind, self.look.tints(kind)) {
+            (LineKind::Added, Some(t)) => ("+", t.sign),
+            (LineKind::Removed, Some(t)) => ("−", t.sign),
+            _ => (" ", l.faint),
+        };
+        row()
+            .key("sg")
+            .w(w)
+            .h(l.m.line)
+            .justify_center()
+            .a11y_hidden()
+            .child(text(glyph).font(l.font).color(color))
     }
 
     /// A line in one column: both numbers, or with `one` that side's only (a one-sided file in
     /// split mode, across the whole width).
     #[allow(clippy::too_many_arguments)]
-    fn unified(&self, st: &DiffState, i: usize, f: usize, c: Cell<'_>, marks: Marks, key: &str, one: Option<Side>) -> El {
+    fn unified(&self, st: &DiffState, i: usize, f: usize, c: Cell<'_>, marks: Marks, key: &str, one: Option<Side>, mark: Option<El>) -> El {
         let l = &self.look;
         let selected = st.row_selected(i, None);
         let calm = self.calm(st, f);
-        let fill = l.line_fill(c.kind, selected, calm);
+        let fill = l.line_fill(c.kind, selected, calm, marks.cursor);
         let digits = st.digits(f);
         let copy = match c.kind {
             LineKind::Context => true,
@@ -756,46 +935,38 @@ impl<S: 'static> View<S> {
             LineKind::Removed => st.copy_side() == Side::Old,
         };
         let hover_side = if c.kind == LineKind::Removed { Side::Old } else { Side::New };
-        // The marker, numbers and "+" hold to the viewport's left edge while the code scrolls
-        // sideways under them, on the gutter's own opaque fill.
+        // The marks, numbers and sign hold to the viewport's left edge while the code scrolls
+        // sideways under them, on the line's own opaque fill.
         let mut gutter = row()
             .key("gutter")
             .self_stretch()
-            .items_stretch()
-            .fill(l.gutter_fill(c.kind, selected, calm))
-            .child(self.bar(c.kind, marks.cursor));
+            .items_start()
+            .fill(fill)
+            .child(self.marks_cell(f, c.anchor(), mark));
         let numbers = match one {
             Some(side) => {
                 let n = if side == Side::Old { c.old } else { c.new };
-                gutter = gutter.child(self.number(st, i, f, n, side, c.kind, selected, digits, calm).key("n"));
+                gutter = gutter.child(self.number(st, i, f, n, side, selected, marks.cursor, digits).key("n"));
                 1.0
             }
             None => {
                 gutter = gutter
-                    .child(self.number(st, i, f, c.old, Side::Old, c.kind, selected, digits, calm).key("no"))
-                    .child(self.number(st, i, f, c.new, Side::New, c.kind, selected, digits, calm).key("nn"));
+                    .child(self.number(st, i, f, c.old, Side::Old, selected, marks.cursor, digits).key("no"))
+                    .child(self.number(st, i, f, c.new, Side::New, selected, marks.cursor, digits).key("nn"));
                 2.0
             }
         };
+        gutter = gutter.child(self.sign(if calm { LineKind::Context } else { c.kind }, SIGN.0));
         if marks.range[0] || marks.range[1] {
-            gutter = gutter.child(self.range_bar().absolute(BAR + numbers * l.number_w(digits) - RANGE_BAR, 0.0));
-        }
-        if self.d.on_comment.is_some() {
-            let at = c
-                .new
-                .map(|n| LineRef::new(Side::New, n))
-                .or(c.old.map(|n| LineRef::new(Side::Old, n)));
-            if let Some(at) = at {
-                gutter = gutter.child(self.plus(f, at).absolute(BAR + numbers * l.number_w(digits) - 10.0, 2.0));
-            }
+            gutter = gutter.child(self.range_bar().absolute(MARKS + numbers * l.number_w(digits) - RANGE_BAR, 0.0));
         }
         if !st.wraps() {
             gutter = gutter.sticky_left(0.0);
         }
         let label = c.label();
-        row()
+        let mut r = row()
             .w_full()
-            .min_h(LINE_H)
+            .min_h(l.m.line)
             .items_start()
             .fill(fill)
             .hover(l.hover)
@@ -803,7 +974,11 @@ impl<S: 'static> View<S> {
             .role("listitem")
             .label(label)
             .child(gutter)
-            .child(self.code(st, f, &c, copy, hover_side, key).key("code"))
+            .child(self.code(st, f, &c, copy, hover_side, key).key("code"));
+        if marks.cursor {
+            r = r.child(self.cursor_bar());
+        }
+        r
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -816,19 +991,21 @@ impl<S: 'static> View<S> {
         new: Option<Cell<'a>>,
         marks: Marks,
         key: &str,
+        side_marks: [Option<El>; 2],
     ) -> El {
         let digits = st.digits(f);
         let calm = self.calm(st, f);
-        let half = |side: Side, c: Option<Cell<'a>>| -> El {
+        let [old_mark, new_mark] = side_marks;
+        let half = |side: Side, c: Option<Cell<'a>>, mark: Option<El>| -> El {
             let l = &self.look;
             let hk = if side == Side::Old { "old" } else { "new" };
-            let mut h = row().key(hk).w_frac(0.5).min_w(0.0).min_h(LINE_H).items_start().self_stretch();
+            let mut h = row().key(hk).w_frac(0.5).min_w(0.0).min_h(l.m.line).items_start().self_stretch();
             let Some(c) = c else {
                 return h.fill(l.empty_bg);
             };
             let kind = c.kind;
             let selected = st.row_selected(i, Some(side));
-            let fill = l.line_fill(kind, selected, calm);
+            let fill = l.line_fill(kind, selected, calm, marks.cursor);
             let n = if side == Side::Old { c.old } else { c.new };
             let mut cell = c;
             if kind == LineKind::Context {
@@ -836,42 +1013,42 @@ impl<S: 'static> View<S> {
             }
             let copy = st.copy_side() == side;
             let label = cell.label();
+            let at = n.map(|n| LineRef::new(side, n));
             h = h
                 .fill(fill)
                 .hover(l.hover)
                 .hover_group()
                 .role("listitem")
                 .label(label)
-                .child(self.bar(kind, marks.cursor && side == Side::Old))
-                .child(self.number(st, i, f, n, side, kind, selected, digits, calm).key("n"))
+                .child(self.marks_cell(f, at, mark))
+                .child(self.number(st, i, f, n, side, selected, marks.cursor, digits).key("n"))
+                .child(self.sign(if calm { LineKind::Context } else { kind }, SIGN.1))
                 .child(self.code(st, f, &cell, copy, side, key).key("code"));
             if marks.range[side as usize] {
-                h = h.child(self.range_bar().absolute(BAR + l.number_w(digits) - RANGE_BAR, 0.0));
+                h = h.child(self.range_bar().absolute(MARKS + l.number_w(digits) - RANGE_BAR, 0.0));
             }
-            if let (Some(n), true) = (n, self.d.on_comment.is_some()) {
-                h = h.child(self.plus(f, LineRef::new(side, n)).absolute(BAR + l.number_w(digits) - 10.0, 2.0));
+            if marks.cursor && (side == Side::New || kind == LineKind::Removed) {
+                h = h.child(self.cursor_bar());
             }
             h
         };
         let divider = col().key("divider").w(1.0).self_stretch().fill(self.look.border);
         row()
             .w_full()
-            .min_h(LINE_H)
+            .min_h(self.look.m.line)
             .items_stretch()
-            .child(half(Side::Old, old))
+            .child(half(Side::Old, old, old_mark))
             .child(divider)
-            .child(half(Side::New, new))
+            .child(half(Side::New, new, new_mark))
     }
 
-    fn bar(&self, kind: LineKind, cursor: bool) -> El {
-        let b = col().key("bar").w(BAR).self_stretch().a11y_hidden();
-        if cursor {
-            return b.fill(self.look.accent);
-        }
-        match self.look.tints(kind) {
-            Some(t) => b.fill(t.bar),
-            None => b,
-        }
+    /// The cursor's bar at the line's left edge.
+    fn cursor_bar(&self) -> El {
+        el().key("cursor")
+            .pin(Some(0.0), Some(0.0), None, Some(0.0))
+            .w(CURSOR_BAR)
+            .fill(self.look.accent)
+            .a11y_hidden()
     }
 
     /// The bar beside the numbers of lines a range or span comment covers.
@@ -882,38 +1059,20 @@ impl<S: 'static> View<S> {
     /// A line-number cell: pressing it selects the line, shift-pressing extends the selection to
     /// it, and dragging down the numbers selects the lines passed.
     #[allow(clippy::too_many_arguments)]
-    fn number(
-        &self,
-        st: &DiffState,
-        i: usize,
-        f: usize,
-        n: Option<u32>,
-        side: Side,
-        kind: LineKind,
-        selected: bool,
-        digits: u32,
-        calm: bool,
-    ) -> El {
+    fn number(&self, st: &DiffState, i: usize, f: usize, n: Option<u32>, side: Side, selected: bool, cursor: bool, digits: u32) -> El {
         let l = &self.look;
         let unified = st.draw(f) != Draw::Split;
         let mut c = row()
             .w(l.number_w(digits))
-            .min_h(LINE_H)
+            .min_h(l.m.line)
             .self_stretch()
-            .px(8.0)
+            .pr(8.0)
             .justify_end()
             .items_start()
             .a11y_hidden();
-        if !unified {
-            c = c.fill(l.gutter_fill(kind, selected, calm));
-        }
         if let Some(n) = n {
-            let color = if selected {
-                l.text
-            } else {
-                l.tints(kind).map_or(l.faint, |t| t.number)
-            };
-            c = c.child(text(n.to_string()).font(l.font).color(color));
+            let color = if selected || cursor { l.text } else { l.faint };
+            c = c.child(text(n.to_string()).font(l.number).color(color));
         }
         let at = n.map(|n| LineRef::new(side, n)).or_else(|| {
             let other = if side == Side::Old { Side::New } else { Side::Old };
@@ -956,33 +1115,6 @@ impl<S: 'static> View<S> {
         })
     }
 
-    /// The "+" that appears by the numbers of the hovered line.
-    fn plus(&self, f: usize, at: LineRef) -> El {
-        let l = &self.look;
-        let (get, cb) = (self.d.get_mut.clone(), self.d.on_comment.clone());
-        row()
-            .key("plus")
-            .size(16.0, 16.0)
-            .center()
-            .radius(4.0)
-            .fill(l.accent)
-            .group_opacity(0.0, 1.0)
-            .cursor(Cursor::Pointer)
-            .role("button")
-            .label("Comment on this line")
-            .child(icon(&PLUS, 12.0).color(l.on_accent))
-            .on_press_tx(move |s: &mut S, tx| {
-                let st = get(s);
-                let lines = match st.selection() {
-                    Some(sel) if sel.file == f && st.contains(&sel, at) => sel,
-                    _ => LineRange::line(f, at),
-                };
-                if let Some(cb) = &cb {
-                    cb(s, lines, tx);
-                }
-            })
-    }
-
     /// The code of a line: syntax colours under word changes, tabs padded to four columns, span
     /// comments' text tinted without moving a glyph.
     fn code(&self, st: &DiffState, f: usize, c: &Cell<'_>, copy: bool, side: Side, row_key: &str) -> El {
@@ -992,11 +1124,19 @@ impl<S: 'static> View<S> {
         let word = l.tints(c.kind).map(|t| t.word);
         let spans = layer(c.text.len(), &syntax, word.map_or(&[][..], |_| &c.changes[..]), word);
         let marks = st.span_marks(f, LineRef::new(src, n));
-        let (shown, spans, pads, marks) = tabbed(c.text, spans, marks, st.wraps());
+        let (found, current) = st.find_marks(c.text, c.idx.map(|i| (f, i)));
+        let n_spans = marks.len();
+        let all: Vec<Range<usize>> = marks.into_iter().chain(found).collect();
+        let (shown, spans, pads, all) = tabbed(c.text, spans, all, st.wraps());
         let mut t = rich(shown, spans).font(l.font).color(l.text).key("text");
         t = if st.wraps() { t.w_full() } else { t.single_line() };
-        if !marks.is_empty() {
-            t = t.text_highlights(marks.into_iter().map(|r| TextHighlight::new(r, l.span_mark)));
+        if !all.is_empty() {
+            let find = if current { l.find_current } else { l.find_hit };
+            t = t.text_highlights(
+                all.into_iter()
+                    .enumerate()
+                    .map(|(i, r)| TextHighlight::new(r, if i < n_spans { l.span_mark } else { find })),
+            );
         }
         if copy {
             t = t.selectable(true).selection_color(l.selection);
@@ -1030,7 +1170,11 @@ impl<S: 'static> View<S> {
 
     fn gutter_w(&self, st: &DiffState, f: usize) -> f32 {
         let n = self.look.number_w(st.digits(f));
-        BAR + if st.draw(f) == Draw::Unified { 2.0 * n } else { n }
+        if st.draw(f) == Draw::Unified {
+            MARKS + 2.0 * n + SIGN.0
+        } else {
+            MARKS + n + SIGN.1
+        }
     }
 
     /// The spotlight's outline, over the list and riding its scroll, with its step and caption:
@@ -1053,7 +1197,7 @@ impl<S: 'static> View<S> {
             .radius(4.0)
             .border(SPOT_W, l.accent)
             .live_offset(&st.spot_shift)
-            .items_end()
+            .items_start()
             .a11y_hidden();
         let caption = match (spot.step, spot.caption.as_deref()) {
             (Some((i, n)), Some(c)) => Some(format!("{i}/{n} · {c}")),
@@ -1068,10 +1212,10 @@ impl<S: 'static> View<S> {
                     .px(6.0)
                     .h(18.0)
                     .items_center()
-                    .radius(4.0)
+                    .corners([4.0, 4.0, 0.0, 0.0])
                     .fill(l.accent)
-                    .offset(0.0, -18.0)
-                    .child(text(c).font(l.small).color(l.on_accent).single_line()),
+                    .offset(14.0, -18.0)
+                    .child(text(c).font(l.small_sans).color(l.on_accent).single_line()),
             );
         }
         Some(
@@ -1085,8 +1229,25 @@ impl<S: 'static> View<S> {
         )
     }
 
-    /// The unchanged lines between two hunks, folded: buttons to show more, and the next hunk's
-    /// header.
+    /// One of the hunk separator's show-more buttons.
+    fn expand_button(&self, key: String, glyph: &'static Icon, label: String, press: impl Fn(&mut S, &mut Tx) + 'static) -> El {
+        let l = &self.look;
+        row()
+            .key(key)
+            .size(24.0, 22.0)
+            .center()
+            .radius(4.0)
+            .hover(l.hover)
+            .cursor(Cursor::Pointer)
+            .role("button")
+            .label(label.clone())
+            .help(label)
+            .child(icon(glyph, 16.0).color(l.muted))
+            .on_press_tx(press)
+    }
+
+    /// The unchanged lines between two hunks, folded: a band with buttons to show more, the
+    /// count and the next hunk's header.
     fn gap(&self, st: &DiffState, f: usize, gap: usize) -> El {
         let l = &self.look;
         let file = &st.files()[f];
@@ -1095,23 +1256,11 @@ impl<S: 'static> View<S> {
         let expandable = st.expandable(f);
         let mut buttons = Vec::new();
         if expandable {
+            let step = hidden.min(EXPAND_STEP);
             let mut add = |how: Expand, glyph: &'static Icon, label: String| {
                 let get = self.d.get_mut.clone();
-                buttons.push(
-                    row()
-                        .key(format!("{how:?}"))
-                        .size(24.0, 24.0)
-                        .center()
-                        .radius(6.0)
-                        .hover(l.hover)
-                        .cursor(Cursor::Pointer)
-                        .role("button")
-                        .label(label)
-                        .child(icon(glyph, 16.0).color(l.muted))
-                        .on_press_tx(move |s: &mut S, _| get(s).expand(f, gap, how)),
-                );
+                buttons.push(self.expand_button(format!("{how:?}"), glyph, label, move |s: &mut S, _| get(s).expand(f, gap, how)));
             };
-            let step = hidden.min(EXPAND_STEP);
             if hidden <= EXPAND_STEP {
                 add(Expand::All, &EXPAND_ALL, format!("Show {hidden} hidden lines"));
             } else {
@@ -1130,32 +1279,19 @@ impl<S: 'static> View<S> {
         {
             let get = self.d.get_mut.clone();
             let how = if gap == 0 { Expand::Up } else { Expand::Down };
-            buttons.push(
-                row()
-                    .key("load")
-                    .size(24.0, 24.0)
-                    .center()
-                    .radius(6.0)
-                    .hover(l.hover)
-                    .cursor(Cursor::Pointer)
-                    .role("button")
-                    .label("Load the whole file to show unchanged lines")
-                    .child(icon(if gap == 0 { &EXPAND_UP } else { &EXPAND_DOWN }, 16.0).color(l.muted))
-                    .on_press_tx(move |s: &mut S, _| {
-                        get(s).request_expand(f, gap, how);
-                        need(s, f);
-                    }),
-            );
+            buttons.push(self.expand_button(
+                "load".into(),
+                if gap == 0 { &EXPAND_UP } else { &EXPAND_DOWN },
+                "Load the whole file to show unchanged lines".into(),
+                move |s: &mut S, _| {
+                    get(s).request_expand(f, gap, how);
+                    need(s, f);
+                },
+            ));
         }
-        let buttons = row()
-            .key("expand")
-            .w(self.gutter_w(st, f))
-            .h(GAP_H)
-            .center()
-            .gap(2.0)
-            .children(buttons);
-        let mut inner = row().key("inner").h(GAP_H).items_center().gap(12.0).child(buttons);
-        if let Some(w) = self.view_w(st, false) {
+        let buttons = row().key("expand").h(l.m.gap).items_center().gap(2.0).children(buttons);
+        let mut inner = row().key("inner").h(l.m.gap).pl(4.0).items_center().gap(10.0).child(buttons);
+        if let Some(w) = self.view_w(st) {
             inner = inner.max_w(w).sticky_left(0.0);
         }
         if hidden > 0 {
@@ -1164,17 +1300,17 @@ impl<S: 'static> View<S> {
             } else {
                 format!("{hidden} unchanged lines")
             })
-            .font(l.small)
+            .font(l.small_sans)
             .color(l.muted)
             .key("count");
             let count = if expandable && hidden > EXPAND_STEP {
                 let get = self.d.get_mut.clone();
                 row()
                     .key("all")
-                    .px(6.0)
-                    .h(24.0)
+                    .px(4.0)
+                    .h(22.0)
                     .items_center()
-                    .radius(6.0)
+                    .radius(4.0)
                     .hover(l.hover)
                     .cursor(Cursor::Pointer)
                     .role("button")
@@ -1182,7 +1318,7 @@ impl<S: 'static> View<S> {
                     .on_press_tx(move |s: &mut S, _| get(s).expand(f, gap, Expand::All))
                     .child(count)
             } else {
-                row().key("all").px(6.0).child(count)
+                row().key("all").child(count)
             };
             inner = inner.child(count);
         }
@@ -1194,14 +1330,28 @@ impl<S: 'static> View<S> {
             Some(h) => format!("{hidden} unchanged lines, then {h}"),
             None => format!("{hidden} unchanged lines"),
         };
+        let line = |key: &'static str, top: bool| {
+            el().key(key)
+                .pin(
+                    Some(0.0),
+                    if top { Some(0.0) } else { None },
+                    Some(0.0),
+                    if top { None } else { Some(0.0) },
+                )
+                .h(1.0)
+                .fill(l.border)
+                .a11y_hidden()
+        };
         row()
             .w_full()
-            .h(GAP_H)
+            .h(l.m.gap)
             .items_center()
             .fill(l.gap_bg)
             .role("group")
             .label(label)
             .child(inner)
+            .child(line("line-top", true))
+            .child(line("line-bottom", false))
     }
 
     /// A file with no lines to show.
@@ -1221,14 +1371,14 @@ impl<S: 'static> View<S> {
         };
         let mut inner = row()
             .key("inner")
-            .h(NOTE_H)
+            .h(l.m.note)
             .items_center()
             .pl(self.gutter_w(st, f) + CODE_PAD.0)
-            .child(text(msg).font(l.small).color(l.muted));
-        if let Some(w) = self.view_w(st, false) {
+            .child(text(msg).font(l.small_sans).color(l.muted));
+        if let Some(w) = self.view_w(st) {
             inner = inner.max_w(w).sticky_left(0.0);
         }
-        row().w_full().h(NOTE_H).fill(l.bg).role("note").label(msg).child(inner)
+        row().w_full().h(l.m.note).fill(l.bg).role("note").label(msg).child(inner)
     }
 
     /// A file's row: its header, and the file-level widget under it when the app gives one.
@@ -1238,12 +1388,14 @@ impl<S: 'static> View<S> {
             return header;
         };
         let mut c = col().key("file-note").w_full();
-        if let Some(w) = self.view_w(st, false) {
+        if let Some(w) = self.view_w(st) {
             c = c.w(w).sticky_left(0.0);
         }
         col().w_full().child(header.key("header")).child(c.child(slot))
     }
 
+    /// `▾ server · src/Api/VouchersController.cs  +14 −6  [the app's actions]`, sticky while its
+    /// file scrolls.
     fn file_header(&self, s: &S, st: &DiffState, f: usize, sticky: bool) -> El {
         let l = &self.look;
         let file = &st.files()[f];
@@ -1251,15 +1403,16 @@ impl<S: 'static> View<S> {
         let get = self.d.get_mut.clone();
         let toggle = row()
             .key("toggle")
-            .size(24.0, 24.0)
+            .size(22.0, 22.0)
             .center()
-            .radius(6.0)
+            .radius(4.0)
             .hover(l.hover)
             .cursor(Cursor::Pointer)
             .role("button")
             .label(if collapsed { "Expand file" } else { "Collapse file" })
+            .help(if collapsed { "Expand file" } else { "Collapse file" })
             .expanded(!collapsed)
-            .child(icon(if collapsed { l.triangle_right } else { l.triangle_down }, 16.0).color(l.muted))
+            .child(icon(if collapsed { &CHEVRON_RIGHT } else { &CHEVRON_DOWN }, 16.0).color(l.faint))
             .on_press_tx(move |s: &mut S, tx| {
                 let st = get(s);
                 st.set_collapsed(f, !st.collapsed(f));
@@ -1267,15 +1420,52 @@ impl<S: 'static> View<S> {
                     st.scroll_to_file(f, tx);
                 }
             });
-        let path = |p: String, c: Color| text(p).font(l.label).color(c).truncate_head().min_w(0.0).shrink();
-        let shown = st.display_path(f);
+        let repo = st.repo_id(f);
+        // `server · src/Api/` muted, then the name strong.
+        let split_path = |p: &str| -> (String, String) {
+            let (dir, name) = p.rsplit_once('/').map_or(("", p), |(d, n)| (d, n));
+            let mut lead = String::new();
+            if let Some(r) = repo {
+                lead.push_str(r);
+                lead.push_str(" · ");
+            }
+            if !dir.is_empty() {
+                lead.push_str(dir);
+                lead.push('/');
+            }
+            (lead, name.to_owned())
+        };
+        let path = |p: &str, key: &'static str, strong: bool| {
+            let (lead, name) = split_path(p);
+            row()
+                .key(key)
+                .items_center()
+                .min_w(0.0)
+                .shrink()
+                .child(
+                    text(lead)
+                        .font(l.label)
+                        .color(l.muted)
+                        .truncate_head()
+                        .min_w(0.0)
+                        .shrink()
+                        .key("dir"),
+                )
+                .child(
+                    text(name)
+                        .font(if strong { l.strong } else { l.label })
+                        .color(if strong { l.text } else { l.muted })
+                        .truncate()
+                        .key("name"),
+                )
+        };
         let mut name = row().key("path").items_center().gap(6.0).min_w(0.0).shrink();
         name = match (file.status, file.old_path.as_deref()) {
             (FileStatus::Renamed | FileStatus::Copied, Some(a)) => name
-                .child(path(a.to_owned(), l.muted).key("old"))
+                .child(path(a, "old", false))
                 .child(text("→").font(l.label).color(l.faint).key("arrow"))
-                .child(path(shown.clone(), l.text).key("new")),
-            _ => name.child(path(shown.clone(), l.text).key("new")),
+                .child(path(&file.path, "new", true)),
+            _ => name.child(path(&file.path, "new", true)),
         };
         let status = match file.status {
             FileStatus::Added => Some(("Added", l.add.count)),
@@ -1284,42 +1474,44 @@ impl<S: 'static> View<S> {
             FileStatus::Copied => Some(("Copied", l.muted)),
             FileStatus::Modified => None,
         };
+        let (adds, dels) = (file.additions, file.deletions);
         let mut inner = row()
             .key("inner")
             .w_full()
             .grow(1.0)
-            .px(10.0)
+            .pl(6.0)
+            .pr(8.0)
             .gap(8.0)
             .items_center()
             .child(toggle)
-            .child(name);
+            .child(name)
+            .child(
+                row()
+                    .key("stat")
+                    .gap(4.0)
+                    .child(text(format!("+{adds}")).font(l.small).color(l.add.count).key("adds"))
+                    .child(text(format!("−{dels}")).font(l.small).color(l.del.count).key("dels")),
+            );
         if let Some((word, color)) = status {
-            inner = inner.child(text(word).font(l.small).color(color).key("status"));
+            inner = inner.child(text(word).font(l.small_sans).color(color).key("status"));
         }
         if file.generated {
-            inner = inner.child(text("Generated").font(l.small).color(l.faint).key("generated"));
+            inner = inner.child(text("Generated").font(l.small_sans).color(l.faint).key("generated"));
         }
-        inner = inner.child(row().key("space").grow(1.0).a11y_hidden());
-        let (adds, dels) = (file.additions, file.deletions);
-        if adds > 0 {
-            inner = inner.child(text(format!("+{adds}")).font(l.small).color(l.add.count).key("adds"));
-        }
-        if dels > 0 {
-            inner = inner.child(text(format!("−{dels}")).font(l.small).color(l.del.count).key("dels"));
-        }
-        if let Some(h) = &self.d.header {
-            inner = inner.child(h(s, f).key("actions"));
-        }
-        let mut label = shown;
+        inner = match &self.d.header {
+            Some(h) => inner.child(h(s, f).key("actions").grow(1.0).min_w(0.0)),
+            None => inner.child(row().key("space").grow(1.0).a11y_hidden()),
+        };
+        let mut label = st.display_path(f);
         if let (FileStatus::Renamed, Some(a)) = (file.status, file.old_path.as_deref()) {
             label.push_str(&format!(", renamed from {a}"));
         }
         label.push_str(&format!(", {adds} added, {dels} removed"));
         let line = |key: &'static str, c: Color| col().key(key).w_full().h(1.0).fill(c).a11y_hidden();
-        let mut h = col().w_full().h(HEADER_H).fill(l.header_bg).role("heading").label(label);
+        let mut h = col().w_full().h(l.m.header).fill(l.header_bg).role("heading").label(label);
         // In the list, as wide as the view and held to its left edge while the code scrolls
         // sideways, so the counts and actions stay in sight.
-        if let (false, Some(w)) = (sticky, self.view_w(st, false)) {
+        if let (false, Some(w)) = (sticky, self.view_w(st)) {
             h = h.w(w).sticky_left(0.0);
         }
         h = h.child(line("top", if f > 0 && !sticky { l.border } else { l.header_bg }));

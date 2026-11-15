@@ -1,10 +1,14 @@
-//! The filter bar above the diff while a file filter is active, and the list's chips popover.
+//! The filter strip above the diff while a file filter is active, the funnel by the list's
+//! filter field, its popover of toggles, and the list's "N files hidden" foot.
 
 use rain_tree::{TreeFilter, TreeView};
-use rune::{El, Icon, Tx, col, row, text};
-use rune_kit::{Button, ButtonVariant, ControlSize, IconButton, IconButtonVariant, Kit, Placement, popover};
+use rune::{Cursor, El, Tx, col, el, row, text};
+use rune_kit::{Kit, Placement, popover};
 
+use super::icons;
+use super::ui::{Ghost, kbd_bare, outline, sr};
 use crate::app::App;
+use crate::theme::{TYPE, radius};
 
 /// Repos, tags and toggles the filter has on.
 fn chips_on(s: &App) -> usize {
@@ -12,50 +16,50 @@ fn chips_on(s: &App) -> usize {
     f.repos.len() + f.tags.len() + usize::from(f.unviewed_only) + usize::from(f.commented_only)
 }
 
-static FUNNEL: Icon = Icon {
-    name: "rain-funnel",
-    view: 16.0,
-    body: r#"<path d="M2.5 3.5h11L9.25 8.25v4.25l-2.5 1.25V8.25z" stroke="currentColor" stroke-width="1.25" stroke-linejoin="round" fill="none"/>"#,
-};
-
-/// The funnel at the filter box's end, with how many chips are on; it opens the chips popover.
+/// The funnel at the filter field's end, with a badge for how many toggles are on; it opens
+/// the toggles popover.
 pub(super) fn chips_button(s: &App, k: &Kit) -> El {
+    let (_, r) = sr(k);
     let on = chips_on(s);
-    let button = IconButton::new(&FUNNEL)
-        .variant(if on > 0 || s.menus.chips {
-            IconButtonVariant::Neutral
-        } else {
-            IconButtonVariant::GhostMuted
-        })
-        .control_size(ControlSize::Regular)
+    let mut b = Ghost::new("filter-chips-button")
+        .icon(&icons::FUNNEL)
+        .help("Filter by repo, tag, unviewed or comments")
+        .on(s.menus.chips)
+        .build(k)
         .label(if on > 0 {
-            format!("Filter chips, {on} on")
+            format!("Filter toggles, {on} on")
         } else {
-            "Filter chips".into()
+            "Filter toggles".into()
         })
-        .help("Filter by repo, group, unviewed or comments")
+        .expanded(s.menus.chips)
         .on_press(|s: &mut App| {
             let open = !s.menus.chips;
             s.menus.close();
             s.menus.chips = open;
-        })
-        .build(k)
-        .key("filter-chips-button")
-        .expanded(s.menus.chips);
-    if on == 0 {
-        return button;
+        });
+    if on > 0 {
+        b = b.child(
+            row()
+                .key("filter-chips-count")
+                .absolute(15.0, -1.0)
+                .min_w(14.0)
+                .h(14.0)
+                .px(3.0)
+                .center()
+                .radius(7.0)
+                .fill(r.accent)
+                .a11y_hidden()
+                .child(
+                    text(on.to_string())
+                        .font(rune::tok::TextStyle::new(9.0, 700.0).lh(14.0))
+                        .color(r.on_accent),
+                ),
+        );
     }
-    button.child(
-        text(on.to_string())
-            .key("filter-chips-count")
-            .font(k.ty.text_xsmall_medium)
-            .color(k.c.text_accent)
-            .absolute(18.0, -4.0)
-            .a11y_hidden(),
-    )
+    b
 }
 
-/// The repo, tag, unviewed and comments chips under `⚲`; they stay open while toggled.
+/// The repo, tag, unviewed and comments toggles under the funnel; they stay open while toggled.
 pub(super) fn chips_popover(s: &App, k: &Kit, layer: &mut Vec<El>) {
     if !s.menus.chips || !(s.sidebar.is_open() || s.layout.is_open(crate::app::Overlay::Files)) {
         return;
@@ -65,15 +69,42 @@ pub(super) fn chips_popover(s: &App, k: &Kit, layer: &mut Vec<El>) {
         .chips_only()
         .on_filter_change(|s: &mut App, f: &TreeFilter, tx: &mut Tx| s.on_filter_change(f, tx))
         .build(s, k);
-    let surface = popover::raised(k, col().key("filter-chips").w(300.0).py(4.0).child(chips), k.radius.xl);
-    layer.push(popover::anchored(k, surface, "filter-chips-button", Placement::BottomEnd, 6.0));
+    let (surf, _) = sr(k);
+    let clear = k
+        .interactive(
+            row()
+                .key("filter-clear-all")
+                .role("button")
+                .label("Clear all")
+                .w_full()
+                .h(28.0)
+                .px(12.0)
+                .items_center()
+                .radius(radius::SMALL)
+                .cursor(Cursor::Pointer)
+                .child(text("Clear all").font(TYPE.small).color(k.c.text_muted).grow(1.0).a11y_hidden())
+                .child(kbd_bare("Ctrl+Shift+L", k)),
+        )
+        .on_press(|s: &mut App| {
+            s.clear_filter();
+        });
+    let card = col()
+        .key("filter-chips")
+        .w(250.0)
+        .py(4.0)
+        .child(chips)
+        .child(el().w_full().h(1.0).my(2.0).fill(surf.hairline).a11y_hidden())
+        .child(row().w_full().px(4.0).child(clear));
+    let surface = popover::raised(k, card, radius::CARD);
+    layer.push(popover::anchored(k, surface, "filter-chips-button", Placement::BottomStart, 6.0));
 }
 
-/// "12 of 302 files — server, Must review, 'vouchers'".
+/// "4 of 10 files — server, Must review" with Clear, on the card head band.
 pub(super) fn filter_bar(s: &App, k: &Kit) -> Option<El> {
     if !s.filter_active() {
         return None;
     }
+    let (surf, _) = sr(k);
     let n = s.filter.subset.as_ref().map_or(0, |v| v.files.len());
     let msg = format!("{n} of {} files — {}", s.keys.len(), filter_terms(s));
     Some(
@@ -82,15 +113,17 @@ pub(super) fn filter_bar(s: &App, k: &Kit) -> Option<El> {
             .role("status")
             .label(msg.clone())
             .w_full()
-            .px(12.0)
+            .min_h(34.0)
+            .pl(12.0)
+            .pr(10.0)
             .py(4.0)
             .gap(10.0)
             .items_center()
-            .fill(k.c.layer_01)
+            .fill(surf.card_head)
             .child(
                 text(msg)
                     .key("filter-bar-text")
-                    .font(k.ty.small)
+                    .font(TYPE.small)
                     .color(k.c.text_muted)
                     .truncate()
                     .grow(1.0)
@@ -98,19 +131,63 @@ pub(super) fn filter_bar(s: &App, k: &Kit) -> Option<El> {
                     .a11y_hidden(),
             )
             .child(
-                Button::new("Clear")
-                    .variant(ButtonVariant::Ghost)
-                    .help("Clear filter (Esc)")
+                outline("filter-clear", "Clear", Some("Ctrl+Shift+L"), 24.0, k)
+                    .help("Clear the filter  Ctrl+Shift+L · Esc")
                     .on_press(|s: &mut App| {
                         s.clear_filter();
-                    })
-                    .build(k)
-                    .key("filter-clear"),
+                    }),
+            )
+            .child(
+                el().pin(Some(0.0), None, Some(0.0), Some(0.0))
+                    .h(1.0)
+                    .fill(surf.hairline)
+                    .a11y_hidden(),
             ),
     )
 }
 
-/// The filter's terms in chip order: repos, tags, the toggles, then the quoted text.
+/// The list's foot while filtering: `12 files hidden · Clear filter`.
+pub(super) fn hidden_foot(s: &App, k: &Kit) -> Option<El> {
+    if !s.filter_active() {
+        return None;
+    }
+    let shown = s.filter.subset.as_ref().map_or(0, |v| v.files.len());
+    let hidden = s.keys.len().saturating_sub(shown);
+    if hidden == 0 {
+        return None;
+    }
+    Some(
+        row()
+            .key("list-hidden")
+            .w_full()
+            .px(14.0)
+            .py(8.0)
+            .gap(4.0)
+            .items_center()
+            .child(
+                text(if hidden == 1 {
+                    "1 file hidden ·".to_owned()
+                } else {
+                    format!("{hidden} files hidden ·")
+                })
+                .font(TYPE.small)
+                .color(k.c.text_faint),
+            )
+            .child(
+                row()
+                    .key("list-hidden-clear")
+                    .role("button")
+                    .label("Clear filter")
+                    .cursor(Cursor::Pointer)
+                    .child(text("Clear filter").font(TYPE.small).color(k.c.text_accent).a11y_hidden())
+                    .on_press(|s: &mut App| {
+                        s.clear_filter();
+                    }),
+            ),
+    )
+}
+
+/// The filter's terms in toggle order: repos, tags, the toggles, then the quoted text.
 fn filter_terms(s: &App) -> String {
     let f = &s.tree.filter;
     let mut terms: Vec<String> = s

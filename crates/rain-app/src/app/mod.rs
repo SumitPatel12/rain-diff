@@ -145,6 +145,10 @@ pub struct App {
     pub reply_to: Option<String>,
     pub reply_edit: TextEdit,
     pub expanded: BTreeSet<String>,
+    /// Threads and notes (`note:<id>`) folded into the gutter; kept across reloads, not saved.
+    pub folded: BTreeSet<String>,
+    /// The note open in the Intent window.
+    pub popped_note: Option<String>,
     pub focused_thread: Option<String>,
     pub palette: PaletteState,
     pub find: Find,
@@ -272,6 +276,8 @@ impl App {
             reply_to: None,
             reply_edit: TextEdit::default(),
             expanded: BTreeSet::new(),
+            folded: BTreeSet::new(),
+            popped_note: None,
             focused_thread: None,
             palette: PaletteState::default(),
             find: Find::default(),
@@ -682,11 +688,18 @@ impl App {
         self.layout_decision().0
     }
 
+    /// Puts the diff layout and the density's row heights on every diff.
     pub fn apply_split(&mut self) {
         let m = self.effective_mode();
+        let metrics = match self.settings.density {
+            Density::Compact => rain_diffview::Metrics::COMPACT,
+            Density::Comfortable => rain_diffview::Metrics::COMFORTABLE,
+        };
         self.diff.set_mode(m);
+        self.diff.set_metrics(metrics);
         for v in self.subsets_mut() {
             v.diff.set_mode(m);
+            v.diff.set_metrics(metrics);
         }
     }
 
@@ -735,6 +748,7 @@ impl App {
             Density::Comfortable => Density::Compact,
         };
         self.save_settings();
+        self.apply_split();
     }
 
     pub fn set_theme(&mut self, theme: Theme) {
@@ -745,6 +759,7 @@ impl App {
     pub fn set_density(&mut self, density: Density) {
         self.settings.density = density;
         self.save_settings();
+        self.apply_split();
     }
 
     /// Closes the topmost layer `Esc` reaches before the filter: the palette, the top overlay,

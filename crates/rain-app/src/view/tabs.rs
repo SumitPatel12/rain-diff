@@ -1,77 +1,167 @@
-//! The reader's tab strip, `Overview | Changes N`, merged into the reader.
+//! The reader island's toolbar: the `Overview | Changes N` switch, then Find, Tour, Map and the
+//! Conversation with its waiting count.
 
-use rune::{El, col, el, row, text};
+use rain_core::command::Command;
+use rune::{Cursor, El, Tx, el, row, text};
 
-use super::hairline;
-use crate::app::{App, ReaderTab};
-use crate::theme::Look;
+use super::icons;
+use super::ui::{Ghost, vsep};
+use crate::app::{App, Overlay, ReaderTab};
+use crate::theme::{Look, TYPE, radius, space};
 
-const STRIP_H: f32 = 40.0;
+type Tab = (ReaderTab, &'static str, &'static str, Option<usize>);
 
-type Tab = (ReaderTab, &'static str, String, Option<usize>);
-
-/// The strip on the panel surface; the active tab takes the reader's fill, with hairlines at its
-/// sides and none under it.
-pub(super) fn strip(s: &App, look: &Look) -> El {
+/// The segmented switch on the well; the active side lifts onto the card head.
+fn switch(s: &App, look: &Look) -> El {
+    let k = &look.kit;
     let on = s.reader_tab();
     let tabs: [Tab; 2] = [
-        (ReaderTab::Overview, "tab-overview", "Overview".to_owned(), None),
-        (
-            ReaderTab::Changes,
-            "tab-changes",
-            "Changes".to_owned(),
-            Some(s.active().files().len()),
-        ),
+        (ReaderTab::Overview, "tab-overview", "Overview", None),
+        (ReaderTab::Changes, "tab-changes", "Changes", Some(s.active().files().len())),
     ];
-    let line = look.s.hairline;
-    let mut r = row().key("tab-strip").role("tablist").w_full().h(STRIP_H).fill(look.s.panel);
-    for t in tabs {
-        let active = t.0 == on;
-        let tab = tab_el(look, t, active).h(STRIP_H - 1.0);
-        let cell = col().h_full().child(tab).child(hairline(if active { look.s.reader } else { line }));
-        r = if active {
-            r.child(el().w(1.0).h_full().fill(line).a11y_hidden())
-                .child(cell.fill(look.s.reader))
-                .child(el().w(1.0).h_full().fill(line).a11y_hidden())
-        } else {
-            r.child(cell)
+    let mut seg = row()
+        .key("tab-strip")
+        .role("tablist")
+        .label("Overview or Changes  b")
+        .padding(2.0)
+        .radius(7.0)
+        .fill(look.s.well)
+        .border(1.0, look.s.hairline);
+    // The Map takes the reader, so neither side lifts while it is open.
+    let map = s.layout.is_open(Overlay::Map);
+    for (tab, key, name, count) in tabs {
+        let active = tab == on && !map;
+        let said = match count {
+            Some(n) => format!("{name}, {n} files"),
+            None => name.to_owned(),
         };
+        let mut t = row()
+            .key(key)
+            .role("tab")
+            .label(said)
+            .help(format!("{name}  b"))
+            .checked(tab == on)
+            .h(24.0)
+            .px(10.0)
+            .gap(6.0)
+            .items_center()
+            .radius(radius::SMALL)
+            .cursor(Cursor::Pointer)
+            .on_press(move |s: &mut App| s.set_reader_tab(tab))
+            .child(
+                text(name)
+                    .font(TYPE.small)
+                    .color(if active { k.c.text_base } else { k.c.text_muted })
+                    .a11y_hidden(),
+            );
+        if let Some(n) = count {
+            t = t.child(
+                text(n.to_string())
+                    .font(TYPE.small.features("'tnum' 1"))
+                    .color(k.c.text_faint)
+                    .a11y_hidden(),
+            );
+        }
+        t = if active {
+            t.fill(look.s.card_head).border(1.0, look.s.card_border)
+        } else {
+            k.interactive(t)
+        };
+        seg = seg.child(t);
     }
-    r.child(col().grow(1.0).h_full().justify_end().child(hairline(line)))
+    seg
 }
 
-fn label(look: &Look, name: String, count: Option<usize>, on: bool) -> El {
+fn run(c: Command) -> impl Fn(&mut App, &mut Tx) + 'static {
+    move |s: &mut App, tx: &mut Tx| {
+        let _ = s.run(c, tx);
+    }
+}
+
+/// The toolbar across the top of the reader island, a hairline under it.
+pub(super) fn strip(s: &App, look: &Look) -> El {
     let k = &look.kit;
     let mut r = row()
-        .gap(6.0)
+        .key("reader-tool")
+        .w_full()
+        .h(space::READER_TOOL)
+        .pl(10.0)
+        .pr(8.0)
+        .gap(4.0)
         .items_center()
-        .a11y_hidden()
+        .child(switch(s, look))
+        .children(s.single_mode().then(|| {
+            k.interactive(
+                row()
+                    .key("tool-one-at-a-time")
+                    .role("button")
+                    .label("One at a time")
+                    .help("One file at a time · Shift+S back to the stream")
+                    .ml(8.0)
+                    .h(20.0)
+                    .px(6.0)
+                    .items_center()
+                    .radius(radius::CHIP)
+                    .border(1.0, look.s.card_border)
+                    .cursor(rune::Cursor::Pointer)
+                    .child(text("One at a time").font(TYPE.micro).color(look.r.accent).a11y_hidden()),
+            )
+            .on_press_tx(|s: &mut App, tx: &mut Tx| s.toggle_reader_mode(tx))
+        }))
+        .child(row().grow(1.0).a11y_hidden())
         .child(
-            text(name)
-                .font(k.ty.ui_medium)
-                .color(if on { k.c.text_base } else { k.c.text_muted }),
-        );
-    if let Some(n) = count {
-        r = r.child(text(n.to_string()).font(k.ty.small.features("'tnum' 1")).color(k.c.text_faint));
-    }
-    r
-}
-
-fn tab_el(look: &Look, (tab, key, name, count): Tab, on: bool) -> El {
-    let said = match count {
-        Some(n) => format!("{name}, {n} files"),
-        None => name.clone(),
-    };
-    look.kit
-        .interactive(
-            row()
-                .key(key)
-                .role("tab")
-                .label(said)
-                .checked(on)
-                .px(14.0)
-                .items_center()
-                .on_press(move |s: &mut App| s.set_reader_tab(tab)),
+            Ghost::new("tool-find")
+                .icon(&icons::SEARCH)
+                .help("Find in diff  /")
+                .on(s.find.open)
+                .build(k)
+                .on_press_tx(run(Command::Find)),
         )
-        .child(label(look, name, count, on))
+        .child(
+            Ghost::new("tool-tour")
+                .icon(&icons::TOUR)
+                .label("Tour")
+                .help("Tour  Shift+T")
+                .on(s.layout.is_open(Overlay::Tour))
+                .build(k)
+                .on_press_tx(run(Command::Tour)),
+        );
+    if s.has_map() {
+        r = r.child(
+            Ghost::new("tool-map")
+                .icon(&icons::MAP)
+                .label("Map")
+                .help("Map  m")
+                .on(s.layout.is_open(Overlay::Map))
+                .build(k)
+                .on_press_tx(run(Command::Map)),
+        );
+    }
+    let waiting = s.waiting_count();
+    let mut conv = Ghost::new("tool-conversation")
+        .icon(&icons::CHAT)
+        .label("Conversation")
+        .help("Conversation  Shift+C")
+        .on(s.layout.is_open(Overlay::Conversation));
+    if waiting > 0 {
+        conv = conv.child(
+            row()
+                .key("tool-conversation-badge")
+                .min_w(16.0)
+                .h(16.0)
+                .px(4.0)
+                .center()
+                .radius(8.0)
+                .fill(k.c.warning.bg)
+                .border(1.0, k.c.warning.border)
+                .child(text(waiting.to_string()).font(TYPE.micro).color(k.c.warning.fg)),
+        );
+    }
+    r.child(vsep(k)).child(conv.build(k).on_press_tx(run(Command::Conversation))).child(
+        el().key("reader-tool-line")
+            .pin(Some(0.0), None, Some(0.0), Some(0.0))
+            .h(1.0)
+            .fill(look.s.hairline)
+            .a11y_hidden(),
+    )
 }

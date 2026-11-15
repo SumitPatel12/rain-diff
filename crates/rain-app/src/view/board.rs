@@ -1,25 +1,35 @@
-//! The list: the filter box and chips, then one virtualised column of collapsible sections in
-//! triage order, the folded groups with their Accept pinned under it, the accept snackbar, and
-//! Waiting on you pinned last. Also file-at-a-time's
+//! The list island: the filter field and its toggles, then one virtualised column of
+//! collapsible sections in triage order, and at the bottom a tray on the well holding the folded
+//! groups with their Accept, the accept snackbar and Waiting on you. Also file-at-a-time's
 //! cards (landing and group) for the reader.
 
 use std::borrow::Cow;
 use std::rc::Rc;
 
 use rain_comments::{anchor_label, ops};
-use rain_core::Thread;
+use rain_core::{Thread, ThreadKind};
 use rain_tree::{TreeFilter, TreeView};
 use rain_triage::Group;
-use rune::{Color, El, GrowthSpec, ScrollSpec, Tx, col, el, row, text};
-use rune_kit::{Button, ButtonVariant, ControlSize, Kit, SidebarHeader};
+use rune::{Color, Cursor, El, GrowthSpec, ScrollSpec, Tx, col, el, row, text};
+use rune_kit::{Button, ButtonVariant, ControlSize, Kit};
 
-use super::{lines_label, list_row, messages, muted};
+use super::icons;
+use super::ui::{Ghost, kbd, outline, sr};
+use super::{messages, muted};
 use crate::app::board::{CHANGE_GROUPS, CHANGES, Listing, Pick, Row, WAITING, change_title, section_group, section_of, section_title};
 use crate::app::{App, ME};
-use crate::theme::Look;
+use crate::settings::Density;
+use crate::theme::{Look, Roles, Surfaces, TYPE, radius};
 
-/// One list row: section headers and files alike.
-pub(crate) const ROW_HEIGHT: f32 = 28.0;
+/// A file row's height: 26 compact, 32 comfortable.
+pub(crate) fn row_height(s: &App) -> f32 {
+    if s.settings.density == Density::Compact { 26.0 } else { 32.0 }
+}
+
+/// A group row's height in the tray: 30 compact, 36 comfortable.
+fn group_height(s: &App) -> f32 {
+    if s.settings.density == Density::Compact { 30.0 } else { 36.0 }
+}
 
 /// `CHANGES` as `Changes`, `WAITING ON YOU` as `Waiting on you`.
 fn sentence(title: &str) -> String {
@@ -31,16 +41,8 @@ fn sentence(title: &str) -> String {
 /// What a list row needs of the look, shared by the virtual rows.
 struct RowLook {
     kit: Kit,
-    selected: Color,
-}
-
-pub(crate) fn group_color(g: Group, k: &Kit) -> Color {
-    match g {
-        Group::Must => k.c.danger.icon,
-        Group::Review => k.c.warning.icon,
-        Group::Skim => k.c.info.icon,
-        _ => k.c.text_faint,
-    }
+    s: Surfaces,
+    r: Roles,
 }
 
 fn slug(g: Group) -> String {
@@ -49,37 +51,21 @@ fn slug(g: Group) -> String {
 
 pub(super) fn board(s: &App, look: &Look) -> El {
     let k = &look.kit;
-    let mut c = col()
+    let c = col()
         .key("board")
         .w_full()
         .h_full()
         .min_h(0.0)
         .child(filter_header(s, k))
-        .child(body(s, look));
-    let listing = s.listing();
-    if !listing.footer.is_empty() {
-        c = c.child(
-            col()
-                .key("list-groups")
-                .role("group")
-                .label("Folded groups")
-                .w_full()
-                .child(super::hairline(look.s.hairline))
-                .children(listing.footer.iter().map(|&sec| header(s, sec, &listing, k))),
-        );
+        .child(body(s, look))
+        .children(super::filter::hidden_foot(s, k));
+    match tray(s, look) {
+        Some(t) => c.child(t),
+        None => c,
     }
-    if let Some(msg) = s.accept_snack() {
-        c = c.child(row().w_full().px(6.0).py(4.0).child(messages::snackbar(
-            "accept-snack",
-            msg.to_owned(),
-            Some(("Undo (u)", |s: &mut App, tx: &mut Tx| s.undo_accept(tx))),
-            k,
-        )));
-    }
-    waiting(s, c, k)
 }
 
-/// The filter box, with the chips (repo, tag, unviewed, comments) behind its `⚲` button; they
+/// The filter field, with the toggles (repo, tag, unviewed, comments) behind its funnel; they
 /// narrow every section and the reader.
 fn filter_header(s: &App, k: &Kit) -> El {
     let input = TreeView::new(|s: &App| &s.tree, |s: &mut App| &mut s.tree)
@@ -95,8 +81,9 @@ fn filter_header(s: &App, k: &Kit) -> El {
         .key("list-filter-row")
         .w_full()
         .items_end()
-        .pr(8.0)
+        .pr(10.0)
         .pb(6.0)
+        .gap(0.0)
         .child(input)
         .child(super::filter::chips_button(s, k))
 }
@@ -124,16 +111,18 @@ fn body(s: &App, look: &Look) -> El {
     }
     let kit = Rc::new(RowLook {
         kit: k.clone(),
-        selected: look.s.selected_row,
+        s: look.s,
+        r: look.r,
     });
     let n = listing.rows.len();
     let rows = col()
         .key("list-files")
         .w_full()
+        .pb(6.0)
         .growth(GrowthSpec::default())
         .virtual_rows(
             n,
-            ROW_HEIGHT,
+            row_height(s),
             |s: &App, i| Cow::Owned(row_key(s, i)),
             move |s: &App, i| build_row(s, i, &kit),
         )
@@ -165,83 +154,111 @@ fn build_row(s: &App, i: usize, look: &RowLook) -> El {
     let k = &look.kit;
     match listing.rows.get(i).cloned() {
         Some(Row::Header(sec)) => header(s, sec, &listing, k),
-        Some(Row::Sub(g)) => sub_header(g, &listing, key, k),
+        Some(Row::Sub(g)) => sub_header(s, g, &listing, key, k),
         Some(Row::File(g)) => file_row(s, g, key, look),
         Some(Row::Accepted(a)) => accepted_row(s, a, key, k),
-        None => row().key(key).h(ROW_HEIGHT),
+        None => row().key(key).h(row_height(s)),
     }
 }
 
-/// `Must review  17` over the change group's files: a label, not a fold.
-fn sub_header(g: Group, l: &Listing, key: String, k: &Kit) -> El {
+/// `Must review  1 of 4 viewed` over the change group's files: a label, not a fold.
+fn sub_header(s: &App, g: Group, l: &Listing, key: String, k: &Kit) -> El {
     let n = CHANGE_GROUPS.iter().position(|&x| x == g).map_or(0, |i| l.changes[i]);
+    let files: Vec<usize> = (0..s.keys.len()).filter(|&f| s.group_of(f) == g).collect();
+    let viewed = files.iter().filter(|&&f| s.is_viewed(f)).count();
     let name = change_title(g);
     let color = if g == Group::Must { k.c.danger.fg } else { k.c.text_muted };
+    let count = if g == Group::Skim {
+        n.to_string()
+    } else {
+        format!("{viewed} of {} viewed", files.len())
+    };
     row()
         .key(key)
         .role("heading")
-        .label(format!("{name}, {n} files"))
+        .label(format!("{name}, {n} files, {count}"))
         .w_full()
-        .h(ROW_HEIGHT)
-        .pl(12.0)
+        .h(28.0)
+        .pl(16.0)
         .pr(12.0)
-        .pt(6.0)
+        .pt(4.0)
         .gap(6.0)
         .items_center()
-        .child(text(name).font(k.ty.small_medium).color(color).a11y_hidden())
+        .child(text(name).font(TYPE.small).color(color).a11y_hidden())
         .child(
-            text(n.to_string())
-                .font(k.ty.small.features("'tnum' 1"))
+            text(count)
+                .font(TYPE.small.features("'tnum' 1"))
                 .color(k.c.text_faint)
                 .a11y_hidden(),
         )
 }
 
-/// `Name  count ▾  [action]`; a press on it folds the section. A group's Accept always shows;
-/// Changes' grouped/folders switch shows on hover.
+/// A section's head: `▾ Name count` (a press folds it), and its action: a group's Accept, or
+/// Real changes' grouped/folders switch.
 fn header(s: &App, sec: u8, l: &Listing, k: &Kit) -> El {
-    let mut h = SidebarHeader::new(sentence(section_title(sec)))
-        .count(l.shown[sec as usize])
-        .collapsed(s.section_folded(sec))
-        .on_toggle(move |s: &mut App, _: &mut Tx| s.toggle_list_section(sec));
+    let folded = s.section_folded(sec);
+    let title = sentence(section_title(sec));
+    let mut h = row()
+        .key(format!("list-section-{sec}"))
+        .role("button")
+        .label(format!("{title}, {} files", l.shown[sec as usize]))
+        .expanded(!folded)
+        .w_full()
+        .h(28.0)
+        .pl(8.0)
+        .pr(10.0)
+        .gap(6.0)
+        .items_center()
+        .hover_group()
+        .cursor(Cursor::Pointer)
+        .on_press_tx(move |s: &mut App, _: &mut Tx| s.toggle_list_section(sec))
+        .child(icons::draw(
+            if folded { &icons::CHEV_R } else { &icons::CHEV_D },
+            16.0,
+            k.c.text_faint,
+        ))
+        .child(text(title).font(TYPE.label).color(k.c.text_base).a11y_hidden())
+        .child(
+            text(l.shown[sec as usize].to_string())
+                .font(TYPE.small.features("'tnum' 1"))
+                .color(k.c.text_faint)
+                .a11y_hidden(),
+        )
+        .child(el().grow(1.0).a11y_hidden());
     if let Some(g) = section_group(sec)
         && l.acceptable[sec as usize] > 0
     {
-        let n = l.acceptable[sec as usize];
-        h = h.action(
-            Button::new(format!("Accept {n}"))
-                .variant(ButtonVariant::Outline)
-                .control_size(ControlSize::Mini)
-                .help(format!(
-                    "Mark {n} {} files viewed without reading (Shift+V)",
-                    g.label().to_lowercase()
-                ))
-                .on_press_tx(move |s: &mut App, tx: &mut Tx| s.accept(g, tx))
-                .build(k)
-                .key(format!("accept-{}", slug(g))),
-        );
+        h = h.child(accept_button(g, l.acceptable[sec as usize], k));
     }
     if sec == CHANGES {
-        h = h.action(
-            Button::new(if s.board.folders { "folders ▾" } else { "grouped ▾" })
-                .variant(ButtonVariant::GhostMuted)
-                .control_size(ControlSize::Mini)
-                .help("Changes by group or by folder")
-                .on_press(|s: &mut App| s.toggle_changes_mode())
+        h = h.child(
+            Ghost::new("changes-mode")
+                .icon(&icons::TREE)
+                .help(if s.board.folders {
+                    "Changes by folder · press for by group"
+                } else {
+                    "Changes by group · press for by folder"
+                })
+                .height(22.0)
+                .on(s.board.folders)
                 .build(k)
-                .key("changes-mode")
-                .group_opacity(0.0, 1.0),
+                .on_press(|s: &mut App| s.toggle_changes_mode()),
         );
     }
-    row()
-        .key(format!("list-section-{sec}"))
-        .w_full()
-        .h(ROW_HEIGHT)
-        .hover_group()
-        .child(h.build(k))
+    h
 }
 
-/// Must bar · name · dim folder · `+n −m` · thread count · ✓ once viewed.
+/// `Accept N`: marks the group viewed without reading (Shift+V; u undoes).
+fn accept_button(g: Group, n: usize, k: &Kit) -> El {
+    outline(format!("accept-{}", slug(g)), format!("Accept {n}"), None, 22.0, k)
+        .help(format!(
+            "Mark {n} {} files viewed without reading  Shift+V on a file in the group",
+            g.label().to_lowercase()
+        ))
+        .on_press_tx(move |s: &mut App, tx: &mut Tx| s.accept(g, tx))
+}
+
+/// Must marker · name · dim folder · `+n −m` · thread count · ✓ once viewed.
 fn file_row(s: &App, g: usize, key: String, look: &RowLook) -> El {
     let k = &look.kit;
     let path = &s.keys[g];
@@ -262,35 +279,38 @@ fn file_row(s: &App, g: usize, key: String, look: &RowLook) -> El {
         said.push(format!("{threads} comments"));
     }
     let current = s.reader_tab() == crate::app::ReaderTab::Changes && s.current() == Some(g);
-    let must = el()
-        .key("must")
-        .w(3.0)
-        .h(16.0)
-        .radius(1.5)
-        .fill(if group == Group::Must {
-            k.c.danger.icon
-        } else {
-            Color::TRANSPARENT
-        })
-        .a11y_hidden();
-    let mut r = list_row(key, k, s)
-        .h(ROW_HEIGHT)
-        .gap(6.0)
-        .pl(0.0)
+    let dir = dir.replacen('/', " · ", 1);
+    let h = row_height(s);
+    let name_color = if viewed || group == Group::Skim {
+        k.c.text_muted
+    } else {
+        k.c.text_base
+    };
+    let mut r = row()
+        .key("row")
+        .role("button")
         .label(said.join(", "))
+        .w_full()
+        .h(h)
+        .pl(10.0)
+        .pr(8.0)
+        .gap(6.0)
+        .items_center()
+        .radius(radius::BUTTON)
+        .cursor(Cursor::Pointer)
         .on_press_tx(move |s: &mut App, tx: &mut Tx| s.goto_file(g, tx))
-        .child(must)
         .child(
             text(name.to_owned())
-                .font(k.ty.ui)
-                .color(if viewed { k.c.text_faint } else { k.c.text_base })
+                .font(if current { TYPE.strong } else { TYPE.ui })
+                .color(name_color)
                 .truncate()
                 .shrink()
+                .min_w(60.0)
                 .a11y_hidden(),
         )
         .child(
-            text(dir.to_owned())
-                .font(k.ty.small)
+            text(dir)
+                .font(TYPE.small)
                 .color(k.c.text_faint)
                 .truncate()
                 .grow(1.0)
@@ -300,53 +320,70 @@ fn file_row(s: &App, g: usize, key: String, look: &RowLook) -> El {
         )
         .child(
             row()
-                .gap(3.0)
+                .gap(4.0)
                 .a11y_hidden()
-                .child(text(format!("+{}", f.additions)).font(k.ty.small.mono()).color(k.c.success.fg))
-                .child(text(format!("−{}", f.deletions)).font(k.ty.small.mono()).color(k.c.danger.fg)),
+                .child(text(format!("+{}", f.additions)).font(TYPE.micro_mono).color(k.c.success.fg))
+                .child(text(format!("−{}", f.deletions)).font(TYPE.micro_mono).color(k.c.danger.fg)),
         );
     if threads > 0 {
         r = r.child(
-            text(format!("● {threads}"))
+            row()
                 .key("threads")
-                .font(k.ty.small)
-                .color(k.c.text_accent)
+                .gap(2.0)
+                .items_center()
+                .a11y_hidden()
+                .child(icons::draw(&icons::CHAT, 12.0, k.c.text_muted))
+                .child(text(threads.to_string()).font(TYPE.micro).color(k.c.text_muted)),
+        );
+    }
+    if viewed {
+        r = r.child(icons::draw(&icons::CHECK, 16.0, look.r.accent).key("viewed"));
+    }
+    if group == Group::Must {
+        r = r.child(
+            el().key("must")
+                .absolute(3.0, 7.0)
+                .w(2.0)
+                .h(h - 14.0)
+                .radius(1.0)
+                .fill(look.r.must)
                 .a11y_hidden(),
         );
     }
-    r = r.child(
-        text(if viewed { "✓" } else { "" })
-            .key("viewed")
-            .font(k.ty.small)
-            .color(k.c.success.icon)
-            .w(12.0)
-            .a11y_hidden(),
-    );
-    if !current {
-        return r;
-    }
-    r.fill(look.selected).checked(true).radius(0.0).child(
-        el().key("current-bar")
-            .absolute(0.0, 0.0)
-            .w(2.0)
-            .h(ROW_HEIGHT)
-            .fill(k.c.border_focus)
-            .a11y_hidden(),
-    )
+    let r = if current {
+        r.fill(look.s.selected_row)
+            .checked(true)
+            .child(el().key("current-bar").size(0.0, 0.0).a11y_hidden())
+    } else {
+        k.interactive(r)
+    };
+    row().key(key).w_full().px(6.0).child(r)
 }
 
 fn accepted_row(s: &App, a: usize, key: String, k: &Kit) -> El {
     let Some(acc) = s.mirror.accepted.get(a) else {
-        return row().key(key).h(ROW_HEIGHT);
+        return row().key(key).h(row_height(s));
     };
     let label = format!("{} · {} accepted", acc.group.label(), acc.files.len());
     let reason = acc.reason.clone();
-    list_row(key, k, s)
-        .h(ROW_HEIGHT)
-        .label(reason.clone())
-        .on_press(move |s: &mut App| s.status = reason.clone())
-        .child(text("✓").font(k.ty.small).color(k.c.success.icon).w(22.0))
-        .child(text(label).font(k.ty.ui).color(k.c.text_muted).truncate().grow(1.0).shrink())
+    let (_, r) = sr(k);
+    k.interactive(
+        row()
+            .key(key)
+            .role("button")
+            .label(reason.clone())
+            .w_full()
+            .h(24.0)
+            .pl(28.0)
+            .pr(8.0)
+            .gap(6.0)
+            .items_center()
+            .radius(radius::BUTTON)
+            .on_press(move |s: &mut App| s.status = reason.clone()),
+    )
+    .child(icons::draw(&icons::CHECK, 14.0, r.accent))
+    .child(text(label).font(TYPE.small).color(k.c.text_muted).truncate().grow(1.0).shrink())
+    .child(kbd("u", k).help("Undo accept  u"))
 }
 
 /// Whether the list's filter shows thread `t`'s file (a thread on no file shows unfiltered).
@@ -357,7 +394,62 @@ fn filter_shows(s: &App, t: &Thread) -> bool {
     }
 }
 
-fn waiting(s: &App, mut c: El, k: &Kit) -> El {
+/// A row in the tray: `▸ Tests 2  [Accept 2]`.
+fn tray_group(s: &App, sec: u8, l: &Listing, k: &Kit) -> El {
+    let folded = s.section_folded(sec);
+    let title = sentence(section_title(sec));
+    let mut h = k
+        .interactive(
+            row()
+                .key(format!("list-section-{sec}"))
+                .role("button")
+                .label(format!("{title}, {} files", l.shown[sec as usize]))
+                .expanded(!folded)
+                .w_full()
+                .h(group_height(s))
+                .pl(8.0)
+                .pr(6.0)
+                .gap(6.0)
+                .items_center()
+                .radius(radius::BUTTON)
+                .cursor(Cursor::Pointer)
+                .on_press_tx(move |s: &mut App, _: &mut Tx| s.toggle_list_section(sec)),
+        )
+        .child(icons::draw(
+            if folded { &icons::CHEV_R } else { &icons::CHEV_D },
+            16.0,
+            k.c.text_muted,
+        ))
+        .child(text(title).font(TYPE.small).color(k.c.text_base).a11y_hidden())
+        .child(
+            text(l.shown[sec as usize].to_string())
+                .font(TYPE.small)
+                .color(k.c.text_faint)
+                .a11y_hidden(),
+        )
+        .child(el().grow(1.0).a11y_hidden());
+    if let Some(g) = section_group(sec)
+        && l.acceptable[sec as usize] > 0
+    {
+        h = h.child(accept_button(g, l.acceptable[sec as usize], k));
+    }
+    h
+}
+
+fn divider(s: &Surfaces) -> El {
+    row()
+        .w_full()
+        .px(8.0)
+        .py(4.0)
+        .a11y_hidden()
+        .child(el().w_full().h(1.0).fill(s.hairline))
+}
+
+/// The tray at the list's foot: the folded groups and their Accept, the accept snackbar, and
+/// Waiting on you; `None` when it would be empty.
+fn tray(s: &App, look: &Look) -> Option<El> {
+    let k = &look.kit;
+    let listing = s.listing();
     let mut waiting: Vec<&Thread> = s
         .mirror
         .threads
@@ -365,67 +457,131 @@ fn waiting(s: &App, mut c: El, k: &Kit) -> El {
         .filter(|t| ops::waiting_on_user(t, ME) && filter_shows(s, t))
         .collect();
     waiting.sort_by_key(|t| (s.file_of_thread(t).unwrap_or(usize::MAX), t.anchor.lines().0));
-    if waiting.is_empty() {
-        return c;
+    let snack = s.accept_snack();
+    if listing.footer.is_empty() && waiting.is_empty() && snack.is_none() {
+        return None;
     }
-    let header = SidebarHeader::new(sentence(section_title(WAITING)))
-        .count(waiting.len())
-        .collapsed(s.section_folded(WAITING))
-        .on_toggle(move |s: &mut App, _: &mut Tx| s.toggle_list_section(WAITING))
-        .build(k);
-    c = c.child(
-        row()
-            .key(format!("list-section-{WAITING}"))
-            .w_full()
-            .h(ROW_HEIGHT)
-            .fill(k.c.layer_01)
-            .child(header),
-    );
-    if !s.section_folded(WAITING) {
-        let rows: Vec<El> = if waiting.is_empty() {
-            vec![muted("Nothing waiting on you.", k).px(8.0).py(4.0)]
-        } else {
-            waiting.into_iter().map(|t| waiting_row(s, t, k)).collect()
-        };
+    let mut c = col()
+        .key("list-tray")
+        .w_full()
+        .py(4.0)
+        .radius(radius::CARD)
+        .fill(look.s.well)
+        .border(1.0, look.s.hairline);
+    if !listing.footer.is_empty() {
         c = c.child(
             col()
-                .key("list-waiting")
+                .key("list-groups")
+                .role("group")
+                .label("Folded groups")
                 .w_full()
-                .max_h(200.0)
-                .scroll(ScrollSpec { stick_bottom: false })
-                .child(col().w_full().px(6.0).pb(8.0).gap(1.0).children(rows)),
+                .children(listing.footer.iter().map(|&sec| tray_group(s, sec, &listing, k))),
         );
     }
-    c
+    if let Some(msg) = snack {
+        c = c.child(row().w_full().px(6.0).py(4.0).child(messages::snackbar(
+            "accept-snack",
+            msg.to_owned(),
+            Some(("Undo (u)", |s: &mut App, tx: &mut Tx| s.undo_accept(tx))),
+            k,
+        )));
+    }
+    if !waiting.is_empty() {
+        if !listing.footer.is_empty() || snack.is_some() {
+            c = c.child(divider(&look.s));
+        }
+        let folded = s.section_folded(WAITING);
+        c = c.child(
+            k.interactive(
+                row()
+                    .key(format!("list-section-{WAITING}"))
+                    .role("button")
+                    .label(format!("Waiting on you, {} threads", waiting.len()))
+                    .expanded(!folded)
+                    .w_full()
+                    .h(group_height(s))
+                    .pl(8.0)
+                    .pr(6.0)
+                    .gap(6.0)
+                    .items_center()
+                    .radius(radius::BUTTON)
+                    .cursor(Cursor::Pointer)
+                    .on_press_tx(move |s: &mut App, _: &mut Tx| s.toggle_list_section(WAITING)),
+            )
+            .child(icons::draw(
+                if folded { &icons::CHEV_R } else { &icons::CHEV_D },
+                16.0,
+                k.c.text_muted,
+            ))
+            .child(
+                text(sentence(section_title(WAITING)))
+                    .font(TYPE.small)
+                    .color(k.c.warning.fg)
+                    .a11y_hidden(),
+            )
+            .child(text(waiting.len().to_string()).font(TYPE.small).color(k.c.text_faint).a11y_hidden()),
+        );
+        if !folded {
+            let rows: Vec<El> = waiting.into_iter().map(|t| waiting_row(s, t, k)).collect();
+            c = c.child(
+                col()
+                    .key("list-waiting")
+                    .w_full()
+                    .max_h(200.0)
+                    .scroll(ScrollSpec { stick_bottom: false })
+                    .child(col().w_full().gap(1.0).children(rows)),
+            );
+        }
+    }
+    Some(row().w_full().padding(8.0).child(c))
 }
 
+/// `claude · issue  VouchersController.cs:23` over the last message.
 fn waiting_row(s: &App, t: &Thread, k: &Kit) -> El {
     let key = s.file_of_thread(t).map_or_else(|| t.file_path.clone(), |i| s.keys[i].clone());
     let last = t.messages.last();
-    let who = last.and_then(|m| m.author.clone()).unwrap_or_default();
+    let who = last
+        .and_then(|m| m.author.clone())
+        .filter(|a| !a.trim().is_empty())
+        .unwrap_or_else(|| "you".into());
     let body = last.map_or("", |m| m.body.as_str());
     let id = t.id.clone();
     let place = if t.file_path.starts_with('@') {
         crate::app::composer::artifact_title(&t.file_path, t.target.as_ref())
     } else {
-        format!("{} {}", key.rsplit('/').next().unwrap_or(&key), lines_label(&t.anchor))
+        format!("{}:{}", key.rsplit('/').next().unwrap_or(&key), t.anchor.lines().0)
     };
-    list_row(format!("thread-{}", t.id), k, s)
-        .label(format!("Waiting on you: {}", anchor_label(&key, &t.anchor)))
-        .on_press_tx(move |s: &mut App, tx: &mut Tx| s.goto_thread(&id, tx))
-        .child(text("●").font(k.ty.small).color(k.c.warning.icon).w(14.0))
-        .child(
-            col()
-                .grow(1.0)
-                .shrink()
-                .child(
-                    text(format!("{who}: {}", rain_comments::label::first_sentence(body, 80)))
-                        .font(k.ty.small)
-                        .color(k.c.text_base)
-                        .truncate(),
-                )
-                .child(text(place).font(k.ty.small).color(k.c.text_muted).truncate()),
-        )
+    let kind = match t.kind() {
+        ThreadKind::Comment => "comment",
+        k => k.label(),
+    };
+    k.interactive(
+        col()
+            .key(format!("thread-{}", t.id))
+            .role("button")
+            .label(format!("Waiting on you: {}", anchor_label(&key, &t.anchor)))
+            .w_full()
+            .pl(28.0)
+            .pr(8.0)
+            .pt(4.0)
+            .pb(6.0)
+            .radius(radius::BUTTON)
+            .cursor(Cursor::Pointer)
+            .on_press_tx(move |s: &mut App, tx: &mut Tx| s.goto_thread(&id, tx)),
+    )
+    .child(
+        row()
+            .gap(6.0)
+            .items_center()
+            .child(text(format!("{who} · {kind}")).font(TYPE.small).color(k.c.text_muted))
+            .child(text(place).font(TYPE.micro_mono).color(k.c.text_accent).truncate().shrink()),
+    )
+    .child(
+        text(rain_comments::label::first_sentence(body, 80))
+            .font(TYPE.small)
+            .color(k.c.text_base)
+            .truncate(),
+    )
 }
 
 // ----- file-at-a-time cards -----
@@ -443,20 +599,21 @@ pub(super) fn single_card(s: &App, k: &Kit) -> Option<El> {
 }
 
 fn card(key: &str, k: &Kit) -> El {
+    let (surf, _) = sr(k);
     col()
         .key(key.to_owned())
         .role("region")
         .w_full()
-        .max_w(860.0)
-        .gap(10.0)
-        .padding(18.0)
-        .radius(k.radius.lg)
-        .fill(k.c.layer_01)
-        .border(1.0, k.c.border_base)
+        .max_w(640.0)
+        .gap(12.0)
+        .padding(22.0)
+        .radius(radius::ISLAND)
+        .fill(surf.panel)
+        .border(1.0, surf.card_border)
 }
 
 fn heading(t: String, k: &Kit) -> El {
-    text(t).font(k.ty.ui_medium).color(k.c.text_base)
+    text(t).font(rune::tok::TextStyle::new(18.0, 600.0).lh(24.0)).color(k.c.text_base)
 }
 
 fn wrap_card(e: El) -> El {
@@ -465,47 +622,135 @@ fn wrap_card(e: El) -> El {
         .w_full()
         .grow(1.0)
         .min_h(0.0)
-        .padding(24.0)
+        .pt(28.0)
+        .px(24.0)
         .items_center()
         .child(e)
 }
 
-/// Counts, one Accept per group left, and where to start.
+/// A count tile on the well: the number large, what it counts under it.
+fn tile(key: &str, n: usize, what: &str, ink: Color, k: &Kit) -> El {
+    let (surf, _) = sr(k);
+    col()
+        .key(key.to_owned())
+        .label(format!("{n} {what}"))
+        .w(0.0)
+        .grow(1.0)
+        .h(64.0)
+        .px(12.0)
+        .justify_center()
+        .radius(radius::CARD)
+        .fill(surf.well)
+        .child(
+            text(n.to_string())
+                .font(rune::tok::TextStyle::new(20.0, 600.0).lh(26.0))
+                .color(ink)
+                .a11y_hidden(),
+        )
+        .child(text(what.to_owned()).font(TYPE.small).color(k.c.text_muted).a11y_hidden())
+}
+
+/// Counts, a row per group with its Accept, and where to start.
 fn landing(s: &App, k: &Kit) -> El {
+    let (surf, r) = sr(k);
     let order = s.list_order();
+    let count = |g: Group| order.iter().filter(|&&f| s.group_of(f) == g).count();
     let real = order.iter().filter(|&&g| s.group_of(g).is_change()).count();
     let grouped = order.len() - real;
-    let mut c = card("landing", k).child(heading("File at a time".into(), k)).child(
-        text(format!(
-            "{real} real changes · {grouped} files in groups · {} waiting on you",
-            s.waiting_count()
-        ))
-        .key("landing-counts")
-        .font(k.ty.ui)
-        .color(k.c.text_muted),
-    );
+    let groups = Group::ALL.into_iter().filter(|g| !g.is_change() && count(*g) > 0).count();
+    let mut c = card("landing", k)
+        .child(heading(format!("{} files in this review", order.len()), k))
+        .child(
+            text("Start with Must review. Groups can be accepted without reading them; you can undo with u.")
+                .key("landing-counts")
+                .label(format!(
+                    "{real} real changes · {grouped} files in groups · {} waiting on you",
+                    s.waiting_count()
+                ))
+                .font(TYPE.ui)
+                .color(k.c.text_muted)
+                .wrap(),
+        )
+        .child(
+            row()
+                .key("landing-tiles")
+                .w_full()
+                .gap(10.0)
+                .child(tile("tile-must", count(Group::Must), "Must review", r.must, k))
+                .child(tile("tile-review", count(Group::Review), "Review", k.c.text_base, k))
+                .child(tile("tile-skim", count(Group::Skim), "Skim", k.c.text_base, k))
+                .child(tile("tile-groups", grouped, &format!("in {groups} groups"), k.c.text_base, k)),
+        );
     let l = s.listing();
-    let mut accepts = row().key("landing-accepts").gap(8.0).flex_wrap();
+    let mut list = col().key("landing-accepts").w_full();
     for g in Group::ALL.into_iter().filter(|g| !g.is_change()) {
+        let total = count(g);
+        if total == 0 {
+            continue;
+        }
         let n = l.acceptable[section_of(g) as usize];
+        let mut line = row()
+            .key(format!("landing-group-{}", slug(g)))
+            .w_full()
+            .h(36.0)
+            .px(4.0)
+            .gap(8.0)
+            .items_center()
+            .child(if n > 0 {
+                icons::draw(&icons::CHEV_R, 16.0, k.c.text_muted)
+            } else {
+                icons::draw(&icons::CHECK, 16.0, r.accent)
+            })
+            .child(text(g.label().to_owned()).font(TYPE.ui).color(k.c.text_base))
+            .child(
+                text(if n > 0 {
+                    format!("{total} file{}", if total == 1 { "" } else { "s" })
+                } else {
+                    format!("{total} accepted")
+                })
+                .font(TYPE.small)
+                .color(k.c.text_muted),
+            )
+            .child(el().grow(1.0).a11y_hidden());
         if n > 0 {
-            accepts = accepts.child(
-                Button::new(format!("Accept {} {n}", g.label()))
-                    .variant(ButtonVariant::Outline)
-                    .control_size(ControlSize::Small)
-                    .on_press_tx(move |s: &mut App, tx: &mut Tx| s.accept(g, tx))
-                    .build(k)
-                    .key(format!("landing-accept-{}", slug(g))),
+            line = line.child(
+                outline(format!("landing-accept-{}", slug(g)), format!("Accept {n}"), None, 24.0, k)
+                    .on_press_tx(move |s: &mut App, tx: &mut Tx| s.accept(g, tx)),
             );
         }
+        list = list.child(
+            line.child(
+                el().pin(Some(0.0), None, Some(0.0), Some(0.0))
+                    .h(1.0)
+                    .fill(surf.hairline)
+                    .a11y_hidden(),
+            ),
+        );
     }
-    c = c.child(accepts);
+    c = c.child(list);
     c = c.child(
-        Button::new("Start with the first item (])")
-            .variant(ButtonVariant::Neutral)
-            .on_press_tx(|s: &mut App, tx: &mut Tx| s.step_item(true, tx))
-            .build(k)
-            .key("landing-start"),
+        row().w_full().justify_end().child(
+            k.interactive_with(
+                row()
+                    .key("landing-start")
+                    .role("button")
+                    .label("Start with the first item")
+                    .h(30.0)
+                    .px(14.0)
+                    .gap(8.0)
+                    .center()
+                    .radius(radius::BUTTON)
+                    .fill(r.accent)
+                    .focusable(true)
+                    .cursor(Cursor::Pointer)
+                    .child(text("Start with the first item").font(TYPE.strong).color(r.on_accent).a11y_hidden())
+                    .child(text("]").font(TYPE.micro_mono).color(r.on_accent).a11y_hidden()),
+                k.c.contrast_hover,
+                k.c.contrast_pressed,
+            )
+            .press_scale(0.97)
+            .on_press_tx(|s: &mut App, tx: &mut Tx| s.step_item(true, tx)),
+        ),
     );
     if s.board.pick == Pick::Brief {
         c = c.child(muted("The Brief is above the reader; b folds it.", k));

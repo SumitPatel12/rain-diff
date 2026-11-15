@@ -1,12 +1,14 @@
-//! The token layer: for a scheme, the surfaces regions paint and the kits every view and rune-kit
-//! component builds with. Flat panels meet at hairlines.
+//! The token layer: for a scheme, the colour roles regions paint and the kits every view and
+//! rune-kit component builds with. Islands: the list, the reader and side panels are rounded
+//! panels on a darker ground.
 //!
-//! Dark and light are Rune's neutral kit on Zed-like surfaces. Everforest and the two Gruvbox
-//! darks repaint the kit from their own palettes: Everforest from Rain's variant (the medium
-//! dark palette on the hard variant's `bg_dim`), Gruvbox from morhetz/gruvbox's `gruvbox.vim`.
+//! Everforest is the redesign's own role set (Everforest-derived, round 1b's `kit.css`). Dark and
+//! light are Rune's neutral kit; the two Gruvbox darks repaint the kit from morhetz/gruvbox's
+//! `gruvbox.vim`. Every scheme defines every role, so a view never reaches for a hex.
 
 use rain_diagram::DiagramStyle;
 use rune::Color;
+use rune::tok::TextStyle;
 use rune_kit::{Kit, Radius, StateColors};
 
 /// A colour scheme the window can draw in.
@@ -63,23 +65,12 @@ impl Scheme {
         }
     }
 
-    /// Added and removed lines' fills where the palette has its own (Everforest's `bg-green`
-    /// and `bg-red`); `None` keeps the diff's tints of the kit's success and danger colours.
-    pub fn change_fills(self) -> Option<(Color, Color)> {
-        (self == Scheme::Everforest).then(|| (hex(ef::BG_GREEN), hex(ef::BG_RED)))
-    }
-
-    /// The code selection where the palette has its own (Everforest's `bg-visual`).
-    pub fn selection(self) -> Option<Color> {
-        (self == Scheme::Everforest).then(|| hex(ef::BG_VISUAL))
-    }
-
     /// The note rail's purple and the purple of note labels.
     pub fn note_purples(self) -> (Color, Color) {
         match self {
             Scheme::Dark => (rune::oklch(0.606, 0.219, 292.7), rune::oklch(0.72, 0.219, 292.7)),
             Scheme::Light => (rune::oklch(0.606, 0.219, 292.7), rune::oklch(0.52, 0.219, 292.7)),
-            Scheme::Everforest => (hex(ef::PURPLE), hex(ef::PURPLE)),
+            Scheme::Everforest => (hex(d1::NOTE), hex(d1::NOTE)),
             Scheme::GruvboxHard | Scheme::GruvboxMedium => (hex(gb::PURPLE), hex(gb::PURPLE)),
         }
     }
@@ -87,19 +78,111 @@ impl Scheme {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Surfaces {
-    /// Behind everything, and the top bar.
+    /// The window's ground: behind the islands, the top bar and the status line.
     pub bar: Color,
-    /// Sidebar and tab strip.
+    /// The list island, thread cards and side islands.
     pub panel: Color,
-    /// Reader, Overview page and diff body.
+    /// The reader island: the diff and the Overview.
     pub reader: Color,
+    /// The sticky file header band.
     pub card_head: Color,
-    /// Inset areas: Facts list, filter box.
+    /// Inset areas: inputs, the hunk bar, the group tray, Facts.
     pub well: Color,
     pub hairline: Color,
     pub card_border: Color,
     pub strong_line: Color,
     pub selected_row: Color,
+}
+
+/// The colour roles beyond the surfaces and the kit's palette: raised layers, agent notes, the
+/// diff's fills, find hits and the tour's dim. Every scheme defines each one.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Roles {
+    /// Menus, popovers, the palette, modals and toasts.
+    pub raised: Color,
+    pub focus: Color,
+    /// The Must review marker and progress segment.
+    pub must: Color,
+    pub accent: Color,
+    pub on_accent: Color,
+    /// Agent notes: the rail and label, the card fill and its ring.
+    pub note: Color,
+    pub note_bg: Color,
+    pub note_border: Color,
+    pub add_bg: Color,
+    pub del_bg: Color,
+    pub add_word: Color,
+    pub del_word: Color,
+    /// The empty side of a split row.
+    pub filler: Color,
+    pub cursor_line: Color,
+    pub selection: Color,
+    pub find_hit: Color,
+    pub find_current: Color,
+    /// What the tour lays over the reader outside its spotlight.
+    pub spotlight_dim: Color,
+    pub shadow: Color,
+}
+
+/// Type styles the redesign names (Segoe UI 400/600/700, JetBrains Mono 400).
+#[derive(Clone, Copy, Debug)]
+pub struct Type {
+    pub title: TextStyle,
+    pub ui: TextStyle,
+    pub strong: TextStyle,
+    pub small: TextStyle,
+    pub label: TextStyle,
+    pub micro: TextStyle,
+    pub micro_mono: TextStyle,
+    pub mark: TextStyle,
+    pub code: TextStyle,
+    pub gutter: TextStyle,
+    pub h1: TextStyle,
+    pub h2: TextStyle,
+    pub body: TextStyle,
+}
+
+pub const TYPE: Type = Type {
+    title: TextStyle::new(14.0, 600.0).lh(20.0),
+    ui: TextStyle::new(13.0, 400.0).lh(20.0),
+    strong: TextStyle::new(13.0, 600.0).lh(20.0),
+    small: TextStyle::new(12.0, 400.0).lh(18.0),
+    label: TextStyle::new(12.0, 600.0).lh(18.0),
+    micro: TextStyle::new(11.0, 400.0).lh(16.0),
+    micro_mono: TextStyle::new(11.0, 400.0).mono().lh(16.0),
+    mark: TextStyle::new(10.0, 600.0).lh(16.0),
+    code: TextStyle::new(13.0, 400.0).mono().lh(20.0),
+    gutter: TextStyle::new(12.0, 400.0).mono().lh(20.0),
+    h1: TextStyle::new(24.0, 600.0).lh(32.0),
+    h2: TextStyle::new(16.0, 600.0).lh(24.0),
+    body: TextStyle::new(14.0, 400.0).lh(22.0),
+};
+
+/// Radii by use.
+pub mod radius {
+    /// Word highlights.
+    pub const WORD: f32 = 2.0;
+    /// Key caps and the Viewed box.
+    pub const KEY: f32 = 3.0;
+    /// Chips, notes and gutter marks.
+    pub const CHIP: f32 = 4.0;
+    /// Small buttons.
+    pub const SMALL: f32 = 5.0;
+    /// Buttons, rows, fields and Viewed.
+    pub const BUTTON: f32 = 6.0;
+    /// Cards, menus and the tray.
+    pub const CARD: f32 = 8.0;
+    /// Islands and modals.
+    pub const ISLAND: f32 = 10.0;
+}
+
+/// The redesign's spacing and density.
+pub mod space {
+    /// Between the islands and around them; the gap is the list's drag handle.
+    pub const GAP: f32 = 8.0;
+    pub const TOP_BAR: f32 = 44.0;
+    pub const STATUS: f32 = 30.0;
+    pub const READER_TOOL: f32 = 40.0;
 }
 
 #[derive(Clone, Debug)]
@@ -108,37 +191,55 @@ pub struct Look {
     pub dark: bool,
     /// What every view and rune-kit component builds with.
     pub kit: Kit,
-    /// `kit` with the main pane's corner and edge for `SplitView::build` only.
+    /// `kit` with square corners for shell parts that draw their own.
     pub shell: Kit,
     pub s: Surfaces,
+    pub r: Roles,
 }
 
 fn hex(s: &str) -> Color {
     rune::color::hex(s).unwrap_or(Color::BLACK)
 }
 
-/// Rain's Everforest dark: sainnhe/everforest's medium dark palette, and the hard variant's
-/// `bg_dim` as the page.
-mod ef {
-    pub const PAGE: &str = "#1e2326";
-    pub const BG0: &str = "#2d353b";
-    pub const BG1: &str = "#343f44";
-    pub const BG2: &str = "#3d484d";
-    pub const BG3: &str = "#475258";
-    pub const BG4: &str = "#4f585e";
-    pub const BG_VISUAL: &str = "#543a48";
-    pub const BG_RED: &str = "#514045";
-    pub const BG_GREEN: &str = "#425047";
-    pub const BG_BLUE: &str = "#3a515d";
-    pub const BG_YELLOW: &str = "#4d4c43";
-    pub const FG: &str = "#d3c6aa";
-    pub const RED: &str = "#e67e80";
-    pub const YELLOW: &str = "#dbbc7f";
-    pub const GREEN: &str = "#a7c080";
-    pub const BLUE: &str = "#7fbbb3";
-    pub const PURPLE: &str = "#d699b6";
-    pub const GREY1: &str = "#859289";
-    pub const GREY2: &str = "#9da9a0";
+/// The redesign's roles (`round1b/src/kit.css`), Everforest-derived.
+mod d1 {
+    pub const GROUND: &str = "#13171a";
+    pub const PANEL: &str = "#21282c";
+    pub const READER: &str = "#1b2023";
+    pub const CARD_HEAD: &str = "#242b2f";
+    pub const RAISED: &str = "#283035";
+    pub const WELL: &str = "#161a1d";
+    pub const HAIRLINE: &str = "#2c3438";
+    pub const CARD_BORDER: &str = "#384246";
+    pub const STRONG_LINE: &str = "#4f585e";
+    pub const SELECTED_ROW: &str = "#2d3a2f";
+    pub const TEXT: &str = "#d3c6aa";
+    pub const TEXT_MUTED: &str = "#9da9a0";
+    pub const TEXT_FAINT: &str = "#737d78";
+    pub const TEXT_ACCENT: &str = "#7fbbb3";
+    pub const ACCENT: &str = "#a7c080";
+    pub const ON_ACCENT: &str = "#1a2016";
+    /// (fg, bg, border) for success, warning, danger and info.
+    pub const STATES: [(&str, &str, &str); 4] = [
+        ("#a7c080", "#283126", "#45533a"),
+        ("#dbbc7f", "#332e23", "#5a4e34"),
+        ("#e67e80", "#37292b", "#643f42"),
+        ("#7fbbb3", "#22302e", "#3b5450"),
+    ];
+    pub const NOTE: &str = "#d699b6";
+    pub const NOTE_BG: &str = "#2a2330";
+    pub const NOTE_BORDER: &str = "#46374f";
+    pub const MUST: &str = "#e67e80";
+    pub const ADD_BG: &str = "#212a20";
+    pub const DEL_BG: &str = "#2d2325";
+    pub const ADD_WORD: &str = "#384a2e";
+    pub const DEL_WORD: &str = "#553538";
+    pub const FILLER: &str = "#171b1d";
+    pub const CURSOR_LINE: &str = "#252d30";
+    pub const SELECTION: &str = "#543a48";
+    pub const FIND_HIT: &str = "#5a4e2a";
+    pub const FIND_CURRENT: &str = "#8a7438";
+    pub const FOCUS: &str = "#a7c080";
 }
 
 /// morhetz/gruvbox dark: `bg0_h`, `bg0`, `bg0_s`, `bg1`-`bg4`, `fg1`, `fg3`, `fg4` and the
@@ -150,7 +251,6 @@ mod gb {
     pub const BG1: &str = "#3c3836";
     pub const BG2: &str = "#504945";
     pub const BG3: &str = "#665c54";
-    pub const BG4: &str = "#7c6f64";
     pub const FG1: &str = "#ebdbb2";
     pub const FG3: &str = "#bdae93";
     pub const FG4: &str = "#a89984";
@@ -161,25 +261,38 @@ mod gb {
     pub const PURPLE: &str = "#d3869b";
 }
 
-/// bar, panel, reader, card_head, well, hairline, card_border, strong_line.
+/// ground, panel, reader, card_head, well, hairline, card_border, strong_line.
 fn surface_hexes(scheme: Scheme) -> [&'static str; 8] {
     match scheme {
         Scheme::Dark => [
-            "#2b2d32", "#232529", "#1c1d20", "#232529", "#18191c", "#3a3d44", "#464950", "#464950",
+            "#18191c", "#232529", "#1c1d20", "#26282c", "#141517", "#2e3035", "#3a3d44", "#464950",
         ],
         Scheme::Light => [
-            "#e3e4e7", "#eeeff1", "#fbfbfc", "#f1f2f4", "#f4f5f7", "#d4d6db", "#c4c6cb", "#c4c6cb",
+            "#dcdde1", "#eeeff1", "#fbfbfc", "#f3f4f6", "#f4f5f7", "#dcdee2", "#c4c6cb", "#b4b7bd",
         ],
-        // Darken the page, never the cards: the ground drops below the ladder, panels stay bg1.
-        Scheme::Everforest => [ef::PAGE, ef::BG1, ef::BG0, ef::BG1, ef::BG0, ef::BG3, ef::BG4, ef::BG4],
-        Scheme::GruvboxHard => [gb::BG0_S, gb::BG0, gb::BG0_H, gb::BG0, gb::BG0_H, gb::BG2, gb::BG3, gb::BG4],
-        Scheme::GruvboxMedium => [gb::BG1, gb::BG0_S, gb::BG0, gb::BG0_S, gb::BG0_H, gb::BG2, gb::BG3, gb::BG4],
+        Scheme::Everforest => [
+            d1::GROUND,
+            d1::PANEL,
+            d1::READER,
+            d1::CARD_HEAD,
+            d1::WELL,
+            d1::HAIRLINE,
+            d1::CARD_BORDER,
+            d1::STRONG_LINE,
+        ],
+        Scheme::GruvboxHard => [gb::BG0_H, gb::BG0, gb::BG0, gb::BG0_S, gb::BG0_H, gb::BG1, gb::BG2, gb::BG3],
+        Scheme::GruvboxMedium => [gb::BG0_H, gb::BG0_S, gb::BG0, gb::BG1, gb::BG0_H, gb::BG1, gb::BG2, gb::BG3],
     }
 }
 
-/// The surface table for a scheme; `k`'s accent tints the selection fill.
+/// The surface table for a scheme; `k`'s accent tints the selected row where the scheme has no
+/// row colour of its own.
 pub fn surfaces(scheme: Scheme, k: &Kit) -> Surfaces {
     let [bar, panel, reader, card_head, well, hairline, card_border, strong_line] = surface_hexes(scheme).map(hex);
+    let selected_row = match scheme {
+        Scheme::Everforest => hex(d1::SELECTED_ROW),
+        _ => k.alpha(k.c.bg_accent, if scheme.is_dark() { 0.16 } else { 0.12 }),
+    };
     Surfaces {
         bar,
         panel,
@@ -189,7 +302,65 @@ pub fn surfaces(scheme: Scheme, k: &Kit) -> Surfaces {
         hairline,
         card_border,
         strong_line,
-        selected_row: k.alpha(k.c.bg_accent, if scheme.is_dark() { 0.16 } else { 0.12 }),
+        selected_row,
+    }
+}
+
+/// `t` of the way from `base` toward `hue` in OKLab, at `base`'s alpha.
+fn tint(base: Color, hue: Color, t: f32) -> Color {
+    let [a, b] = [base.to_oklab(), hue.to_oklab()];
+    Color::from_oklab([0, 1, 2, 3].map(|i| if i == 3 { a[3] } else { a[i] + (b[i] - a[i]) * t }))
+}
+
+fn roles(scheme: Scheme, k: &Kit, s: &Surfaces) -> Roles {
+    if scheme == Scheme::Everforest {
+        return Roles {
+            raised: hex(d1::RAISED),
+            focus: hex(d1::FOCUS),
+            must: hex(d1::MUST),
+            accent: hex(d1::ACCENT),
+            on_accent: hex(d1::ON_ACCENT),
+            note: hex(d1::NOTE),
+            note_bg: hex(d1::NOTE_BG),
+            note_border: hex(d1::NOTE_BORDER),
+            add_bg: hex(d1::ADD_BG),
+            del_bg: hex(d1::DEL_BG),
+            add_word: hex(d1::ADD_WORD),
+            del_word: hex(d1::DEL_WORD),
+            filler: hex(d1::FILLER),
+            cursor_line: hex(d1::CURSOR_LINE),
+            selection: hex(d1::SELECTION),
+            find_hit: hex(d1::FIND_HIT),
+            find_current: hex(d1::FIND_CURRENT),
+            spotlight_dim: hex("#0a0c0d").alpha(0.55),
+            shadow: Color::BLACK.alpha(0.45),
+        };
+    }
+    let c = &k.c;
+    let dark = scheme.is_dark();
+    let bg = s.reader;
+    let (add, del) = (c.success.icon, c.danger.icon);
+    let note = scheme.note_purples().0;
+    Roles {
+        raised: if dark { c.layer_02 } else { s.reader },
+        focus: c.border_focus,
+        must: c.danger.icon,
+        accent: c.bg_accent,
+        on_accent: c.submit_fg,
+        note,
+        note_bg: tint(bg, note, if dark { 0.12 } else { 0.08 }),
+        note_border: tint(bg, note, if dark { 0.3 } else { 0.25 }),
+        add_bg: tint(bg, add, if dark { 0.13 } else { 0.1 }),
+        del_bg: tint(bg, del, if dark { 0.13 } else { 0.1 }),
+        add_word: tint(bg, add, if dark { 0.32 } else { 0.27 }),
+        del_word: tint(bg, del, if dark { 0.32 } else { 0.27 }),
+        filler: tint(bg, s.bar, 0.5),
+        cursor_line: tint(bg, c.text_base, if dark { 0.05 } else { 0.04 }),
+        selection: k.selection(),
+        find_hit: tint(bg, c.warning.icon, if dark { 0.35 } else { 0.3 }),
+        find_current: tint(bg, c.warning.icon, if dark { 0.6 } else { 0.5 }),
+        spotlight_dim: if dark { Color::BLACK.alpha(0.5) } else { Color::WHITE.alpha(0.55) },
+        shadow: Color::BLACK.alpha(if dark { 0.45 } else { 0.18 }),
     }
 }
 
@@ -198,10 +369,11 @@ struct Tones {
     raised: [&'static str; 3],
     text: [&'static str; 3],
     primary: &'static str,
+    on_primary: &'static str,
     link: &'static str,
-    /// (accent, opaque tint) for success, warning, danger and info; no tint mixes the accent
-    /// in at an alpha.
-    states: [(&'static str, Option<&'static str>); 4],
+    /// (fg, opaque tint, border) for success, warning, danger and info; no tint mixes the fg
+    /// in at an alpha, no border uses the fg.
+    states: [(&'static str, Option<&'static str>, Option<&'static str>); 4],
 }
 
 fn tones(scheme: Scheme) -> Option<Tones> {
@@ -209,22 +381,24 @@ fn tones(scheme: Scheme) -> Option<Tones> {
         raised: [gb::BG1, gb::BG2, gb::BG3],
         text: [gb::FG1, gb::FG3, gb::FG4],
         primary: gb::BLUE,
+        on_primary: gb::BG0_H,
         link: gb::BLUE,
-        states: [(gb::GREEN, None), (gb::YELLOW, None), (gb::RED, None), (gb::BLUE, None)],
+        states: [
+            (gb::GREEN, None, None),
+            (gb::YELLOW, None, None),
+            (gb::RED, None, None),
+            (gb::BLUE, None, None),
+        ],
     };
     match scheme {
         Scheme::Dark | Scheme::Light => None,
         Scheme::Everforest => Some(Tones {
-            raised: [ef::BG1, ef::BG2, ef::BG3],
-            text: [ef::FG, ef::GREY2, ef::GREY1],
-            primary: ef::GREEN,
-            link: ef::BLUE,
-            states: [
-                (ef::GREEN, Some(ef::BG_GREEN)),
-                (ef::YELLOW, Some(ef::BG_YELLOW)),
-                (ef::RED, Some(ef::BG_RED)),
-                (ef::BLUE, Some(ef::BG_BLUE)),
-            ],
+            raised: [d1::RAISED, d1::CARD_BORDER, d1::STRONG_LINE],
+            text: [d1::TEXT, d1::TEXT_MUTED, d1::TEXT_FAINT],
+            primary: d1::ACCENT,
+            on_primary: d1::ON_ACCENT,
+            link: d1::TEXT_ACCENT,
+            states: d1::STATES.map(|(fg, bg, border)| (fg, Some(bg), Some(border))),
         }),
         Scheme::GruvboxHard | Scheme::GruvboxMedium => Some(gruvbox),
     }
@@ -234,13 +408,13 @@ fn tones(scheme: Scheme) -> Option<Tones> {
 fn paint(kit: &mut Kit, t: &Tones, s: &Surfaces) {
     let [l2, l3, l4] = t.raised.map(hex);
     let [fg, muted, faint] = t.text.map(hex);
-    let (primary, link) = (hex(t.primary), hex(t.link));
-    let state = |(accent, tint): (&str, Option<&str>)| {
+    let (primary, on_primary, link) = (hex(t.primary), hex(t.on_primary), hex(t.link));
+    let state = |(accent, tint, border): (&str, Option<&str>, Option<&str>)| {
         let a = hex(accent);
         StateColors {
             bg: tint.map_or(a.alpha(0.15), hex),
             fg: a,
-            border: a,
+            border: border.map_or(a, hex),
             icon: a,
         }
     };
@@ -254,23 +428,23 @@ fn paint(kit: &mut Kit, t: &Tones, s: &Surfaces) {
     c.bg_icon_button_contrast = fg;
     c.bg_button_neutral = l2;
     c.bg_accent = primary;
-    c.submit_fg = s.bar;
-    c.submit_icon = s.bar;
+    c.submit_fg = on_primary;
+    c.submit_icon = on_primary;
     c.text_base = fg;
     c.text_muted = muted;
     c.text_faint = faint;
     c.text_inverse = s.reader;
-    c.text_contrast = s.reader;
+    c.text_contrast = on_primary;
     c.text_accent = link;
     c.icon_base = fg;
     c.icon_muted = muted;
     c.icon_faint = faint;
     c.icon_inverse = s.reader;
-    c.icon_contrast = s.reader;
+    c.icon_contrast = on_primary;
     c.icon_accent = primary;
     c.border_focus = primary;
     c.hover = fg.alpha(0.06);
-    c.pressed = fg.alpha(0.10);
+    c.pressed = fg.alpha(0.11);
     c.knob = fg;
     c.knob_on = fg;
     c.success = success;
@@ -280,9 +454,9 @@ fn paint(kit: &mut Kit, t: &Tones, s: &Surfaces) {
     c.surface_base = l2;
     c.surface_weak = s.card_head;
     c.surface_hover = l2;
-    c.surface_raised = s.card_head;
-    c.surface_raised_base = s.card_head;
-    c.surface_raised_hover = l2;
+    c.surface_raised = l2;
+    c.surface_raised_base = l2;
+    c.surface_raised_hover = l3;
     c.surface_float = fg;
     c.surface_disabled = s.card_head;
     c.border_hover = s.strong_line;
@@ -324,34 +498,54 @@ pub fn look(scheme: Scheme) -> Look {
     c.border_weak = s.hairline;
     c.border_base = s.card_border;
     c.border_strong = s.strong_line;
-    if tones.is_some() {
-        c.border_muted = s.hairline;
+    c.border_muted = s.hairline;
+    if scheme == Scheme::Everforest {
+        c.scrim = hex("#060809").alpha(0.58);
     }
     kit.radius = Radius {
-        xs: 2.0,
-        sm: 3.0,
-        md: 4.0,
-        lg: 6.0,
-        xl: 8.0,
+        xs: radius::WORD,
+        sm: radius::KEY,
+        md: radius::CHIP,
+        lg: radius::BUTTON,
+        xl: radius::CARD,
     };
+    kit.ty.small = TYPE.small;
+    kit.ty.small_medium = TYPE.small;
+    let r = roles(scheme, &kit, &s);
     let mut shell = kit.clone();
     shell.radius.lg = 0.0;
-    shell.c.border_muted = s.hairline;
     Look {
         scheme,
         dark,
         kit,
         shell,
         s,
+        r,
     }
 }
 
-/// The scheme a kit from [`look`] was built for, told by its page colour (each scheme's bar is
-/// its own); a kit from elsewhere reads as dark or light.
+/// The scheme a kit from [`look`] was built for, told by its ground and card head (no two
+/// schemes share both); a kit from elsewhere reads as dark or light.
 pub fn scheme_of(k: &Kit) -> Scheme {
-    let page = k.c.page;
+    let (page, head) = (k.c.page, k.c.layer_01);
     Scheme::ALL
         .into_iter()
-        .find(|&s| hex(surface_hexes(s)[0]) == page)
+        .find(|&s| hex(surface_hexes(s)[0]) == page && hex(surface_hexes(s)[3]) == head)
         .unwrap_or(if k.dark { Scheme::Dark } else { Scheme::Light })
+}
+
+/// The roles of the scheme a kit from [`look`] was built for.
+pub fn roles_of(k: &Kit) -> Roles {
+    static ROLES: std::sync::OnceLock<[Roles; 5]> = std::sync::OnceLock::new();
+    let all = ROLES.get_or_init(|| Scheme::ALL.map(|s| look(s).r));
+    let i = Scheme::ALL.iter().position(|&s| s == scheme_of(k)).unwrap_or(0);
+    all[i]
+}
+
+/// The surfaces of the scheme a kit from [`look`] was built for.
+pub fn surfaces_of(k: &Kit) -> Surfaces {
+    static SURFACES: std::sync::OnceLock<[Surfaces; 5]> = std::sync::OnceLock::new();
+    let all = SURFACES.get_or_init(|| Scheme::ALL.map(|s| look(s).s));
+    let i = Scheme::ALL.iter().position(|&s| s == scheme_of(k)).unwrap_or(0);
+    all[i]
 }

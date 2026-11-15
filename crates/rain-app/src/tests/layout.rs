@@ -262,7 +262,7 @@ fn the_meter_counts_must_review_and_review_only_with_must_first() {
             .and_then(|e| e.text)
             .unwrap_or_default()
     };
-    assert_eq!(text(&rt, "meter-text"), format!("0 / {}", must + review));
+    assert_eq!(text(&rt, "meter-text"), format!("0 / {} viewed", must + review));
     assert_eq!(text(&rt, "meter-must"), format!("Must 0/{must}"));
     let first_must = (0..rt.state.keys.len())
         .find(|&g| rt.state.tags.get(&rt.state.keys[g]) == Some(&FileTag::MustReview))
@@ -270,7 +270,7 @@ fn the_meter_counts_must_review_and_review_only_with_must_first() {
     rt.update(|s, _| s.set_viewed(first_must, true));
     settle(&mut rt);
     assert_eq!(text(&rt, "meter-must"), format!("Must 1/{must}"));
-    assert_eq!(text(&rt, "meter-text"), format!("1 / {}", must + review));
+    assert_eq!(text(&rt, "meter-text"), format!("1 / {} viewed", must + review));
 }
 
 #[test]
@@ -282,7 +282,7 @@ fn the_status_line_says_overview_on_that_tab() {
         .elements()
         .into_iter()
         .find(|e| e.key.as_deref() == Some("status-hints"))
-        .and_then(|e| e.text)
+        .and_then(|e| e.label)
         .unwrap_or_default();
     assert!(hints.starts_with("Overview"), "{hints}");
     assert!(rt.find("current-bar").is_none(), "no file is lit in the list on the Overview");

@@ -274,9 +274,9 @@ fn row_y_adds_the_taller_rows_above() {
     let s = DiffState::new(files);
     assert_eq!(s.row_count(), 9);
     assert_eq!(s.row_y(0), 0.0);
-    assert_eq!(s.row_y(1), 44.0);
-    assert_eq!(s.row_y(3), 44.0 + 40.0);
-    assert_eq!(s.rows_height(), 9.0 * 20.0 + 3.0 * 24.0);
+    assert_eq!(s.row_y(1), 38.0);
+    assert_eq!(s.row_y(3), 38.0 + 40.0);
+    assert_eq!(s.rows_height(), 9.0 * 20.0 + 3.0 * 18.0);
 }
 
 // ---- scroll hooks ----

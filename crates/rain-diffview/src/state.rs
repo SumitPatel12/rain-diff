@@ -195,10 +195,36 @@ pub enum Align {
 }
 
 /// Row heights in points. Lines are fixed unless they wrap or carry annotations.
-pub(crate) const LINE_H: f32 = 20.0;
-pub(crate) const HEADER_H: f32 = 44.0;
-pub(crate) const GAP_H: f32 = 32.0;
-pub(crate) const NOTE_H: f32 = 40.0;
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Metrics {
+    pub line: f32,
+    pub header: f32,
+    pub gap: f32,
+    pub note: f32,
+}
+
+impl Metrics {
+    /// Compact: 20 point lines under a 38 point header.
+    pub const COMPACT: Metrics = Metrics {
+        line: 20.0,
+        header: 38.0,
+        gap: 28.0,
+        note: 40.0,
+    };
+    /// Comfortable: 22 point lines under a 44 point header.
+    pub const COMFORTABLE: Metrics = Metrics {
+        line: 22.0,
+        header: 44.0,
+        gap: 28.0,
+        note: 44.0,
+    };
+}
+
+impl Default for Metrics {
+    fn default() -> Self {
+        Metrics::COMPACT
+    }
+}
 
 /// Word changes are skipped for lines longer than this (the cap `myers::words` applies too), and
 /// for blocks pairing more lines.
@@ -395,6 +421,9 @@ pub struct DiffState {
     /// Columns of code one split side has at the view's width, once the view reports it.
     side_cols: Option<u32>,
     spot: Option<Spot>,
+    /// Find's query (lowercased when ASCII) and its current hit `(file, line index)`, marked in
+    /// the code.
+    find: Option<(String, Option<(usize, u32)>)>,
     /// The spot's first and last rows, kept with the rows.
     spot_rows: Option<(u32, u32)>,
     /// Per file and hunk (by `hunk_base`), its stable id.
@@ -403,6 +432,7 @@ pub struct DiffState {
     scroll: Rc<std::cell::Cell<[f32; 2]>>,
     /// The spot outline's shift with the scroll, set every scrolled frame without a commit.
     pub(crate) spot_shift: rune::Live<[f32; 2]>,
+    m: Metrics,
 }
 
 impl std::fmt::Debug for DiffState {
@@ -463,13 +493,28 @@ impl DiffState {
             min_split: 0,
             side_cols: None,
             spot: None,
+            find: None,
             spot_rows: None,
             hunk_ids: Vec::new(),
             scroll: Rc::new(std::cell::Cell::new([0.0; 2])),
             spot_shift: rune::Live::new([0.0; 2]),
+            m: Metrics::default(),
         };
         s.set_files(files);
         s
+    }
+
+    /// The row heights the view draws and scrolls by.
+    pub fn metrics(&self) -> Metrics {
+        self.m
+    }
+
+    /// Draw rows `m` high (a density change); rows rebuild when it differs.
+    pub fn set_metrics(&mut self, m: Metrics) {
+        if self.m != m {
+            self.m = m;
+            self.rebuild();
+        }
     }
 
     /// Show `files` instead, every range collapsed again and the selections, cursor and spotlight
@@ -535,6 +580,12 @@ impl DiffState {
             Some(id) => format!("{id}/{}", f.path),
             None => f.path.clone(),
         }
+    }
+
+    /// The repo id shown before a file's path, when repo ids are set.
+    pub fn repo_id(&self, file: usize) -> Option<&str> {
+        let f = self.files.get(file)?;
+        self.repo_ids.get(f.repo as usize).map(String::as_str).filter(|id| !id.is_empty())
     }
 
     /// The index of the file at `path` (its path, or old path for a rename).
@@ -1245,6 +1296,33 @@ impl DiffState {
         self.spot.as_ref()
     }
 
+    /// Mark `query`'s matches in the code (ASCII matches ignore case), the one on line
+    /// `current` (file, index into its lines) brighter; an empty query clears them.
+    pub fn set_find(&mut self, query: &str, current: Option<(usize, u32)>) {
+        let next = (!query.is_empty()).then(|| {
+            let q = if query.is_ascii() {
+                query.to_ascii_lowercase()
+            } else {
+                query.to_owned()
+            };
+            (q, current)
+        });
+        if next != self.find {
+            self.find = next;
+            self.rev += 1;
+        }
+    }
+
+    /// Byte ranges of find's matches in `text`, and whether line `at` holds the current hit.
+    pub(crate) fn find_marks(&self, text: &str, at: Option<(usize, u32)>) -> (Vec<Range<usize>>, bool) {
+        let Some((q, current)) = &self.find else {
+            return (Vec::new(), false);
+        };
+        let hay = if q.is_ascii() { text.to_ascii_lowercase() } else { text.to_owned() };
+        let marks = hay.match_indices(q.as_str()).map(|(i, m)| i..i + m.len()).collect();
+        (marks, at.is_some() && *current == at)
+    }
+
     /// The spot's first and last rows, when its lines have rows.
     pub fn spotlight_rows(&self) -> Option<(u32, u32)> {
         self.spot_rows
@@ -1285,11 +1363,11 @@ impl DiffState {
         };
         let h = match self.scroll.get()[1] {
             h if h > 0.0 => h,
-            _ => self.visible_rows.len().max(30) as f32 * LINE_H,
+            _ => self.visible_rows.len().max(30) as f32 * self.m.line,
         };
         let above = match align {
-            Align::Top => HEADER_H,
-            Align::Third => (h / 5.0).max(HEADER_H),
+            Align::Top => self.m.header,
+            Align::Third => (h / 5.0).max(self.m.header),
             Align::Center => h / 2.0,
         };
         let target = self.row_y(r as usize) - above;
@@ -1436,7 +1514,7 @@ impl DiffState {
         let mut r = self.visible_rows.start;
         if self.sticky().is_some() {
             let mut room = 0.0;
-            while r + 1 < self.rows.len() && room < HEADER_H {
+            while r + 1 < self.rows.len() && room < self.m.header {
                 room += self.estimate(r);
                 r += 1;
             }
@@ -1557,7 +1635,7 @@ impl DiffState {
     fn reveal_below_header(&self, r: u32, tx: &mut Tx) {
         let mut top = r as usize;
         let mut room = 0.0;
-        while top > 0 && room < HEADER_H {
+        while top > 0 && room < self.m.header {
             if matches!(self.rows[top], Row::File(_)) {
                 break;
             }
@@ -1569,10 +1647,10 @@ impl DiffState {
 
     fn estimate(&self, r: usize) -> f32 {
         match self.rows[r] {
-            Row::File(_) => HEADER_H,
-            Row::Note(_) => NOTE_H,
-            Row::Gap { .. } => GAP_H,
-            _ => LINE_H,
+            Row::File(_) => self.m.header,
+            Row::Note(_) => self.m.note,
+            Row::Gap { .. } => self.m.gap,
+            _ => self.m.line,
         }
     }
 
@@ -1757,10 +1835,11 @@ impl DiffState {
         self.hunk_line_rows.clear();
         self.tall_rows.clear();
         let pairs = self.pairs();
+        let m = self.m;
         let mut extra = 0.0f32;
         let tall_rows = &mut self.tall_rows;
         let mut tall = |rows: &[Row], h: f32| {
-            extra += h - LINE_H;
+            extra += h - m.line;
             tall_rows.push((rows.len() as u32 - 1, extra));
         };
         for (f, file) in self.files.iter().enumerate() {
@@ -1768,7 +1847,7 @@ impl DiffState {
             let ix = &self.idx[f];
             self.file_rows.push(rows.len() as u32);
             rows.push(Row::File(fu));
-            tall(&rows, HEADER_H);
+            tall(&rows, m.header);
             if self.ui[f].collapsed {
                 self.gap_rows.extend(std::iter::repeat_n(NONE, file.hunks.len() + 1));
                 self.hunk_line_rows.extend(std::iter::repeat_n(NONE, file.hunks.len()));
@@ -1777,7 +1856,7 @@ impl DiffState {
             if file.hunks.is_empty() {
                 self.gap_rows.push(NONE);
                 rows.push(Row::Note(fu));
-                tall(&rows, NOTE_H);
+                tall(&rows, m.note);
                 continue;
             }
             let mut blocks = ix.blocks.iter().peekable();
@@ -1795,7 +1874,7 @@ impl DiffState {
                 let first_row = rows.len() as u32;
                 if hidden.is_some_and(|n| n > 0) {
                     rows.push(Row::Gap { f: fu, gap: gap as u32 });
-                    tall(&rows, GAP_H);
+                    tall(&rows, m.gap);
                 }
                 if let Some(n) = g.len {
                     rows.extend((n - bottom.min(n)..n).map(ctx));
@@ -1923,7 +2002,7 @@ impl DiffState {
     pub fn row_y(&self, row: usize) -> f32 {
         let p = self.tall_rows.partition_point(|&(r, _)| (r as usize) < row);
         let extra = p.checked_sub(1).map_or(0.0, |i| self.tall_rows[i].1);
-        row as f32 * LINE_H + extra
+        row as f32 * self.m.line + extra
     }
 
     /// Estimated height of all rows in points, as [`DiffState::row_y`] measures.

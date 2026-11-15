@@ -5,13 +5,15 @@ use rain_comments::anchor_label;
 use rain_comments::label::first_sentence;
 use rain_core::{AnchorState, AnswerStatus, PresenceState, TargetKind, Thread, ThreadKind, ThreadState, Verdict};
 use rune::{Color, El, ScrollSpec, Tx, col, el, row, text};
-use rune_kit::{Button, ButtonVariant, ControlSize, Kit, Toast, ToastRegion};
+use rune_kit::{ButtonVariant, Kit};
 
-use super::muted;
+use super::ui::{Ghost, outline, sr};
+use super::{icons, muted};
 use crate::app::conversation::{Section, by_agent, short_name};
 use crate::app::{App, Overlay};
+use crate::theme::{TYPE, radius};
 
-const WIDTH: f32 = 420.0;
+const WIDTH: f32 = 380.0;
 const CLOSE_REASONS: [&str; 3] = ["fixed elsewhere", "no longer applies", "duplicate"];
 
 fn presence_color(p: PresenceState, k: &Kit) -> Color {
@@ -59,30 +61,82 @@ pub(super) fn presence_dot(s: &App, k: &Kit) -> El {
     .child(text(short).font(k.ty.small).color(k.c.text_muted).a11y_hidden())
 }
 
-/// The agent's toasts in the bottom-right stack; `None` when there are none.
+/// The agent's toasts, stacked at the reader island's bottom right; `None` when there are none.
 pub(super) fn toasts(s: &App, k: &Kit) -> Option<El> {
     if s.conversation.toasts.is_empty() {
         return None;
     }
-    let mut region = ToastRegion::new();
+    let (surf, r) = sr(k);
+    let mut stack = col().key("toasts").role("log").label("Messages").w(380.0).gap(8.0);
     for t in &s.conversation.toasts {
         let (close, act, hover) = (t.key.clone(), t.key.clone(), t.key.clone());
-        let mut toast = Toast::new(format!("toast-{}", t.key), t.title.clone()).on_close(move |s: &mut App| s.dismiss_toast(&close));
+        let allow = matches!(t.action, Some(crate::app::conversation::ToastAction::AllowAsk));
+        let mut card = row()
+            .key(format!("toast-{}", t.key))
+            .role("status")
+            .label(t.title.clone())
+            .w_full()
+            .pl(12.0)
+            .pr(8.0)
+            .py(10.0)
+            .gap(10.0)
+            .items_start()
+            .radius(radius::CARD)
+            .fill(r.raised)
+            .border(1.0, surf.card_border)
+            .shadow(12.0, 30.0, r.shadow)
+            .on_hover_change(move |s: &mut App, inside: bool, _: &mut Tx| s.hover_toast(&hover, inside))
+            .child(icons::draw(
+                if allow { &icons::PIN } else { &icons::SPARK },
+                16.0,
+                if allow { k.c.text_muted } else { r.note },
+            ))
+            .child(
+                text(t.title.clone())
+                    .font(TYPE.small)
+                    .color(k.c.text_base)
+                    .wrap()
+                    .grow(1.0)
+                    .shrink(),
+            );
         if let Some(a) = &t.action {
             let label = match a {
                 crate::app::conversation::ToastAction::Thread(_) => "Show",
                 crate::app::conversation::ToastAction::Orphaned => "Show orphaned",
                 crate::app::conversation::ToastAction::AllowAsk => "Allow",
             };
-            toast = toast.action(k, label, true, move |s: &mut App, tx: &mut Tx| s.toast_action(&act, tx));
+            let b = if allow {
+                k.interactive_with(
+                    row()
+                        .key(format!("toast-{}-action", t.key))
+                        .role("button")
+                        .label(label)
+                        .h(24.0)
+                        .px(8.0)
+                        .center()
+                        .radius(radius::SMALL)
+                        .fill(r.accent)
+                        .cursor(rune::Cursor::Pointer)
+                        .child(text(label).font(TYPE.small).color(r.on_accent).a11y_hidden()),
+                    k.c.contrast_hover,
+                    k.c.contrast_pressed,
+                )
+            } else {
+                outline(format!("toast-{}-action", t.key), label, None, 24.0, k)
+            };
+            card = card.child(b.on_press_tx(move |s: &mut App, tx: &mut Tx| s.toast_action(&act, tx)));
         }
-        region = region.toast(
-            toast
+        card = card.child(
+            Ghost::new(format!("toast-{}-close", t.key))
+                .icon(&icons::CLOSE)
+                .help("Dismiss")
+                .height(24.0)
                 .build(k)
-                .on_hover_change(move |s: &mut App, inside: bool, _: &mut Tx| s.hover_toast(&hover, inside)),
+                .on_press(move |s: &mut App| s.dismiss_toast(&close)),
         );
+        stack = stack.child(card);
     }
-    Some(region.build(k))
+    Some(stack)
 }
 
 /// Where a thread sits, in words.
@@ -150,16 +204,28 @@ fn glyph(t: &Thread) -> &'static str {
 }
 
 fn small_button(key: String, label: &str, variant: ButtonVariant, f: impl Fn(&mut App, &mut Tx) + 'static, k: &Kit) -> El {
-    Button::new(label)
-        .variant(variant)
-        .control_size(ControlSize::Small)
-        .on_press_tx(f)
-        .build(k)
-        .key(key)
+    let b = if variant == ButtonVariant::Ghost {
+        k.interactive(
+            row()
+                .key(key)
+                .role("button")
+                .label(label.to_owned())
+                .h(24.0)
+                .px(8.0)
+                .items_center()
+                .radius(radius::SMALL)
+                .cursor(rune::Cursor::Pointer)
+                .child(text(label.to_owned()).font(TYPE.small).color(k.c.text_muted).a11y_hidden()),
+        )
+    } else {
+        outline(key, label.to_owned(), None, 24.0, k)
+    };
+    b.on_press_tx(f)
 }
 
-/// A quoted excerpt in mono: the post-time snapshot, first `max` lines.
+/// A quoted excerpt in mono on the well: the post-time snapshot, first `max` lines.
 fn excerpt(key: String, content: &str, max: usize, k: &Kit) -> El {
+    let (surf, _) = sr(k);
     let mut lines: Vec<&str> = content.lines().take(max).collect();
     if lines.is_empty() {
         lines.push("(empty)");
@@ -167,64 +233,94 @@ fn excerpt(key: String, content: &str, max: usize, k: &Kit) -> El {
     col()
         .key(key)
         .w_full()
-        .px(8.0)
+        .px(10.0)
         .py(4.0)
-        .radius(k.radius.sm)
-        .fill(k.c.layer_02)
-        .border(1.0, k.c.border_base)
+        .radius(radius::BUTTON)
+        .fill(surf.well)
         .children(
             lines
                 .into_iter()
-                .map(|l| text(l.to_owned()).font(k.ty.mono).color(k.c.text_base).truncate()),
+                .map(|l| text(l.to_owned()).font(TYPE.micro_mono.lh(18.0)).color(k.c.text_muted).truncate()),
         )
+}
+
+/// `VouchersController.cs:23`, or the artifact's title.
+fn short_place(s: &App, t: &Thread) -> String {
+    match s.file_of_thread(t) {
+        Some(g) if !t.is_artifact() => {
+            let key = &s.keys[g];
+            format!("{}:{}", key.rsplit('/').next().unwrap_or(key), t.anchor.lines().0)
+        }
+        _ => location(s, t),
+    }
+}
+
+fn kind_ink(t: &Thread, k: &Kit) -> Color {
+    match t.kind() {
+        ThreadKind::Issue => k.c.danger.fg,
+        ThreadKind::Question => k.c.info.fg,
+        ThreadKind::Suggestion | ThreadKind::Praise => k.c.success.fg,
+        _ => k.c.text_muted,
+    }
 }
 
 fn thread_row(s: &App, t: &Thread, section: Section, k: &Kit) -> El {
     let id = t.id.clone();
     let focused = s.focused_thread.as_deref() == Some(t.id.as_str());
     let in_reader = !t.is_artifact() && s.file_of_thread(t).is_some_and(|g| s.current() == Some(g));
-    let who = if by_agent(t) { "Claude" } else { "you" };
+    let who = if by_agent(t) { "claude" } else { "you" };
     let head = format!("{} {} · {} · {who}", glyph(t), short_name(t), t.kind().label());
     let last = t.messages.last();
-    let said = last.map_or(String::new(), |m| {
-        let by = m.author.as_deref().filter(|a| !a.trim().is_empty()).unwrap_or("you");
-        format!("{by}: {}", first_sentence(&m.body, 90))
-    });
+    let said = last.map_or(String::new(), |m| first_sentence(&m.body, 90));
     let chip_text = chip(t);
-    let chip_color = match section {
-        Section::Waiting | Section::Addressed => k.c.warning.fg,
-        Section::Orphaned => k.c.danger.fg,
-        _ => k.c.text_muted,
+    let (chip_fg, chip_bg) = match section {
+        Section::Waiting => (k.c.danger.fg, k.c.danger.bg),
+        Section::Addressed => (k.c.success.fg, k.c.success.bg),
+        Section::Orphaned => (k.c.danger.fg, k.c.danger.bg),
+        _ if chip_text.contains("failed") || chip_text.contains("timed out") => (k.c.danger.fg, k.c.danger.bg),
+        _ => (k.c.text_muted, k.c.layer_02),
     };
+    let show_chip = !matches!(chip_text.as_str(), "open" | "");
+    let mut top = row()
+        .w_full()
+        .gap(6.0)
+        .items_center()
+        .child(text(glyph(t)).font(TYPE.small).color(kind_ink(t, k)))
+        .child(text(who).font(TYPE.label).color(k.c.text_base))
+        .child(text(t.kind().label()).font(TYPE.small).color(kind_ink(t, k)));
+    if show_chip {
+        top = top.child(
+            row()
+                .key("chip")
+                .h(18.0)
+                .px(6.0)
+                .items_center()
+                .radius(radius::CHIP)
+                .fill(chip_bg)
+                .child(text(chip_text).font(TYPE.micro).color(chip_fg)),
+        );
+    }
+    top = top.child(el().grow(1.0).a11y_hidden()).child(
+        text(short_place(s, t))
+            .font(TYPE.micro_mono)
+            .color(k.c.text_accent)
+            .truncate()
+            .shrink(),
+    );
     let mut c = col()
         .key(format!("conv-{}", t.id))
         .role("button")
         .label(format!("{head} · {}", location(s, t)))
         .w_full()
         .px(10.0)
-        .py(6.0)
+        .py(8.0)
         .gap(4.0)
-        .radius(k.radius.sm)
+        .radius(radius::CARD)
         .on_press_tx(move |s: &mut App, tx: &mut Tx| s.show_thread(&id, tx))
-        .child(
-            row()
-                .w_full()
-                .gap(8.0)
-                .items_center()
-                .child(
-                    text(head)
-                        .font(k.ty.small_medium)
-                        .color(k.c.text_base)
-                        .truncate()
-                        .grow(1.0)
-                        .shrink(),
-                )
-                .child(text(chip_text).key("chip").font(k.ty.small).color(chip_color)),
-        )
-        .child(text(location(s, t)).font(k.ty.small).color(k.c.text_muted).truncate())
-        .child(text(said).font(k.ty.small).color(k.c.text_base).truncate());
+        .child(top)
+        .child(text(said).font(TYPE.small).color(k.c.text_base).truncate());
     c = if focused {
-        c.fill(k.c.layer_03).border(1.0, k.c.border_focus)
+        c.fill(k.c.pressed).outline(2.0, 0.0, k.c.border_focus)
     } else {
         k.interactive(c)
     };
@@ -249,9 +345,9 @@ fn thread_row(s: &App, t: &Thread, section: Section, k: &Kit) -> El {
     }
     if section == Section::Addressed {
         let (a, b) = (t.id.clone(), t.id.clone());
-        let mut r = row().gap(6.0).child(small_button(
+        let mut r = row().gap(6.0).pt(2.0).child(small_button(
             format!("conv-confirm-{}", t.id),
-            "Confirm (a)",
+            "Confirm  a",
             ButtonVariant::Neutral,
             move |s: &mut App, _| s.confirm_addressed(&a),
             k,
@@ -288,6 +384,7 @@ fn orphan_actions(s: &App, t: &Thread, k: &Kit) -> El {
     }
     row()
         .gap(6.0)
+        .pt(2.0)
         .child(small_button(
             format!("conv-attach-{}", t.id),
             "Attach here",
@@ -304,33 +401,51 @@ fn orphan_actions(s: &App, t: &Thread, k: &Kit) -> El {
         ))
 }
 
+/// `WAITING ON YOU` as `Waiting on you`.
+fn sentence(t: &str) -> String {
+    let lower = t.to_lowercase();
+    let mut c = lower.chars();
+    c.next().map_or_else(String::new, |f| f.to_uppercase().chain(c).collect())
+}
+
 fn section_header(s: &App, section: Section, count: usize, k: &Kit) -> El {
+    let folded = section == Section::Settled && !s.conversation.settled_open;
+    let ink = if section == Section::Orphaned {
+        k.c.danger.fg
+    } else {
+        k.c.text_base
+    };
     let mut r = row()
         .key(format!("conv-section-{}", section.key()))
         .w_full()
-        .px(10.0)
-        .pt(10.0)
-        .pb(4.0)
-        .gap(8.0)
+        .h(30.0)
+        .px(8.0)
+        .pt(4.0)
+        .gap(6.0)
         .items_center()
-        .child(text(section.title()).font(k.ty.small_medium).color(k.c.text_muted))
-        .child(text(count.to_string()).font(k.ty.small).color(k.c.text_muted));
+        .child(icons::draw(
+            if folded { &icons::CHEV_R } else { &icons::CHEV_D },
+            14.0,
+            k.c.text_muted,
+        ))
+        .child(text(sentence(section.title())).font(TYPE.label).color(ink))
+        .child(text(count.to_string()).font(TYPE.small).color(k.c.text_faint));
     if section == Section::Settled {
         let open = s.conversation.settled_open;
         r = r
             .role("button")
             .label(if open { "Fold settled" } else { "Show settled" })
-            .on_press(|s: &mut App| s.conversation.settled_open = !s.conversation.settled_open)
-            .child(text(if open { "▾" } else { "▸" }).font(k.ty.small).color(k.c.text_muted));
+            .cursor(rune::Cursor::Pointer)
+            .on_press(|s: &mut App| s.conversation.settled_open = !s.conversation.settled_open);
     }
     r
 }
 
-fn verdict_color(v: Verdict, k: &Kit) -> Color {
+fn verdict_colors(v: Verdict, k: &Kit) -> (Color, Color) {
     match v {
-        Verdict::Approve => k.c.success.icon,
-        Verdict::RequestChanges => k.c.danger.icon,
-        Verdict::Comment => k.c.info.icon,
+        Verdict::Approve => (k.c.success.fg, k.c.success.bg),
+        Verdict::RequestChanges => (k.c.warning.fg, k.c.warning.bg),
+        Verdict::Comment => (k.c.info.fg, k.c.info.bg),
     }
 }
 
@@ -349,31 +464,67 @@ fn rounds(s: &App, k: &Kit) -> Vec<El> {
         .rev()
         .map(|r| {
             let line = format!("Round {} · {} · {}", r.n, verdict_label(r.verdict), first_sentence(&r.summary, 70));
-            row()
+            let (fg, bg) = verdict_colors(r.verdict, k);
+            col()
                 .key(format!("conv-round-{}", r.n))
-                .label(line.clone())
+                .label(line)
                 .w_full()
                 .px(10.0)
-                .py(4.0)
-                .gap(8.0)
-                .items_center()
-                .child(el().w(3.0).h(28.0).radius(1.5).fill(verdict_color(r.verdict, k)))
-                .child(text(line).font(k.ty.small).color(k.c.text_base).truncate().grow(1.0).shrink())
+                .py(6.0)
+                .gap(4.0)
+                .child(
+                    row()
+                        .gap(8.0)
+                        .items_center()
+                        .child(text(format!("Round {}", r.n)).font(TYPE.label).color(k.c.text_base))
+                        .child(
+                            row()
+                                .h(18.0)
+                                .px(6.0)
+                                .items_center()
+                                .radius(radius::CHIP)
+                                .fill(bg)
+                                .child(text(verdict_label(r.verdict)).font(TYPE.micro).color(fg)),
+                        ),
+                )
+                .child(
+                    text(first_sentence(&r.summary, 90))
+                        .font(TYPE.small)
+                        .color(k.c.text_base)
+                        .truncate(),
+                )
         })
         .collect()
 }
 
 fn filter_chip(key: &'static str, label: String, on: bool, k: &Kit) -> El {
-    Button::new(label)
-        .variant(if on { ButtonVariant::Outline } else { ButtonVariant::GhostMuted })
-        .control_size(ControlSize::Small)
-        .on_press(move |s: &mut App| s.toggle_conversation_filter(key))
-        .build(k)
+    let (surf, _) = sr(k);
+    let mut c = row()
         .key(format!("conv-filter-{key}"))
+        .role("button")
+        .label(label.clone())
+        .checked(on)
+        .h(24.0)
+        .px(10.0)
+        .items_center()
+        .radius(12.0)
+        .border(1.0, if on { surf.strong_line } else { surf.card_border })
+        .cursor(rune::Cursor::Pointer)
+        .child(
+            text(label)
+                .font(TYPE.small)
+                .color(if on { k.c.text_base } else { k.c.text_muted })
+                .a11y_hidden(),
+        )
+        .on_press(move |s: &mut App| s.toggle_conversation_filter(key));
+    if on {
+        c = c.fill(k.c.pressed);
+    }
+    k.interactive(c)
 }
 
 fn body(s: &App, k: &Kit) -> El {
-    let mut list = col().w_full().pb(12.0).gap(2.0);
+    let mut list = col().w_full().px(6.0).pb(12.0).gap(2.0);
     let mut shown = 0;
     for section in Section::ALL {
         let threads = s.conversation_section(section);
@@ -398,10 +549,15 @@ fn body(s: &App, k: &Kit) -> El {
             .child(
                 row()
                     .key("conv-section-rounds")
-                    .px(10.0)
-                    .pt(10.0)
-                    .pb(4.0)
-                    .child(text("ROUNDS").font(k.ty.small_medium).color(k.c.text_muted)),
+                    .w_full()
+                    .h(30.0)
+                    .px(8.0)
+                    .pt(4.0)
+                    .gap(6.0)
+                    .items_center()
+                    .child(icons::draw(&icons::CHEV_D, 14.0, k.c.text_muted))
+                    .child(text("Rounds").font(TYPE.label).color(k.c.text_base))
+                    .child(text(rounds.len().to_string()).font(TYPE.small).color(k.c.text_faint)),
             )
             .children(rounds);
     }
@@ -417,65 +573,102 @@ fn body(s: &App, k: &Kit) -> El {
         .child(list)
 }
 
-/// The overlay: a 420 pt panel on the reader's right edge.
+/// The Conversation island at the window's right: its title and waiting count, the agent's
+/// presence, the filters, then every thread by section and the rounds.
 pub(super) fn conversation(s: &App, k: &Kit) -> Option<El> {
+    let (surf, _) = sr(k);
     let state = s.presence_state();
     let f = &s.conversation.filter;
     let state_label = f
         .state
-        .map_or_else(|| "state: any".to_owned(), |st| format!("state: {}", st.label()));
-    let header = row()
+        .map_or_else(|| "State ▾".to_owned(), |st| format!("State: {} ▾", st.label()));
+    let waiting = s.waiting_count();
+    let mut header = row()
         .key("conv-header")
         .w_full()
-        .px(10.0)
-        .pt(8.0)
+        .h(42.0)
+        .pl(14.0)
+        .pr(8.0)
         .gap(8.0)
         .items_center()
-        .child(text("Conversation").font(k.ty.ui_medium).color(k.c.text_base))
-        .child(
+        .child(text("Conversation").font(TYPE.title).color(k.c.text_base));
+    if waiting > 0 {
+        header = header.child(
             row()
-                .key("conv-presence")
-                .grow(1.0)
-                .shrink()
-                .gap(6.0)
+                .h(18.0)
+                .px(6.0)
                 .items_center()
-                .child(dot(presence_color(state, k), 8.0))
-                .child(text(s.presence_text()).font(k.ty.small).color(k.c.text_muted).truncate()),
-        )
-        .child(
-            Button::new("Close (Esc)")
-                .variant(ButtonVariant::Ghost)
-                .control_size(ControlSize::Small)
-                .on_press(|s: &mut App| {
-                    s.close_overlay(Overlay::Conversation);
-                })
-                .build(k)
-                .key("overlay-conversation-close"),
+                .radius(radius::CHIP)
+                .fill(k.c.warning.bg)
+                .child(text(format!("{waiting} waiting")).font(TYPE.micro).color(k.c.warning.fg)),
         );
+    }
+    header = header.child(el().grow(1.0).a11y_hidden()).child(
+        Ghost::new("overlay-conversation-close")
+            .icon(&icons::CLOSE)
+            .help("Close  Esc")
+            .height(24.0)
+            .build(k)
+            .on_press(|s: &mut App| {
+                s.close_overlay(Overlay::Conversation);
+            }),
+    );
+    let presence = row()
+        .key("conv-presence")
+        .w_full()
+        .px(14.0)
+        .pb(8.0)
+        .gap(6.0)
+        .items_center()
+        .child(dot(presence_color(state, k), 8.0))
+        .child(text(s.presence_text()).font(TYPE.small).color(k.c.text_muted).truncate().shrink());
+    let all = f.is_empty();
     let filters = row()
         .key("conv-filters")
         .w_full()
-        .px(10.0)
-        .pb(6.0)
-        .gap(4.0)
+        .px(14.0)
+        .pb(8.0)
+        .gap(6.0)
         .flex_wrap()
-        .child(filter_chip("waiting", "waiting".into(), f.waiting, k))
-        .child(filter_chip("agent", "agent".into(), f.agent, k))
-        .child(filter_chip("mine", "mine".into(), f.mine, k))
+        .child(
+            k.interactive(
+                row()
+                    .key("conv-filter-all")
+                    .role("button")
+                    .label("All")
+                    .checked(all)
+                    .h(24.0)
+                    .px(10.0)
+                    .items_center()
+                    .radius(12.0)
+                    .border(1.0, if all { surf.strong_line } else { surf.card_border })
+                    .fill(if all { k.c.pressed } else { Color::TRANSPARENT })
+                    .child(
+                        text("All")
+                            .font(TYPE.small)
+                            .color(if all { k.c.text_base } else { k.c.text_muted })
+                            .a11y_hidden(),
+                    ),
+            )
+            .on_press(|s: &mut App| s.conversation.filter = Default::default()),
+        )
+        .child(filter_chip("waiting", "Waiting".into(), f.waiting, k))
+        .child(filter_chip("agent", "Agent".into(), f.agent, k))
+        .child(filter_chip("mine", "Mine".into(), f.mine, k))
         .child(filter_chip("state", state_label, f.state.is_some(), k));
-    let panel = col()
-        .key("overlay-conversation")
-        .role("dialog")
-        .label("Conversation")
-        .w(WIDTH)
-        .h_full()
-        .gap(2.0)
-        .fill(k.c.layer_01)
-        .border(1.0, k.c.border_base)
-        .on_press(|_: &mut App| {})
-        .child(header)
-        .child(filters)
-        .child(el().w_full().h(1.0).fill(k.c.border_base))
-        .child(body(s, k));
-    Some(row().w_full().h_full().justify_end().child(k.elevate(panel, &k.elevation.overlay)))
+    Some(
+        col()
+            .key("overlay-conversation")
+            .role("complementary")
+            .label("Conversation")
+            .w(WIDTH)
+            .h_full()
+            .fill(surf.panel)
+            .on_press(|_: &mut App| {})
+            .child(header)
+            .child(presence)
+            .child(filters)
+            .child(el().w_full().h(1.0).fill(surf.hairline))
+            .child(body(s, k)),
+    )
 }

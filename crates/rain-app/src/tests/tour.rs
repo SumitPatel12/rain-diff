@@ -429,7 +429,7 @@ fn the_tour_scenes_draw_in_both_themes_at_both_sizes() {
                     .find(|e| e.key.as_deref() == Some("overlay-tour"))
                     .unwrap_or_else(|| panic!("{name} {size:?} {dark}"));
                 assert!(rt.find(want).is_some(), "{name}");
-                assert!((card.rect[2] - 360.0).abs() < 1.0, "360 pt: {:?}", card.rect);
+                assert!((card.rect[2] - 440.0).abs() < 1.0, "440 pt: {:?}", card.rect);
                 assert!(card.rect[1] + card.rect[3] <= size.1, "fits: {:?}", card.rect);
                 assert!(
                     card.rect[0] + card.rect[2] >= size.0 - 40.0,

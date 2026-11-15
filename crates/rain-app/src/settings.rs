@@ -132,7 +132,7 @@ impl Default for Settings {
     fn default() -> Settings {
         Settings {
             window: (1440.0, 900.0),
-            sidebar_width: 300.0,
+            sidebar_width: 284.0,
             theme: Theme::System,
             density: Density::Compact,
             layout: ViewLayout::Split,

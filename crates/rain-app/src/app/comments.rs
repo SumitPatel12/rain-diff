@@ -4,7 +4,7 @@
 use rain_comments::ui::mentions_claude;
 use rain_comments::{CardAction, ComposerMode, ops};
 use rain_core::diff::Side;
-use rain_core::{Anchor, Disposition, EventKind, ThreadKind};
+use rain_core::{Anchor, AnchorState, Disposition, EventKind, Thread, ThreadKind};
 use rain_diffview::{Annotation, LineRange, LineRef};
 use rune::{TextEdit, Tx};
 use serde_json::json;
@@ -109,6 +109,38 @@ impl App {
         let g = self.global(lines.file);
         self.reset_composer_ui(ComposerMode::Comment);
         self.open_composer(g, lines.anchor(), String::new(), None, tx);
+    }
+
+    /// The gutter's `?`: the composer in Question mode on `lines`.
+    pub fn ask_on(&mut self, lines: LineRange, tx: &mut Tx) {
+        let g = self.global(lines.file);
+        self.reset_composer_ui(ComposerMode::Question);
+        self.open_composer(g, lines.anchor(), String::new(), None, tx);
+    }
+
+    /// Whether thread `t` sits on a diff line, where folding sends it to the gutter.
+    pub fn folds_to_gutter(&self, t: &Thread) -> bool {
+        !t.is_artifact() && t.placement() != AnchorState::Orphaned && self.file_of_thread(t).is_some()
+    }
+
+    /// Folds `id` (a thread, or `note:<id>`) into the gutter, or unfolds it.
+    pub fn toggle_fold(&mut self, id: &str) {
+        if !self.folded.remove(id) {
+            self.folded.insert(id.to_owned());
+        }
+    }
+
+    pub fn is_folded(&self, id: &str) -> bool {
+        self.folded.contains(id)
+    }
+
+    /// A gutter mark's press: unfolds `id` and focuses its thread.
+    pub fn unfold(&mut self, id: &str) {
+        self.folded.remove(id);
+        if ops::thread(&self.mirror, id).is_some() {
+            self.focused_thread = Some(id.to_owned());
+            self.expanded.insert(id.to_owned());
+        }
     }
 
     pub fn open_composer(&mut self, file: usize, anchor: Anchor, preview: String, edit_of: Option<(String, String)>, tx: &mut Tx) {
@@ -318,12 +350,24 @@ impl App {
         }
         match action {
             CardAction::Hover(_) => {}
+            CardAction::Toggle if ops::thread(&self.mirror, id).is_some_and(|t| self.folds_to_gutter(t)) => {
+                self.toggle_fold(id);
+            }
             CardAction::Toggle => {
                 if !self.expanded.remove(id) {
                     self.expanded.insert(id.to_owned());
                 }
             }
+            CardAction::AskReply => {
+                self.folded.remove(id);
+                self.expanded.insert(id.to_owned());
+                self.reply_to = Some(id.to_owned());
+                self.reply_edit = TextEdit::default();
+                let _ = self.reply_edit.paste("@claude ");
+                self.reply_edit.focused = true;
+            }
             CardAction::OpenReply => {
+                self.folded.remove(id);
                 self.expanded.insert(id.to_owned());
                 self.reply_to = Some(id.to_owned());
                 self.reply_edit = TextEdit::default();

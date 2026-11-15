@@ -4,20 +4,16 @@
 use rain_core::LineKind;
 use rune::{Color, El, Span, TextStyle, Tx, col, el, row, text};
 use rune_kit::syntax::Paint;
-use rune_kit::{Button, ButtonVariant, ControlSize, Kit, Placement, popover};
+use rune_kit::{Kit, Placement, popover};
 
+use super::icons;
+use super::ui::{Ghost, outline, sr};
 use crate::app::{App, PeekContent};
-use crate::theme::Look;
+use crate::theme::{Look, TYPE, radius};
 
-const WIDTH: f32 = 640.0;
+const WIDTH: f32 = 660.0;
 const MAX_HEIGHT: f32 = 420.0;
 const ROW_H: f32 = 20.0;
-
-/// `t` of the way from `base` toward `hue` in OKLab, at `base`'s alpha, as the diff tints.
-fn tint(base: Color, hue: Color, t: f32) -> Color {
-    let [a, b] = [base.to_oklab(), hue.to_oklab()];
-    Color::from_oklab([0, 1, 2, 3].map(|i| if i == 3 { a[3] } else { a[i] + (b[i] - a[i]) * t }))
-}
 
 struct Tints {
     line: Color,
@@ -26,41 +22,19 @@ struct Tints {
     sign: Color,
 }
 
-/// `t` of the way from `a` to `b` in sRGB, as the diff mixes a theme's own line fills.
-fn srgb_mix(a: Color, b: Color, t: f32) -> Color {
-    use rune::color::{srgb_decode, srgb_encode};
-    let m = |x: f32, y: f32| srgb_decode(srgb_encode(x) + (srgb_encode(y) - srgb_encode(x)) * t);
-    Color {
-        r: m(a.r, b.r),
-        g: m(a.g, b.g),
-        b: m(a.b, b.b),
-        a: a.a,
-    }
-}
-
+/// The diff's fills for a changed line, from the scheme's roles.
 fn tints(look: &Look, kind: LineKind) -> Option<Tints> {
-    let k = &look.kit;
-    let fills = look.scheme.change_fills();
-    let (hue, fill) = match kind {
-        LineKind::Added => (k.c.success.icon, fills.map(|f| f.0)),
-        LineKind::Removed => (k.c.danger.icon, fills.map(|f| f.1)),
+    let (k, r) = (&look.kit, &look.r);
+    let (line, word, sign) = match kind {
+        LineKind::Added => (r.add_bg, r.add_word, k.c.success.fg),
+        LineKind::Removed => (r.del_bg, r.del_word, k.c.danger.fg),
         LineKind::Context => return None,
     };
-    if let Some(line) = fill {
-        return Some(Tints {
-            line,
-            gutter: srgb_mix(line, hue, 0.12),
-            word: srgb_mix(line, hue, 0.25),
-            sign: hue,
-        });
-    }
-    let bg = k.c.bg_base;
-    let d = k.dark;
     Some(Tints {
-        line: tint(bg, hue, if d { 0.13 } else { 0.1 }),
-        gutter: tint(bg, hue, if d { 0.2 } else { 0.17 }),
-        word: tint(bg, hue, if d { 0.32 } else { 0.27 }),
-        sign: hue,
+        line,
+        gutter: line,
+        word,
+        sign,
     })
 }
 
@@ -76,6 +50,11 @@ fn code_font(k: &Kit) -> TextStyle {
 pub(crate) fn code(c: &PeekContent, look: &Look) -> El {
     let k = &look.kit;
     let font = code_font(k);
+    let num_font = TextStyle {
+        size: 12.0,
+        line_height: ROW_H,
+        ..k.ty.mono
+    };
     let joined = c.rows.iter().map(|r| r.text.as_str()).collect::<Vec<_>>().join("\n");
     let palette = look.scheme.syntax();
     let highlights = rain_syntax::highlight(palette, c.lang.as_deref(), &joined);
@@ -99,7 +78,7 @@ pub(crate) fn code(c: &PeekContent, look: &Look) -> El {
                     .w_full()
                     .pl(12.0)
                     .items_center()
-                    .fill(tint(k.c.bg_base, k.c.info.icon, if k.dark { 0.08 } else { 0.05 }))
+                    .fill(look.s.well)
                     .child(text("⋯").font(k.ty.small).color(k.c.text_faint)),
             );
         }
@@ -120,37 +99,35 @@ pub(crate) fn code(c: &PeekContent, look: &Look) -> El {
                 spans.push(Span::new(w.start.min(r.text.len()), w.end.min(r.text.len())).bg(t.word, 2.0));
             }
         }
-        let n = if r.new != 0 { r.new } else { r.old };
         let (sign, sign_color) = match r.kind {
             LineKind::Added => ("+", t.as_ref().map_or(k.c.text_faint, |t| t.sign)),
             LineKind::Removed => ("−", t.as_ref().map_or(k.c.text_faint, |t| t.sign)),
             LineKind::Context => (" ", k.c.text_faint),
         };
+        let ink = if r.cited { k.c.text_base } else { k.c.text_faint };
+        let number = |n: u32| {
+            row()
+                .w(38.0)
+                .h_full()
+                .pr(8.0)
+                .justify_end()
+                .items_center()
+                .child(text(if n == 0 { String::new() } else { n.to_string() }).font(num_font).color(ink))
+        };
         let gutter = row()
-            .w(56.0)
             .h_full()
-            .pr(8.0)
-            .justify_end()
-            .items_center()
             .fill(t.as_ref().map_or(k.c.bg_base, |t| t.gutter))
-            .child(
-                text(n.to_string())
-                    .font(font)
-                    .color(if r.cited { k.c.text_base } else { k.c.text_faint }),
-            );
+            .child(el().w(14.0).a11y_hidden())
+            .child(number(r.old))
+            .child(number(r.new));
         out = out.child(
             row()
                 .key(format!("peek-row-{i}"))
                 .w_full()
                 .h(ROW_H)
                 .fill(t.as_ref().map_or(k.c.bg_base, |t| t.line))
-                .child(
-                    el().w(3.0)
-                        .h_full()
-                        .fill(if r.cited { k.c.text_accent } else { Color::TRANSPARENT }),
-                )
                 .child(gutter)
-                .child(text(sign).font(font).color(sign_color).w(18.0).pl(6.0))
+                .child(text(sign).font(font).color(sign_color).w(18.0).pl(4.0))
                 .child(
                     text(r.text.replace('\t', "    ").clone())
                         .font(font)
@@ -166,38 +143,94 @@ pub(crate) fn code(c: &PeekContent, look: &Look) -> El {
     out
 }
 
-/// The card's head: where the lines are, then Open in reader, Pop out and close.
-fn head(c: &PeekContent, k: &Kit) -> El {
-    let small = |label: &str, key: &str, f: fn(&mut App, &mut Tx)| {
-        Button::new(label)
-            .variant(ButtonVariant::Ghost)
-            .control_size(ControlSize::Small)
-            .on_press_tx(f)
-            .build(k)
-            .key(key.to_owned())
+/// `server · src/Services/VoucherService.cs :25-33`: the folder muted, the name strong.
+fn place(c: &PeekContent, k: &Kit) -> El {
+    let (path, lines) = c.title.rsplit_once(':').map_or((c.title.as_str(), ""), |(p, l)| (p, l));
+    let full = if c.key.ends_with(path) { c.key.as_str() } else { path };
+    let (dir, name) = full.rsplit_once('/').map_or(("", full), |(d, n)| (d, n));
+    let dir = if dir.is_empty() {
+        String::new()
+    } else {
+        format!("{}/", dir.replacen('/', " · ", 1))
     };
+    row()
+        .key("peek-place")
+        .label(c.key.clone())
+        .gap(0.0)
+        .items_center()
+        .shrink()
+        .min_w(0.0)
+        .child(text(dir).font(TYPE.small).color(k.c.text_muted).truncate_head().shrink().min_w(0.0))
+        .child(text(name.to_owned()).font(TYPE.label).color(k.c.text_base))
+        .child(
+            text(if lines.is_empty() { String::new() } else { format!(" :{lines}") })
+                .font(TYPE.micro_mono)
+                .color(k.c.text_faint),
+        )
+}
+
+/// The card's head: where the lines are, and close.
+fn head(c: &PeekContent, k: &Kit) -> El {
     row()
         .key("peek-head")
         .w_full()
-        .px(12.0)
-        .py(6.0)
-        .gap(6.0)
+        .h(34.0)
+        .pl(12.0)
+        .pr(6.0)
+        .gap(8.0)
         .items_center()
-        .fill(k.c.layer_01)
+        .child(icons::draw(&icons::FILE, 14.0, k.c.text_muted))
+        .child(place(c, k).grow(1.0))
         .child(
-            text(c.title.clone())
-                .font(k.ty.ui_medium)
-                .color(k.c.text_base)
-                .truncate()
-                .shrink()
-                .grow(1.0)
-                .label(c.key.clone()),
+            Ghost::new("peek-close")
+                .icon(&icons::CLOSE)
+                .help("Close  Esc")
+                .height(24.0)
+                .build(k)
+                .on_press(|s: &mut App| {
+                    s.close_peek();
+                }),
         )
-        .child(small("Open in reader  ↵", "peek-open", |s, tx| s.peek_jump(tx)))
-        .child(small("Pop out", "peek-popout", |s, _| s.pop_out_peek()))
-        .child(small("×", "peek-close", |s, _| {
-            s.close_peek();
-        }))
+}
+
+/// The card's foot: Open in reader, Pop out, and the keys.
+fn foot(k: &Kit) -> El {
+    let (surf, r) = sr(k);
+    row()
+        .key("peek-foot")
+        .w_full()
+        .h(38.0)
+        .px(12.0)
+        .gap(8.0)
+        .items_center()
+        .fill(surf.card_head)
+        .child(
+            k.interactive_with(
+                row()
+                    .key("peek-open")
+                    .role("button")
+                    .label("Open in reader")
+                    .h(24.0)
+                    .px(8.0)
+                    .gap(6.0)
+                    .center()
+                    .radius(radius::SMALL)
+                    .fill(r.accent)
+                    .cursor(rune::Cursor::Pointer)
+                    .child(text("Open in reader").font(TYPE.small).color(r.on_accent).a11y_hidden())
+                    .child(text("↵").font(TYPE.micro).color(r.on_accent).a11y_hidden()),
+                k.c.contrast_hover,
+                k.c.contrast_pressed,
+            )
+            .on_press_tx(|s: &mut App, tx: &mut Tx| s.peek_jump(tx)),
+        )
+        .child(
+            outline("peek-popout", "Pop out", None, 24.0, k)
+                .child(icons::draw(&icons::POPOUT, 14.0, k.c.text_muted))
+                .on_press(|s: &mut App| s.pop_out_peek()),
+        )
+        .child(el().grow(1.0).a11y_hidden())
+        .child(text("Space on a chip peeks · Enter jumps").font(TYPE.small).color(k.c.text_faint))
 }
 
 /// The open peek, hung under its anchor; `None` when closed.
@@ -213,12 +246,14 @@ pub(super) fn layer(s: &App, look: &Look) -> Option<El> {
         .w(width)
         .max_h(MAX_HEIGHT)
         .min_h(0.0)
-        .clip_rounded(k.radius.xl)
+        .clip_rounded(radius::CARD)
         .on_press(|_: &mut App| {})
         .on_hover_change(|s: &mut App, inside, tx: &mut Tx| s.peek_card_hover(inside, tx))
         .child(head(&c, k))
         .child(el().w_full().h(1.0).fill(k.c.border_weak))
-        .child(col().w_full().min_h(0.0).shrink().child(popover::fit_scroll(code(&c, look))));
-    let surface = popover::raised(k, card, k.radius.xl);
+        .child(col().w_full().min_h(0.0).shrink().child(popover::fit_scroll(code(&c, look))))
+        .child(el().w_full().h(1.0).fill(k.c.border_weak))
+        .child(foot(k));
+    let surface = popover::raised(k, card, radius::CARD);
     Some(popover::anchored(k, surface, &t.anchor, Placement::BottomStart, 6.0))
 }

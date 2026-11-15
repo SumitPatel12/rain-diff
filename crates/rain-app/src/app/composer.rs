@@ -35,6 +35,8 @@ pub struct ComposerUi {
     pub mode: ComposerMode,
     pub kind: ThreadKind,
     pub blocking: bool,
+    /// The kind dropdown's list is open.
+    pub kind_menu: bool,
     /// The long editor (`⤢`) is open in its floating window.
     pub long: bool,
     pub long_at: Option<(f32, f32)>,
@@ -177,6 +179,7 @@ impl App {
 
     pub fn set_composer_kind(&mut self, k: ThreadKind) {
         self.composer_ui.kind = k;
+        self.composer_ui.kind_menu = false;
         if k != ThreadKind::Issue {
             self.composer_ui.blocking = false;
         }

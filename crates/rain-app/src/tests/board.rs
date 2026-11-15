@@ -309,7 +309,7 @@ fn the_status_bar_follows_a_picker_jump_from_a_line_in_another_file() {
         .elements()
         .into_iter()
         .find(|e| e.key.as_deref() == Some("status-hints"))
-        .and_then(|e| e.text)
+        .and_then(|e| e.label)
         .unwrap_or_default();
     assert!(shown.starts_with(&want), "{shown:?} should start with {want:?}");
 }
@@ -411,7 +411,7 @@ fn text_of(rt: &Runtime<App>, key: &str) -> String {
     rt.elements()
         .into_iter()
         .find(|e| e.key.as_deref() == Some(key))
-        .and_then(|e| e.text)
+        .and_then(|e| e.text.or(e.label))
         .unwrap_or_default()
 }
 

@@ -1,5 +1,5 @@
-//! The token layer: the surfaces of every scheme, the kits built from them, the shell they
-//! draw and the `⋯` menu's Appearance picks.
+//! The token layer: the roles of every scheme, the kits built from them, the islands the shell
+//! draws and the `⋯` menu's Appearance picks.
 
 use rain_core::command::Command;
 use rune::Color;
@@ -17,10 +17,12 @@ fn contrast(a: Color, b: Color) -> f32 {
     (la.max(lb) + 0.05) / (la.min(lb) + 0.05)
 }
 
-/// Rain's Everforest dark: every hex of the medium palette, and the hard variant's `bg_dim`.
-const EVERFOREST: [&str; 24] = [
-    "#1e2326", "#232a2e", "#2d353b", "#343f44", "#3d484d", "#475258", "#4f585e", "#56635f", "#543a48", "#514045", "#425047", "#3a515d",
-    "#4d4c43", "#d3c6aa", "#e67e80", "#e69875", "#dbbc7f", "#a7c080", "#83c092", "#7fbbb3", "#d699b6", "#7a8478", "#859289", "#9da9a0",
+/// The redesign's role set (round 1b `kit.css`), which Everforest paints with.
+const D1: [&str; 44] = [
+    "#13171a", "#21282c", "#1b2023", "#242b2f", "#283035", "#161a1d", "#2c3438", "#384246", "#4f585e", "#2d3a2f", "#d3c6aa", "#9da9a0",
+    "#737d78", "#7fbbb3", "#a7c080", "#1a2016", "#283126", "#45533a", "#dbbc7f", "#332e23", "#5a4e34", "#e67e80", "#37292b", "#643f42",
+    "#22302e", "#3b5450", "#d699b6", "#2a2330", "#46374f", "#212a20", "#2d2325", "#384a2e", "#553538", "#171b1d", "#252d30", "#543a48",
+    "#5a4e2a", "#8a7438", "#e69875", "#83c092", "#859289", "#a59c86", "#060809", "#000000",
 ];
 
 /// morhetz/gruvbox's dark backgrounds, light foregrounds and bright accents.
@@ -30,45 +32,11 @@ const GRUVBOX: [&str; 20] = [
 ];
 
 #[test]
-fn every_scheme_gives_the_design_table() {
-    // bar, panel, reader, card_head, well, hairline, card_border, strong_line
-    let table = [
-        (
-            Scheme::Dark,
-            [
-                "#2b2d32", "#232529", "#1c1d20", "#232529", "#18191c", "#3a3d44", "#464950", "#464950",
-            ],
-        ),
-        (
-            Scheme::Light,
-            [
-                "#e3e4e7", "#eeeff1", "#fbfbfc", "#f1f2f4", "#f4f5f7", "#d4d6db", "#c4c6cb", "#c4c6cb",
-            ],
-        ),
-        (
-            Scheme::Everforest,
-            [
-                "#1e2326", "#343f44", "#2d353b", "#343f44", "#2d353b", "#475258", "#4f585e", "#4f585e",
-            ],
-        ),
-        (
-            Scheme::GruvboxHard,
-            [
-                "#32302f", "#282828", "#1d2021", "#282828", "#1d2021", "#504945", "#665c54", "#7c6f64",
-            ],
-        ),
-        (
-            Scheme::GruvboxMedium,
-            [
-                "#3c3836", "#32302f", "#282828", "#32302f", "#1d2021", "#504945", "#665c54", "#7c6f64",
-            ],
-        ),
-    ];
-    assert_eq!(table.map(|(s, _)| s), Scheme::ALL, "one row per scheme");
-    for (scheme, want) in table {
-        let l = look(scheme);
-        let s = l.s;
-        let got = [
+fn everforest_is_the_redesign_role_set() {
+    let l = look(Scheme::Everforest);
+    let (s, r) = (l.s, l.r);
+    assert_eq!(
+        [
             s.bar,
             s.panel,
             s.reader,
@@ -77,9 +45,61 @@ fn every_scheme_gives_the_design_table() {
             s.hairline,
             s.card_border,
             s.strong_line,
+            s.selected_row
         ]
-        .map(hex);
-        assert_eq!(got, want, "{scheme:?}");
+        .map(hex),
+        [
+            "#13171a", "#21282c", "#1b2023", "#242b2f", "#161a1d", "#2c3438", "#384246", "#4f585e", "#2d3a2f"
+        ]
+    );
+    assert_eq!(
+        [r.raised, r.focus, r.must, r.accent, r.on_accent, r.note, r.note_bg, r.note_border].map(hex),
+        [
+            "#283035", "#a7c080", "#e67e80", "#a7c080", "#1a2016", "#d699b6", "#2a2330", "#46374f"
+        ]
+    );
+    assert_eq!(
+        [
+            r.add_bg,
+            r.del_bg,
+            r.add_word,
+            r.del_word,
+            r.filler,
+            r.cursor_line,
+            r.selection,
+            r.find_hit,
+            r.find_current
+        ]
+        .map(hex),
+        [
+            "#212a20", "#2d2325", "#384a2e", "#553538", "#171b1d", "#252d30", "#543a48", "#5a4e2a", "#8a7438"
+        ]
+    );
+    let c = &l.kit.c;
+    assert_eq!(
+        [c.text_base, c.text_muted, c.text_faint, c.text_accent, c.bg_accent].map(hex),
+        ["#d3c6aa", "#9da9a0", "#737d78", "#7fbbb3", "#a7c080"]
+    );
+    assert_eq!(
+        [c.success, c.warning, c.danger, c.info].map(|st| [st.fg, st.bg, st.border].map(hex)),
+        [
+            ["#a7c080", "#283126", "#45533a"],
+            ["#dbbc7f", "#332e23", "#5a4e34"],
+            ["#e67e80", "#37292b", "#643f42"],
+            ["#7fbbb3", "#22302e", "#3b5450"],
+        ]
+    );
+    for t in rain_syntax::Token::ALL {
+        let h = hex(Scheme::Everforest.syntax().color(t));
+        assert!(D1.contains(&h.as_str()) || h == "#d3c6aa", "{t:?} {h}");
+    }
+}
+
+#[test]
+fn every_scheme_gives_every_role_and_reads() {
+    for scheme in Scheme::ALL {
+        let l = look(scheme);
+        let s = l.s;
         assert_eq!((l.scheme, l.dark), (scheme, scheme != Scheme::Light));
         assert_eq!(l.kit.dark, l.dark);
         assert_eq!(scheme_of(&l.kit), scheme, "a kit tells its scheme");
@@ -89,14 +109,14 @@ fn every_scheme_gives_the_design_table() {
             [c.border_weak, c.border_base, c.border_strong],
             [s.hairline, s.card_border, s.strong_line]
         );
-        assert!(s.selected_row.a > 0.0 && s.selected_row.a < 1.0, "selection is an accent tint");
-        assert_eq!((l.kit.radius.md, l.kit.radius.lg, l.kit.radius.xl), (4.0, 6.0, 8.0));
-        assert_eq!(l.shell.radius.lg, 0.0, "no rounded regions");
-        assert_eq!(l.shell.c.border_muted, s.hairline, "regions meet at hairlines");
-        let line = contrast(s.hairline, s.panel);
-        assert!(line >= 1.25, "a hairline reads against the panel: {line:.3} ({scheme:?})");
+        assert_eq!(
+            (l.kit.radius.xs, l.kit.radius.sm, l.kit.radius.md, l.kit.radius.lg, l.kit.radius.xl),
+            (2.0, 3.0, 4.0, 6.0, 8.0)
+        );
+        let lift = contrast(s.panel, s.bar);
+        assert!(lift >= 1.1, "islands lift off the ground: {lift:.3} ({scheme:?})");
         for (name, surface) in [
-            ("bar", s.bar),
+            ("ground", s.bar),
             ("panel", s.panel),
             ("reader", s.reader),
             ("card head", s.card_head),
@@ -105,13 +125,18 @@ fn every_scheme_gives_the_design_table() {
             let text = contrast(c.text_base, surface);
             assert!(text >= 4.5, "body text on the {name}: {text:.2} ({scheme:?})");
         }
+        let r = l.r;
+        for (name, fill) in [("added", r.add_bg), ("removed", r.del_bg)] {
+            let text = contrast(c.text_base, fill);
+            assert!(text >= 4.5, "code on {name} lines: {text:.2} ({scheme:?})");
+        }
     }
 }
 
 #[test]
 fn palette_schemes_paint_only_their_palettes_hexes() {
     for (scheme, palette) in [
-        (Scheme::Everforest, &EVERFOREST[..]),
+        (Scheme::Everforest, &D1[..]),
         (Scheme::GruvboxHard, &GRUVBOX[..]),
         (Scheme::GruvboxMedium, &GRUVBOX[..]),
     ] {
@@ -157,26 +182,6 @@ fn palette_schemes_paint_only_their_palettes_hexes() {
             s.card_border,
             s.strong_line,
         ]);
-        let d = scheme.diagram();
-        opaque.extend([
-            d.background,
-            d.card,
-            d.card_border,
-            d.foreground,
-            d.muted,
-            d.added,
-            d.modified,
-            d.removed,
-            d.thread,
-        ]);
-        if let Some((add, del)) = scheme.change_fills() {
-            opaque.extend([add, del]);
-        }
-        opaque.extend(scheme.selection());
-        opaque.push(scheme.note_purples().0);
-        for t in rain_syntax::Token::ALL {
-            opaque.push(scheme.syntax().color(t));
-        }
         for col in opaque {
             assert!(
                 palette.contains(&hex(col).as_str()),
@@ -186,14 +191,6 @@ fn palette_schemes_paint_only_their_palettes_hexes() {
         }
         assert!(l.kit.ring.is_some(), "rings follow the palette's border");
     }
-    let ef = look(Scheme::Everforest);
-    assert_eq!(hex(ef.kit.c.success.bg), "#425047", "Everforest's own tints");
-    assert_eq!(
-        Scheme::Everforest.change_fills().map(|(a, d)| (hex(a), hex(d))),
-        Some(("#425047".into(), "#514045".into()))
-    );
-    assert_eq!(Scheme::Everforest.selection().map(hex).as_deref(), Some("#543a48"));
-    assert_eq!(Scheme::Dark.change_fills(), None, "dark and light keep the kit's tints");
 }
 
 #[test]
@@ -208,7 +205,7 @@ fn the_more_menu_switches_theme_and_density() {
     let open_themes = |rt: &mut Runtime<App>| {
         rt.update(|s, _| {
             s.menus.more = true;
-            s.menus.more_sub = Some(crate::app::MoreSub::Theme);
+            s.menus.more_sub = Some(crate::app::MoreSub::Appearance);
         });
         settle(rt);
     };
@@ -224,8 +221,8 @@ fn the_more_menu_switches_theme_and_density() {
     };
     let item = |rt: &Runtime<App>, label: &str| *items(rt, label).first().unwrap_or_else(|| panic!("no menu item {label}"));
     assert!(items(&rt, "Chrome").is_empty(), "Appearance has no chrome pick");
-    let theme = item(&rt, "Theme");
-    tap(&mut rt, theme);
+    let appearance = item(&rt, "Appearance");
+    tap(&mut rt, appearance);
     for label in ["System", "Light", "Dark", "Everforest", "Gruvbox Dark Hard", "Gruvbox Dark Medium"] {
         assert_eq!(items(&rt, label).len(), 1, "the Theme menu lists {label}");
     }
@@ -249,7 +246,7 @@ fn the_more_menu_switches_theme_and_density() {
     }
     rt.update(|s, _| {
         s.menus.more = true;
-        s.menus.more_sub = Some(crate::app::MoreSub::Density);
+        s.menus.more_sub = Some(crate::app::MoreSub::Appearance);
     });
     settle(&mut rt);
     let roomy = item(&rt, "Comfortable");
@@ -304,7 +301,7 @@ fn the_theme_flag_picks_rains_own_schemes_only() {
 }
 
 #[test]
-fn the_shell_draws_hairlines() {
+fn the_shell_draws_islands_on_the_ground() {
     for scheme in Scheme::ALL {
         let mut a = app(story(), true);
         shell_scene("files")(&mut a);
@@ -319,37 +316,59 @@ fn the_shell_draws_hairlines() {
         rt.frame(0.0);
         settle(&mut rt);
         let l = look(scheme);
-        let main = rt.elements().into_iter().find(|e| e.key.as_deref() == Some("main-pane")).unwrap();
-        let side = rt.find("side-panel").unwrap();
-        assert_eq!(main.radius, 0.0);
-        assert!(main.rect[0] >= side.0, "the reader meets the list edge to edge");
-        let app = rt.elements().into_iter().find(|e| e.key.as_deref() == Some("app")).unwrap();
-        assert_eq!(app.fill, l.s.bar, "{scheme:?}");
-        let line = |rt: &Runtime<App>, key: &str| {
+        let el = |rt: &Runtime<App>, key: &str| {
             rt.elements()
                 .into_iter()
-                .find(|e| e.key.as_deref() == Some(key))
-                .map(|e| (e.rect, e.fill))
+                .find(|e| e.key.as_deref() == Some(key) && !e.exiting)
+                .unwrap_or_else(|| panic!("no {key}"))
         };
-        let (side_line, fill) = line(&rt, "reader-side-line").expect("a hairline between list and reader");
-        assert_eq!(fill, l.s.hairline);
-        assert_eq!(side_line[2], 1.0);
-        assert!(side_line[3] > 500.0, "full height: {side_line:?}");
-        let (top, _) = line(&rt, "reader-top-line").expect("the bar's line over the reader");
-        assert!(top[2] > 1000.0, "across the reader: {top:?}");
-        let (status, fill) = line(&rt, "status-line").expect("a hairline over the status bar");
-        assert_eq!(fill, l.s.hairline);
+        let app = el(&rt, "app");
+        assert_eq!(app.fill, l.s.bar, "{scheme:?}");
+        let (list, reader) = (el(&rt, "side-panel"), el(&rt, "main"));
+        assert_eq!((list.radius, reader.radius), (10.0, 10.0), "rounded islands");
+        assert_eq!(list.fill, l.s.panel);
+        assert_eq!(reader.fill, l.s.reader);
+        let gap = reader.rect[0] - (list.rect[0] + list.rect[2]);
+        assert_eq!(gap, 8.0, "an 8 point gap, which resizes the list");
+        assert_eq!(list.rect[0], 8.0, "the ground shows around the islands");
+        let top = el(&rt, "toolbar");
+        assert_eq!(top.rect[3], 44.0);
+        let status = el(&rt, "status-line");
+        assert_eq!(status.rect[3], 30.0);
+        assert_eq!(status.fill, l.s.bar);
         assert!(
-            status[2] >= 1919.0 && status[1] > 1000.0,
-            "the full width at the bottom: {status:?}"
+            el(&rt, "tab-strip").fill == l.s.well,
+            "the Overview/Changes switch sits on the well"
         );
         assert!(
-            rt.elements()
-                .iter()
-                .any(|e| e.key.as_deref() == Some("tab-strip") && e.fill == l.s.panel)
+            rt.elements().iter().any(|e| e.fill == l.r.add_bg),
+            "added lines in {scheme:?}'s own fill"
         );
-        if let Some((add, _)) = scheme.change_fills() {
-            assert!(rt.elements().iter().any(|e| e.fill == add), "added lines in {scheme:?}'s own fill");
-        }
     }
+}
+
+#[test]
+fn dragging_the_gap_resizes_the_list_within_its_range() {
+    let mut rt = sized_runtime(app(story(), true), (1600.0, 1000.0));
+    let grip = rt.find("list-grip").expect("the gap between the islands");
+    let drag = |rt: &mut Runtime<App>, from: (f32, f32), dx: f32| {
+        rt.pointer_move(from.0, from.1);
+        rt.pointer_down(from.0, from.1);
+        rt.pointer_move(from.0 + dx / 2.0, from.1);
+        rt.pointer_move(from.0 + dx, from.1);
+        rt.pointer_up(from.0 + dx, from.1);
+        settle(rt);
+    };
+    let before = rt.state.sidebar.width();
+    drag(&mut rt, grip, 60.0);
+    assert_eq!(rt.state.sidebar.width(), before + 60.0);
+    let grip = rt.find("list-grip").unwrap();
+    drag(&mut rt, grip, 600.0);
+    assert_eq!(rt.state.sidebar.width(), 520.0, "at most 520");
+    let grip = rt.find("list-grip").unwrap();
+    drag(&mut rt, grip, -280.0);
+    assert_eq!(rt.state.sidebar.width(), 240.0);
+    let grip = rt.find("list-grip").unwrap();
+    drag(&mut rt, grip, -30.0);
+    assert_eq!(rt.state.sidebar.width(), 220.0, "at least 220");
 }

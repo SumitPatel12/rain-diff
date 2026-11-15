@@ -107,30 +107,31 @@ impl Mark {
         }
     }
 
-    /// `[x0, y0, x1, y1]` on the strip: hunks on the left half, file starts across, the rest
-    /// on the right half.
+    /// `[x0, y0, x1, y1]` on the strip: file starts across it, every other mark inset 3.
     pub fn rect(&self) -> [f32; 4] {
-        let half = RULER_W / 2.0;
         let (x0, x1) = match self.kind {
-            MarkKind::Hunk { .. } => (2.0, half),
-            MarkKind::File => (0.0, RULER_W),
-            _ => (half + 1.0, RULER_W - 1.0),
+            MarkKind::File => (1.0, RULER_W),
+            _ => (3.0, RULER_W - 3.0),
         };
         [x0, self.y, x1, self.y + self.h]
     }
 
-    /// Drawn as an outline rather than filled: a thread that isn't waiting on the user.
+    /// Drawn as an outline rather than filled (none are, in the redesign).
     pub fn outlined(&self) -> bool {
-        self.kind == MarkKind::Comment { waiting: false }
+        false
     }
 
+    /// Hunks green or red by what they mostly do, file starts the strong line, threads info,
+    /// waiting ones warning, notes the note colour, find hits the current hit's.
     pub fn color(&self, k: &Kit, note: Color) -> Color {
         match self.kind {
-            MarkKind::Hunk { added } => k.c.danger.icon.mix(k.c.success.icon, added).alpha(0.55),
+            MarkKind::Hunk { added } if added >= 0.5 => k.c.success.fg,
+            MarkKind::Hunk { .. } => k.c.danger.fg,
             MarkKind::File => k.c.border_strong,
-            MarkKind::Comment { .. } => k.c.warning.icon,
+            MarkKind::Comment { waiting: true } => k.c.warning.fg,
+            MarkKind::Comment { waiting: false } => k.c.info.fg,
             MarkKind::Note => note,
-            MarkKind::Find => k.c.info.icon,
+            MarkKind::Find => crate::theme::roles_of(k).find_current,
         }
     }
 }

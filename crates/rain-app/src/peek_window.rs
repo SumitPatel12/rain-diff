@@ -76,26 +76,29 @@ pub fn view(w: &PeekWindow, cx: &mut Cx<PeekWindow>) -> El {
                 .padding(24.0),
         );
     };
+    let (dir, name) = c.key.rsplit_once('/').map_or(("", c.key.as_str()), |(d, n)| (d, n));
+    let dir = if dir.is_empty() {
+        String::new()
+    } else {
+        format!("{}/", dir.replacen('/', " · ", 1))
+    };
     root = root
         .child(
             row()
                 .key("peek-window-head")
                 .w_full()
-                .px(16.0)
-                .py(10.0)
-                .gap(12.0)
+                .h(32.0)
+                .px(12.0)
                 .items_center()
-                .fill(look.s.card_head)
+                .label(c.title.clone())
                 .child(
-                    text(c.title.clone())
-                        .font(k.ty.ui_medium)
-                        .color(k.c.text_base)
-                        .truncate()
-                        .shrink()
-                        .grow(1.0),
+                    text(dir)
+                        .font(crate::theme::TYPE.small)
+                        .color(k.c.text_muted)
+                        .truncate_head()
+                        .shrink(),
                 )
-                .child(text(c.key.clone()).font(k.ty.small).color(k.c.text_muted).truncate().shrink())
-                .child(text("Esc closes").font(k.ty.small).color(k.c.text_faint)),
+                .child(text(name.to_owned()).font(crate::theme::TYPE.label).color(k.c.text_base)),
         )
         .child(rune::el().w_full().h(1.0).fill(look.s.hairline));
     root.child(
@@ -106,6 +109,18 @@ pub fn view(w: &PeekWindow, cx: &mut Cx<PeekWindow>) -> El {
             .min_h(0.0)
             .scroll(rune::ScrollSpec { stick_bottom: false })
             .child(crate::view::peek_code(c, &look)),
+    )
+    .child(rune::el().w_full().h(1.0).fill(look.s.hairline))
+    .child(
+        row()
+            .key("peek-window-foot")
+            .w_full()
+            .h(42.0)
+            .px(14.0)
+            .items_center()
+            .fill(look.s.card_head)
+            .child(rune::el().grow(1.0).a11y_hidden())
+            .child(text("Esc closes").font(crate::theme::TYPE.small).color(k.c.text_faint)),
     )
 }
 

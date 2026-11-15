@@ -77,7 +77,7 @@ fn story_file_and_line_notes_render_where_they_belong() {
     settle(&mut rt);
     let story = live(&rt, &format!("note-{}", ids[0])).expect("story card on the Overview");
     assert!(story.path.contains("overview"), "{}", story.path);
-    assert_eq!(story.label.as_deref(), Some("Note from claude"));
+    assert_eq!(story.label.as_deref(), Some("Note"));
 
     goto(&mut rt, VOUCHER, None);
     let file = live(&rt, &format!("note-{}", ids[1])).expect("file card");
@@ -95,7 +95,7 @@ fn overview_intent_notes_still_render_inline_with_their_label() {
     let mut rt = runtime(app(story(), true));
     goto(&mut rt, "server/src/Api/VouchersController.cs", Some(22));
     let n = live(&rt, "note-overview:record-before-refresh").expect("intent note row");
-    assert_eq!(n.label.as_deref(), Some("Intent note"));
+    assert_eq!(n.label.as_deref(), Some("Intent"));
     assert!(rt.state.mirror.notes.is_empty(), "overview notes are never stored");
 }
 

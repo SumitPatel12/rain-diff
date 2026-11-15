@@ -38,7 +38,7 @@ fn question_mark_opens_question_mode_without_a_type_picker() {
     assert!(rt.state.composer.is_some());
     assert_eq!(rt.state.composer_ui.mode, ComposerMode::Question);
     assert!(live(&rt, "question-hint"));
-    assert!(!live(&rt, "kind-issue"), "no type picker in Question mode");
+    assert!(!live(&rt, "kind-menu"), "no type picker in Question mode");
     assert!(live(&rt, "mode-tabs"));
 }
 
@@ -48,7 +48,8 @@ fn c_opens_comment_mode_defaulting_to_comment() {
     typed(&mut rt, "c");
     assert_eq!(rt.state.composer_ui.mode, ComposerMode::Comment);
     assert_eq!(rt.state.composer_ui.kind, ThreadKind::Comment);
-    assert!(live(&rt, "kind-comment"), "the type picker");
+    assert!(live(&rt, "kind-menu"), "the type picker");
+    click(&mut rt, "kind-menu");
     click(&mut rt, "kind-issue");
     click(&mut rt, "blocking");
     rt.update(|s, _| s.composer_edit.focused = true);
@@ -194,7 +195,7 @@ fn suggestion_prefills_the_anchored_code_and_reads_back_as_a_diff() {
 }
 
 #[test]
-fn card_actions_show_only_on_the_focused_card() {
+fn an_open_card_shows_its_actions_and_folds_into_the_gutter() {
     let mut a = app(story(), true);
     seed_threads(&mut a);
     let id = a.mirror.threads[0].id.clone();
@@ -205,11 +206,23 @@ fn card_actions_show_only_on_the_focused_card() {
     });
     rt.update(|s, _| s.focused_thread = None);
     settle(&mut rt);
-    assert!(!live(&rt, "disp-agree"), "idle cards show no actions");
-    rt.update(move |s, _| s.focused_thread = Some(id.clone()));
+    for key in ["reply-btn", "ask-btn", "resolve-btn", "disp-agree", "disp-dismiss", "disp-defer"] {
+        assert!(live(&rt, key), "an open card shows {key}");
+    }
+    rt.update({
+        let id = id.clone();
+        move |s, tx| s.card_action(&id, rain_comments::CardAction::Toggle, tx)
+    });
     settle(&mut rt);
-    assert!(live(&rt, "disp-agree"));
-    assert!(live(&rt, "disp-dismiss"));
+    assert!(rt.state.is_folded(&id), "Enter folds a diff thread into the gutter");
+    assert!(!live(&rt, &format!("thread-{id}")), "its card leaves the diff");
+    assert!(live(&rt, "gm"), "a badge marks it in the gutter");
+    let (x, y) = rt.find("gm").unwrap();
+    rt.pointer_down(x, y);
+    rt.pointer_up(x, y);
+    settle(&mut rt);
+    assert!(!rt.state.is_folded(&id), "pressing the badge unfolds it");
+    assert!(live(&rt, &format!("thread-{id}")));
 }
 
 #[test]
@@ -233,7 +246,7 @@ fn your_own_question_card_offers_no_dispositions() {
         .elements()
         .into_iter()
         .find(|e| e.key.as_deref() == Some("status-hints"))
-        .and_then(|e| e.text)
+        .and_then(|e| e.label)
         .unwrap_or_default();
     assert!(hints.contains("reply") && !hints.contains("agree"), "{hints}");
     for key in ["a", "x", "d"] {
@@ -460,7 +473,7 @@ fn comments_on_the_brief_and_map_nodes_use_the_same_composer() {
 #[test]
 fn composer_scenes_seed_what_they_show() {
     for (name, want) in [
-        ("composer", "kind-issue"),
+        ("composer", "kind-menu"),
         ("composer-question", "question-hint"),
         ("thread-states", "answer-text"),
         ("orphan", "orphan"),

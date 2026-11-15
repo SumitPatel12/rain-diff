@@ -1,87 +1,118 @@
-//! The Map overlay: the overview's diagrams over the reader in the Clean style, one tab per
-//! view (names never repeat), nodes shaded by how much of their files is viewed and badged with
-//! their threads, a side pane for the selected node (its files, threads, Comment / Ask), and a
-//! legend. Lanes stack under [`STACK_WIDTH`].
+//! The Map, a view inside the reader island (like the Overview): the overview's diagrams in the
+//! Clean style, one tab per view (names never repeat), nodes shaded by how much of their files
+//! is viewed and badged with their threads, a side pane for the selected node (its files,
+//! threads, Comment / Ask), and a legend. Lanes stack under [`STACK_WIDTH`].
 
 use rain_diagram::{Diagram, DiagramStyle, Zoom};
-use rune::{Cx, El, Tx, col, el, row, text};
-use rune_kit::{Button, ButtonVariant, ControlSize, Kit, SegmentedControl};
+use rune::{Cursor, Cx, El, Tx, col, el, row, text};
+use rune_kit::Kit;
 
+use super::icons;
 use super::muted;
 use super::overview::{artifact_composer, dot, thread_card};
+use super::ui::{Ghost, outline, sr};
 use crate::app::{App, ComposeMode, Overlay};
+use crate::theme::{TYPE, radius, space};
 
-const PANE_WIDTH: f32 = 320.0;
+pub(super) const PANE_WIDTH: f32 = 300.0;
 /// Below this width the Map stacks its lanes one under another.
 pub(crate) const STACK_WIDTH: f32 = 700.0;
 
-pub(super) fn map_overlay(s: &App, k: &Kit, cx: &mut Cx<App>) -> El {
+/// A segmented switch on the well: one item per label, `on` lifted.
+fn segments(key: &str, labels: &[String], on: Option<usize>, k: &Kit, pick: impl Fn(usize) -> Box<dyn Fn(&mut App)>) -> El {
+    let (surf, _) = sr(k);
+    let mut seg = row()
+        .key(key.to_owned())
+        .role("tablist")
+        .padding(2.0)
+        .radius(7.0)
+        .fill(surf.well)
+        .border(1.0, surf.hairline);
+    for (i, l) in labels.iter().enumerate() {
+        let active = on == Some(i);
+        let f = pick(i);
+        let mut t = row()
+            .key(format!("{key}-{i}"))
+            .role("tab")
+            .label(l.clone())
+            .checked(active)
+            .h(24.0)
+            .px(10.0)
+            .items_center()
+            .radius(radius::SMALL)
+            .cursor(Cursor::Pointer)
+            .child(
+                text(l.clone())
+                    .font(TYPE.small)
+                    .color(if active { k.c.text_base } else { k.c.text_muted })
+                    .a11y_hidden(),
+            )
+            .on_press(move |s: &mut App| f(s));
+        t = if active {
+            t.fill(surf.card_head).border(1.0, surf.card_border)
+        } else {
+            k.interactive(t)
+        };
+        seg = seg.child(t);
+    }
+    seg
+}
+
+/// The Map in the reader: its toolbar, the canvas with the node pane beside it, the legend.
+pub(super) fn map_view(s: &App, k: &Kit, cx: &mut Cx<App>) -> El {
+    let (surf, _) = sr(k);
     let style = s.seen_scheme.get().diagram();
     let targets = s.overview.as_ref().map(|l| l.targets.clone()).unwrap_or_default();
     let names = rain_overview::tab_names(&targets);
-    let mut picker = row().key("map-tabs").role("tablist").gap(4.0).items_center();
-    for (i, name) in names.iter().enumerate() {
-        if s.layouts.get(i).is_none_or(Option::is_none) {
-            continue;
-        }
-        let v = if i == s.diagram.target {
-            ButtonVariant::Outline
-        } else {
-            ButtonVariant::Ghost
-        };
-        picker = picker.child(
-            Button::new(name.clone())
-                .variant(v)
-                .control_size(ControlSize::Small)
-                .on_press(move |s: &mut App| s.pick_map_view(i))
-                .build(k)
-                .key(format!("target-{i}")),
-        );
-    }
+    let shown: Vec<usize> = (0..names.len())
+        .filter(|&i| s.layouts.get(i).is_some_and(Option::is_some))
+        .collect();
+    let labels: Vec<String> = shown.iter().map(|&i| names[i].clone()).collect();
+    let at = shown.iter().position(|&i| i == s.diagram.target);
+    let picks = shown.clone();
+    let tabs = segments("map-tabs", &labels, at, k, move |i| {
+        let t = picks[i];
+        Box::new(move |s: &mut App| s.pick_map_view(t))
+    });
     let zi = match s.diagram.zoom {
         Zoom::Fit => Some(0),
         Zoom::P100 => Some(1),
         Zoom::P150 => Some(2),
         Zoom::Custom(_) => None,
     };
-    let zoom = SegmentedControl::new(&["Fit", "100%", "150%"], zi)
-        .label("Zoom")
-        .on_pick(|s: &mut App, i, _: &mut Tx| {
+    let zoom = segments("map-zoom", &["Fit".into(), "100%".into(), "150%".into()], zi, k, |i| {
+        Box::new(move |s: &mut App| {
             s.diagram.zoom = match i {
                 0 => Zoom::Fit,
                 1 => Zoom::P100,
                 _ => Zoom::P150,
             }
         })
-        .build(k);
-    let (w, h) = cx.layout("diagram-body").map_or((1400.0, 800.0), |r| (r[2], r[3]));
+    });
+    let (w, h) = cx.layout("diagram-body").map_or((1100.0, 700.0), |r| (r[2], r[3]));
     let base = s.layouts.get(s.diagram.target).and_then(Option::as_ref);
     let stacked = base.filter(|_| w < STACK_WIDTH).and_then(|l| l.stacked());
     let mut header = row()
         .key("diagram-header")
         .w_full()
-        .px(16.0)
-        .py(8.0)
-        .gap(12.0)
+        .h(space::READER_TOOL)
+        .pl(10.0)
+        .pr(8.0)
+        .gap(10.0)
         .items_center()
-        .fill(k.c.layer_01)
-        .child(
-            Button::new("Close (Esc)")
-                .variant(ButtonVariant::Ghost)
-                .on_press(|s: &mut App| {
-                    s.close_overlay(Overlay::Map);
-                })
-                .build(k)
-                .key("map-close"),
-        )
-        .child(text("Map").font(k.ty.ui_medium).color(k.c.text_base))
-        .child(row().grow(1.0).shrink().child(picker));
+        .child(tabs)
+        .child(el().grow(1.0).a11y_hidden());
     if let Some((_, hidden)) = &stacked {
         header = header.child(muted(format!("Lanes stacked · {hidden} link(s) hidden"), k).key("map-stacked"));
     }
-    header = header.child(zoom);
+    header = header.child(zoom).child(
+        el().pin(Some(0.0), None, Some(0.0), Some(0.0))
+            .h(1.0)
+            .fill(surf.hairline)
+            .a11y_hidden(),
+    );
     let body = match (&stacked, base) {
-        (_, None) => muted("Nothing to draw for this view.", k),
+        (_, None) => muted("Nothing to draw for this view.", k).padding(24.0),
         (Some((l, _)), _) => diagram(s, l, style, (w, h), k),
         (None, Some(l)) => diagram(s, l, style, (w, h), k),
     };
@@ -92,27 +123,23 @@ pub(super) fn map_overlay(s: &App, k: &Kit, cx: &mut Cx<App>) -> El {
             .grow(1.0)
             .h_full()
             .min_w(0.0)
+            .fill(style.background)
             .on_layout(|s: &mut App, r: [f32; 4]| s.map_resized(r[2]))
             .child(body),
     );
     if let Some(node) = &s.diagram.selected {
         main = main.child(side_pane(s, node, k));
     }
-    let panel = col()
+    col()
         .key("overlay-map")
-        .role("dialog")
+        .role("region")
         .label("Map")
         .w_full()
-        .h_full()
-        .radius(k.radius.lg)
-        .clip_rounded(k.radius.lg)
-        .fill(style.background)
-        .border(1.0, k.c.border_base)
-        .on_press(|_: &mut App| {})
+        .grow(1.0)
+        .min_h(0.0)
         .child(header)
         .child(main)
-        .child(legend(&style, k));
-    col().w_full().h_full().padding(16.0).child(k.elevate(panel, &k.elevation.overlay))
+        .child(legend(&style, k))
 }
 
 fn diagram(s: &App, l: &rain_diagram::Layout, style: DiagramStyle, (w, h): (f32, f32), k: &Kit) -> El {
@@ -128,140 +155,200 @@ fn diagram(s: &App, l: &rain_diagram::Layout, style: DiagramStyle, (w, h): (f32,
         .build(k)
 }
 
-/// What the colours and marks mean.
+/// What the colours and marks mean, on the well at the canvas's foot.
 fn legend(st: &DiagramStyle, k: &Kit) -> El {
-    let swatch = |c: rune::Color| el().w(10.0).h(10.0).radius(2.0).fill(c);
-    let item = |e: El, t: &str| row().gap(4.0).items_center().child(e).child(muted(t.to_owned(), k));
+    let (surf, _) = sr(k);
+    let swatch = |c: rune::Color| el().w(10.0).h(10.0).radius(2.0).border(1.5, c);
+    let item = |e: El, t: &str| {
+        row()
+            .gap(6.0)
+            .items_center()
+            .child(e)
+            .child(text(t.to_owned()).font(TYPE.small).color(k.c.text_muted))
+    };
     row()
         .key("map-legend")
         .role("note")
         .label("Legend")
         .w_full()
-        .px(16.0)
-        .py(6.0)
-        .gap(14.0)
+        .h(38.0)
+        .px(12.0)
+        .gap(16.0)
         .items_center()
-        .fill(k.c.layer_01)
+        .fill(surf.card_head)
         .child(item(swatch(st.added), "added"))
         .child(item(swatch(st.modified), "modified"))
         .child(item(swatch(st.removed), "removed"))
-        .child(item(el().w(18.0).h(3.0).radius(1.5).fill(st.viewed), "share of files viewed"))
-        .child(item(el().w(14.0).h(14.0).radius(7.0).fill(st.thread), "threads"))
-        .child(item(el().w(12.0).h(12.0).radius(3.0).border(2.0, st.thread), "selected"))
-        .child(muted(
-            "Hover a node to see it here · click opens its first hunk · c / ? comment or ask",
-            k,
-        ))
+        .child(item(el().w(14.0).h(3.0).radius(1.5).fill(st.viewed), "share viewed"))
+        .child(item(el().w(10.0).h(10.0).radius(2.0).fill(st.thread.alpha(0.4)), "threads"))
+        .child(item(el().w(10.0).h(10.0).radius(2.0).border(2.0, k.c.text_base), "selected"))
+        .child(
+            text("Click opens the files · c comment · ? ask")
+                .font(TYPE.small)
+                .color(k.c.text_faint),
+        )
+        .child(
+            el().pin(Some(0.0), Some(0.0), Some(0.0), None)
+                .h(1.0)
+                .fill(surf.hairline)
+                .a11y_hidden(),
+        )
 }
 
-/// The selected node: what it is, its files with their viewed state, its threads, and Comment /
-/// Ask Claude.
+/// The selected node: its kind and name, its status and files with their viewed state, its
+/// threads, then Open first hunk, Comment and Ask Claude at the foot.
 fn side_pane(s: &App, node: &str, k: &Kit) -> El {
+    let (surf, r) = sr(k);
     let n = s
         .overview
         .as_ref()
         .and_then(|l| l.document.graph.nodes.iter().find(|n| n.id == node).cloned());
-    let mut c = col()
+    let pane = col()
         .key("map-pane")
         .role("complementary")
         .label("Selected node")
         .w(PANE_WIDTH)
         .h_full()
-        .gap(8.0)
-        .padding(12.0)
-        .fill(k.c.layer_01)
-        .scroll(rune::ScrollSpec { stick_bottom: false });
+        .fill(surf.panel)
+        .child(
+            el().pin(Some(0.0), Some(0.0), None, Some(0.0))
+                .w(1.0)
+                .fill(surf.hairline)
+                .a11y_hidden(),
+        );
     let Some(n) = n else {
-        return c.child(muted(format!("{node} is not in this overview"), k));
+        return pane.child(muted(format!("{node} is not in this overview"), k).padding(14.0));
     };
     let threads = s.node_threads(node);
+    let kind_badge = row()
+        .h(18.0)
+        .px(5.0)
+        .items_center()
+        .radius(radius::CHIP)
+        .fill(surf.well)
+        .border(1.0, surf.hairline)
+        .child(
+            text(n.kind.chars().take(3).collect::<String>().to_uppercase())
+                .font(TYPE.mark)
+                .color(k.c.text_muted),
+        );
     let mut title = row()
         .w_full()
         .gap(8.0)
         .items_center()
-        .child(text(n.label.clone()).font(k.ty.ui_medium).color(k.c.text_base).shrink().truncate());
+        .child(kind_badge)
+        .child(text(n.label.clone()).font(TYPE.title).color(k.c.text_base).shrink().truncate());
     if !threads.is_empty() {
         title = title.child(dot(threads.len(), k));
     }
     title = title.child(el().grow(1.0)).child(
-        Button::new("✕")
-            .variant(ButtonVariant::Ghost)
-            .control_size(ControlSize::Small)
+        Ghost::new("map-pane-close")
+            .icon(&icons::CLOSE)
             .help("Clear the selection")
-            .on_press(|s: &mut App| s.diagram.selected = None)
+            .height(24.0)
             .build(k)
-            .key("map-pane-close"),
+            .on_press(|s: &mut App| s.diagram.selected = None),
     );
-    c = c.child(title).child(muted(n.kind.clone(), k));
-    let (id, ask) = (node.to_owned(), node.to_owned());
-    c = c.child(
-        row()
-            .gap(4.0)
-            .flex_wrap()
-            .child(
-                Button::new("Open first hunk")
-                    .variant(ButtonVariant::Outline)
-                    .control_size(ControlSize::Small)
-                    .on_press_tx(|s: &mut App, tx: &mut Tx| s.open_selected_node(tx))
-                    .build(k)
-                    .key("map-open"),
-            )
-            .child(
-                Button::new("Comment")
-                    .variant(ButtonVariant::Ghost)
-                    .control_size(ControlSize::Small)
-                    .shortcut("c")
-                    .on_press(move |s: &mut App| s.comment_on_node(&id, ComposeMode::Comment))
-                    .build(k)
-                    .key("map-comment"),
-            )
-            .child(
-                Button::new("Ask Claude")
-                    .variant(ButtonVariant::Ghost)
-                    .control_size(ControlSize::Small)
-                    .shortcut("?")
-                    .on_press(move |s: &mut App| s.comment_on_node(&ask, ComposeMode::Question))
-                    .build(k)
-                    .key("map-ask"),
-            ),
-    );
+    let files_n = n.files.len();
+    let mut top = col()
+        .key("map-pane-body")
+        .w_full()
+        .grow(1.0)
+        .min_h(0.0)
+        .padding(14.0)
+        .gap(10.0)
+        .scroll(rune::ScrollSpec { stick_bottom: false })
+        .child(title)
+        .child(muted(
+            format!("{} · {files_n} file{}", n.kind, if files_n == 1 { "" } else { "s" }),
+            k,
+        ));
     let mut files = col().key("map-files").w_full().gap(2.0);
     for (i, f) in n.files.iter().enumerate() {
         let g = s.index_of(&f.path);
-        let mark = match g {
-            Some(g) if s.is_viewed(g) => "✓",
-            Some(_) => "○",
-            None => "–",
-        };
+        let viewed = g.is_some_and(|g| s.is_viewed(g));
         let path = f.path.clone();
         files = files.child(
-            row()
-                .key(format!("map-file-{i}"))
-                .w_full()
-                .gap(6.0)
-                .cursor(rune::Cursor::Pointer)
-                .on_press_tx(move |s: &mut App, tx: &mut Tx| {
-                    s.close_overlay(Overlay::Map);
-                    s.goto_cite(&path, None, rain_core::Side::New, tx);
-                })
-                .child(text(mark).font(k.ty.small).color(k.c.text_muted))
-                .child(
-                    text(f.path.rsplit('/').next().unwrap_or(&f.path).to_owned())
-                        .font(k.ty.mono)
-                        .color(if g.is_some() { k.c.text_base } else { k.c.text_faint })
-                        .truncate()
-                        .shrink(),
-                ),
+            k.interactive(
+                row()
+                    .key(format!("map-file-{i}"))
+                    .w_full()
+                    .h(26.0)
+                    .px(6.0)
+                    .gap(8.0)
+                    .items_center()
+                    .radius(radius::BUTTON)
+                    .fill(surf.well)
+                    .cursor(Cursor::Pointer)
+                    .on_press_tx(move |s: &mut App, tx: &mut Tx| {
+                        s.close_overlay(Overlay::Map);
+                        s.goto_cite(&path, None, rain_core::Side::New, tx);
+                    }),
+            )
+            .child(if viewed {
+                icons::draw(&icons::CHECK, 14.0, r.accent)
+            } else {
+                el().size(10.0, 10.0).radius(5.0).border(1.5, k.c.text_faint).a11y_hidden()
+            })
+            .child(
+                text(f.path.clone())
+                    .font(TYPE.micro_mono)
+                    .color(if g.is_some() { k.c.text_base } else { k.c.text_faint })
+                    .truncate_head()
+                    .shrink(),
+            ),
         );
     }
-    c = c.child(files);
+    top = top.child(files);
+    if !threads.is_empty() {
+        top = top.child(text("Threads").font(TYPE.label).color(k.c.text_base));
+    }
     for t in threads {
-        c = c.child(thread_card(s, t, k));
+        top = top.child(thread_card(s, t, k));
     }
     if let Some(d) = &s.brief.composer
         && d.target.node.as_deref() == Some(node)
     {
-        c = c.child(artifact_composer(s, d, k));
+        top = top.child(artifact_composer(s, d, k));
     }
-    c
+    let (id, ask) = (node.to_owned(), node.to_owned());
+    let foot = row()
+        .key("map-pane-foot")
+        .w_full()
+        .h(44.0)
+        .px(12.0)
+        .gap(6.0)
+        .items_center()
+        .child(
+            k.interactive_with(
+                row()
+                    .key("map-open")
+                    .role("button")
+                    .label("Open first hunk")
+                    .h(26.0)
+                    .px(10.0)
+                    .center()
+                    .radius(radius::BUTTON)
+                    .fill(r.accent)
+                    .cursor(Cursor::Pointer)
+                    .child(text("Open first hunk").font(TYPE.small).color(r.on_accent).a11y_hidden()),
+                k.c.contrast_hover,
+                k.c.contrast_pressed,
+            )
+            .on_press_tx(|s: &mut App, tx: &mut Tx| s.open_selected_node(tx)),
+        )
+        .child(
+            outline("map-comment", "Comment", Some("c"), 26.0, k).on_press(move |s: &mut App| s.comment_on_node(&id, ComposeMode::Comment)),
+        )
+        .child(
+            outline("map-ask", "Ask Claude", Some("?"), 26.0, k)
+                .on_press(move |s: &mut App| s.comment_on_node(&ask, ComposeMode::Question)),
+        )
+        .child(
+            el().pin(Some(0.0), Some(0.0), Some(0.0), None)
+                .h(1.0)
+                .fill(surf.hairline)
+                .a11y_hidden(),
+        );
+    pane.child(top).child(foot)
 }

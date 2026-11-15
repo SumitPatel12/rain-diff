@@ -13,14 +13,14 @@ pub const WIDE: f32 = 1600.0;
 pub const SPLIT_MIN_COLUMNS: u32 = 60;
 /// The code font's column advance (13 pt JetBrains Mono).
 pub const MONO_ADVANCE: f32 = 7.8;
-/// One split side's gutter: change bar, line numbers and code padding.
-pub const SIDE_GUTTER: f32 = 80.0;
+/// One split side's gutter: marks, line numbers, sign and the code's end padding.
+pub const SIDE_GUTTER: f32 = 100.0;
 
 /// A submenu of the top bar's `⋯` menu.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MoreSub {
-    Theme,
-    Density,
+    /// Theme and Density.
+    Appearance,
 }
 
 /// Which of the shell's menus and popovers is open; one at a time.

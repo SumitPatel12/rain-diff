@@ -14,7 +14,7 @@ use crate::app::{App, ComposeMode};
 /// Between the selection and what floats beside it.
 const GAP: f32 = 6.0;
 /// The toolbar's size before it has been laid out.
-const BAR: [f32; 2] = [240.0, 28.0];
+const BAR: [f32; 2] = [309.0, 28.0];
 /// A diff row's line, without the widgets under it.
 const LINE_H: f32 = 20.0;
 /// The top of the diff column a file header (sticky or not) may cover.
@@ -120,6 +120,7 @@ fn bar(s: &App, k: &Kit, cx: &Cx<App>) -> Option<El> {
         .set(Some([card_at.0, card_at.1, last[0] + last[2] / 2.0, last[1] + last[3] / 2.0]));
     let faint = k.c.text_faint;
     let button = |label: &'static str, hint: String| {
+        let glyph = glyph_of(label);
         Button::new(label)
             .variant(ButtonVariant::Ghost)
             .control_size(ControlSize::Small)
@@ -127,6 +128,7 @@ fn bar(s: &App, k: &Kit, cx: &Cx<App>) -> Option<El> {
                 row()
                     .gap(6.0)
                     .items_center()
+                    .child(super::icons::draw(glyph, 14.0, ink))
                     .child(text(label).font(font).color(ink))
                     .child(text(hint).font(font).color(faint))
             })
@@ -174,6 +176,7 @@ fn overview_bar(s: &App, k: &Kit, cx: &Cx<App>) -> Option<El> {
     let (x, y) = place_bar(&boxes, size);
     let faint = k.c.text_faint;
     let button = |label: &'static str, hint: &'static str| {
+        let glyph = glyph_of(label);
         Button::new(label)
             .variant(ButtonVariant::Ghost)
             .control_size(ControlSize::Small)
@@ -181,6 +184,7 @@ fn overview_bar(s: &App, k: &Kit, cx: &Cx<App>) -> Option<El> {
                 row()
                     .gap(6.0)
                     .items_center()
+                    .child(super::icons::draw(glyph, 14.0, ink))
                     .child(text(label).font(font).color(ink))
                     .child(text(hint).font(font).color(faint))
             })
@@ -243,6 +247,15 @@ fn section_menu(s: &App, k: &Kit, id: String, at: (f32, f32), layer: &mut Vec<El
                 .on_select_tx(move |s: &mut App, tx: &mut Tx| s.copy_section_selection(&y_id, tx)),
         )
         .build(k, layer)
+}
+
+/// The selection toolbar's icon for each of its buttons.
+fn glyph_of(label: &str) -> &'static rune::Icon {
+    match label {
+        "Comment" => &super::icons::CHAT,
+        "Ask" => &super::icons::QUESTION,
+        _ => &super::icons::COPY,
+    }
 }
 
 fn chord(c: Command) -> String {

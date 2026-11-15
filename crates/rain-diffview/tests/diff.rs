@@ -290,14 +290,14 @@ fn annotations_sit_under_their_line_and_push_the_rest_down() {
     assert_eq!(c2.rect[1], bottom(&c1), "the next under it");
     assert_eq!(find(&rt, "df0.c11").rect[1], bottom(&c2), "the next line after both");
 
-    // Split: under the new side's half.
+    // Split: across both sides, as in unified.
     rt.state.diff.set_mode(DiffMode::Split);
     rt.invalidate();
     rt.frame(1.0);
     let line = find(&rt, "df0.o10/line");
     let c1 = find(&rt, "note-c1");
     assert_eq!(c1.rect[1], bottom(&line));
-    assert!(c1.rect[0] >= 450.0, "in the new half: {:?}", c1.rect);
+    assert!(c1.rect[0] == 0.0 && c1.rect[2] == 900.0, "the full width: {:?}", c1.rect);
     assert!(rt.state.diff.annotations().len() == 2);
 }
 
@@ -613,9 +613,9 @@ fn line_numbers_select_lines_and_the_plus_comments_on_them() {
             end: 5
         }
     );
-    press(&mut rt, "df0.c4/gutter/plus");
+    press(&mut rt, "df0.c4/gutter/mk/hover-add/plus");
     assert_eq!(rt.state.comments, [range]);
-    press(&mut rt, "df0.c9/gutter/plus");
+    press(&mut rt, "df0.c9/gutter/mk/hover-add/plus");
     assert_eq!(rt.state.comments[1], LineRange::line(0, LineRef::new(Side::New, 9)));
     rt.key(KeyEvent {
         key: Key::Escape,
@@ -651,8 +651,8 @@ fn unified_file_headers_span_the_viewport_while_code_scrolls_sideways() {
         assert!(r[0] >= -0.5 && r[0] + r[2] <= w + 0.5 && r[2] > 0.0, "{end} within {w}: {r:?}");
     };
     let check = |rt: &Runtime<App>, w: f32| {
-        inside(rt, w, "df0/inner/adds");
-        inside(rt, w, "df0/inner/dels");
+        inside(rt, w, "df0/inner/stat/adds");
+        inside(rt, w, "df0/inner/stat/dels");
         inside(rt, w, "df0/inner/actions");
         let h = find(rt, "df0");
         assert!(
@@ -687,7 +687,7 @@ fn unified_file_headers_span_the_viewport_while_code_scrolls_sideways() {
         "sticky spans the viewport: {:?}",
         sticky.rect
     );
-    inside(&rt, 600.0, "sticky/inner/adds");
+    inside(&rt, 600.0, "sticky/inner/stat/adds");
     press(&mut rt, "sticky/inner/actions");
     assert_eq!(rt.state.actions, vec![0, 0, 0]);
 }
@@ -836,7 +836,7 @@ fn the_line_cursor_moves_by_line_hunk_and_file() {
         Some(LineRange::line(0, LineRef::new(Side::Old, 50)))
     );
     settle(&mut rt);
-    assert!(find(&rt, "df0.o50/gutter/bar").rect[2] > 0.0, "the cursor's row is built");
+    assert!(find(&rt, "df0.o50/cursor").rect[2] > 0.0, "the cursor's row is built");
 
     rt.key(text_key("n"));
     settle(&mut rt);

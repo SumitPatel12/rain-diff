@@ -19,6 +19,7 @@ struct App {
     window_keys: Vec<String>,
     mode: ComposerMode,
     kind: ThreadKind,
+    kind_open: bool,
     blocking: bool,
 }
 
@@ -31,7 +32,7 @@ const ANCHOR: Anchor = Anchor::Range {
 fn act(a: &mut App, id: &str, action: CardAction, _: &mut Tx) {
     match action {
         CardAction::Toggle => a.collapsed = !a.collapsed,
-        CardAction::OpenReply => a.replying = true,
+        CardAction::OpenReply | CardAction::AskReply => a.replying = true,
         CardAction::CancelReply => a.replying = false,
         CardAction::Reply(body) => {
             ops::reply(&mut a.s, id, &body, None);
@@ -76,7 +77,11 @@ fn view(a: &App, _: &mut Cx<App>) -> El {
             .mode(a.mode)
             .kind(a.kind, a.blocking)
             .on_mode(|a: &mut App, m, _: &mut Tx| a.mode = m)
-            .on_kind(|a: &mut App, kd, _: &mut Tx| a.kind = kd)
+            .on_kind(|a: &mut App, kd, _: &mut Tx| {
+                a.kind = kd;
+                a.kind_open = false;
+            })
+            .kind_menu(a.kind_open, |a: &mut App, _: &mut Tx| a.kind_open = !a.kind_open)
             .on_blocking(|a: &mut App, _: &mut Tx| a.blocking = !a.blocking)
             .build(&k),
     );
@@ -128,6 +133,7 @@ fn runtime(threads: usize) -> Runtime<App> {
         window_keys: Vec::new(),
         mode: ComposerMode::Comment,
         kind: ThreadKind::Comment,
+        kind_open: false,
         blocking: false,
     };
     let mut rt = Runtime::new(
@@ -482,14 +488,17 @@ fn ctrl_digit(rt: &mut Runtime<App>, d: &str) {
 fn composer_modes_types_and_ctrl_digits() {
     let mut rt = runtime(0);
     assert!(live(&rt, "mode-tabs"));
+    assert!(live(&rt, "kind-menu") && !live(&rt, "kind-issue"), "one dropdown for the kind");
+    click(&mut rt, "kind-menu");
     assert!(live(&rt, "kind-comment") && live(&rt, "kind-issue"));
     click(&mut rt, "kind-issue");
+    assert!(!live(&rt, "kind-list"), "a pick closes the list");
     assert_eq!(rt.state.kind, ThreadKind::Issue);
     assert!(live(&rt, "blocking"), "issues offer blocking");
     click(&mut rt, "field");
     ctrl_digit(&mut rt, "2");
     assert_eq!(rt.state.mode, ComposerMode::Question);
-    assert!(!live(&rt, "kind-issue"), "Question mode has no type picker");
+    assert!(!live(&rt, "kind-menu"), "Question mode has no type picker");
     assert!(live(&rt, "question-hint"));
     ctrl_digit(&mut rt, "1");
     assert_eq!(rt.state.mode, ComposerMode::Comment);

@@ -1,32 +1,55 @@
-//! The diff: file headers with their actions and notes, threads, the composer, drafts and inline
-//! notes.
+//! The diff: file headers with their actions, the Why line and notes, threads, the composer,
+//! drafts, inline notes and the gutter marks of what is folded.
 
-use rain_comments::{ThreadCard, anchor_label, ops};
-use rain_core::{AnchorState, FileTag, Thread};
-use rain_diffview::{Annotation, DiffView};
-use rune::{El, Tx, col, el, row, text};
-use rune_kit::{Button, ButtonVariant, Checkbox, ControlSize, Kit, Placement, popover};
+use rain_comments::{CardLook, ThreadCard, anchor_label, ops};
+use rain_core::{AnchorState, FileTag, Thread, ThreadKind};
+use rain_diffview::{Annotation, DiffColors, DiffView};
+use rune::{Cursor, El, Tx, col, el, row, text};
+use rune_kit::{Kit, Placement, popover};
 
+use super::icons;
+use super::ui::{Ghost, must_tag, sr};
 use super::{composer, notes, ruler, wholefile};
-use crate::app::App;
+use crate::app::{App, ME};
+use crate::theme::{TYPE, radius};
+
+/// The diff's colours from the scheme's roles.
+pub(super) fn colors(k: &Kit) -> DiffColors {
+    let (s, r) = sr(k);
+    DiffColors {
+        add_line: r.add_bg,
+        del_line: r.del_bg,
+        add_word: r.add_word,
+        del_word: r.del_word,
+        filler: r.filler,
+        gap: s.well,
+        header: s.card_head,
+        hairline: s.hairline,
+        cursor: r.accent,
+        cursor_line: r.cursor_line,
+        selection: r.selection,
+        comment: r.accent,
+        ask: k.c.info.fg,
+        on_button: r.on_accent,
+        find_hit: r.find_hit,
+        find_current: r.find_current,
+    }
+}
 
 pub(super) fn diff_view(s: &App, k: &Kit) -> El {
     let ka = k.clone();
     let kh = k.clone();
     let kw = k.clone();
-    let scheme = s.seen_scheme.get();
-    let mut v = DiffView::new(|s: &App| s.active(), |s: &mut App| s.active_mut()).calm_added_files(true);
-    if let Some((add, del)) = scheme.change_fills() {
-        v = v.change_fills(add, del);
-    }
-    if let Some(c) = scheme.selection() {
-        v = v.selection_color(c);
-    }
-    let v = v
+    let km = k.clone();
+    let v = DiffView::new(|s: &App| s.active(), |s: &mut App| s.active_mut())
+        .calm_added_files(true)
+        .colors(colors(k))
         .annotation(move |s: &App, a: &Annotation| annotation(s, a, &ka))
+        .gutter_mark(move |s: &App, here: &[&Annotation]| gutter_mark(s, here, &km))
         .header_actions(move |s: &App, local: usize| header_actions(s, local, &kh))
         .header_annotation(move |s: &App, local: usize| why_line(s, local, &kw))
         .on_comment(|s: &mut App, lines, tx: &mut Tx| s.comment_on(lines, tx))
+        .on_ask(|s: &mut App, lines, tx: &mut Tx| s.ask_on(lines, tx))
         .on_span_select(|s: &mut App, span, _: &mut Tx| s.span_selected(span.as_ref()))
         .on_select(|s: &mut App, sel, _: &mut Tx| s.lines_selected(sel))
         .on_visible_file(|_: &mut App, _| {})
@@ -40,109 +63,150 @@ pub(super) fn diff_view(s: &App, k: &Kit) -> El {
         .child(ruler::wire(v, s).build(s, k))
 }
 
-/// Thread cards read at most this wide, however wide the reader.
-const CARD_MAX_W: f32 = 860.0;
+/// The Viewed toggle: a ring and box at rest, the success tint and a check when on.
+fn viewed_toggle(g: usize, on: bool, k: &Kit) -> El {
+    let (s, _) = sr(k);
+    let mut b = row()
+        .key(format!("viewed-{g}"))
+        .role("checkbox")
+        .label("Viewed")
+        .checked(on)
+        .help("Viewed  v · Space marks viewed and goes to the next file")
+        .h(26.0)
+        .pl(8.0)
+        .pr(10.0)
+        .gap(6.0)
+        .items_center()
+        .radius(radius::BUTTON)
+        .cursor(Cursor::Pointer)
+        .focusable(true);
+    if on {
+        b = b
+            .fill(k.c.success.bg)
+            .border(1.0, k.c.success.border)
+            .child(icons::draw(&icons::CHECK, 14.0, k.c.success.fg))
+            .child(text("Viewed").font(TYPE.small).color(k.c.success.fg).a11y_hidden());
+    } else {
+        b = b
+            .border(1.0, s.strong_line)
+            .child(el().size(14.0, 14.0).radius(radius::KEY).border(1.5, k.c.text_muted).a11y_hidden())
+            .child(text("Viewed").font(TYPE.small).color(k.c.text_base).a11y_hidden())
+            .child(super::ui::kbd("v", k));
+    }
+    k.interactive(b).press_scale(0.97).on_press(move |s: &mut App| {
+        if g < s.keys.len() {
+            let on = !s.is_viewed(g);
+            s.set_viewed(g, on);
+        }
+    })
+}
 
-/// `Must` (only that tag), the changed-since-round chip, Viewed and the file's `⋯`.
+/// After the path: `Must`, the changed-since chip, then at the end `Whole file e` · Copy path ·
+/// Viewed `v` · `⋯` (Open in editor, Copy location).
 fn header_actions(s: &App, local: usize, k: &Kit) -> El {
+    let (surf, _) = sr(k);
     let g = s.global(local);
     let viewed = g < s.keys.len() && s.is_viewed(g);
     let tag = s.keys.get(g).and_then(|key| s.tags.get(key)).copied();
     let mut r = row().gap(8.0).items_center();
     if tag == Some(FileTag::MustReview) {
-        r = r.child(text("Must").key("must").font(k.ty.small_medium).color(k.c.danger.fg));
+        r = r.child(must_tag(k));
     }
     if let Some(c) = super::finish::changed_chip(s, g, k) {
         r = r.child(c);
     }
-    r.child(
-        Checkbox::new(viewed)
-            .label("Viewed")
-            .on_toggle(move |s: &mut App| {
-                if g < s.keys.len() {
-                    let on = !s.is_viewed(g);
-                    s.set_viewed(g, on);
-                }
-            })
-            .build(k)
-            .key(format!("viewed-{g}")),
-    )
-    .child(
-        Button::new("⋯")
-            .variant(ButtonVariant::GhostMuted)
-            .control_size(ControlSize::Small)
-            .help("Whole file, open in editor, copy path")
-            .on_press(move |s: &mut App| {
-                let open = s.menus.file != Some(g);
-                s.menus.close();
-                s.menus.file = open.then_some(g);
-            })
-            .build(k)
-            .key(format!("file-more-{g}"))
-            .expanded(s.menus.file == Some(g)),
-    )
+    r = r.child(row().grow(1.0).a11y_hidden());
+    if let Some(w) = wholefile::header_button(s, g, k) {
+        r = r.child(w);
+    }
+    if let Some(path) = s.keys.get(g).cloned() {
+        r = r.child(
+            Ghost::new(format!("copy-path-{g}"))
+                .icon(&icons::COPY)
+                .label("Copy path")
+                .help(format!("Copy {path}"))
+                .height(26.0)
+                .build(k)
+                .on_press_tx(move |s: &mut App, tx: &mut Tx| {
+                    tx.copy(path.clone());
+                    s.status = format!("Copied {path}");
+                }),
+        );
+    }
+    r.child(el().w(1.0).h(16.0).fill(surf.hairline).a11y_hidden())
+        .child(viewed_toggle(g, viewed, k))
+        .child(
+            Ghost::new(format!("file-more-{g}"))
+                .icon(&icons::MORE)
+                .help("Open in editor  Ctrl+O · Copy location  y")
+                .on(s.menus.file == Some(g))
+                .build(k)
+                .expanded(s.menus.file == Some(g))
+                .on_press(move |s: &mut App| {
+                    let open = s.menus.file != Some(g);
+                    s.menus.close();
+                    s.menus.file = open.then_some(g);
+                }),
+        )
 }
 
-/// The open file `⋯` menu: Whole file, Open in editor, Copy path, Copy location.
+/// The open file `⋯` menu: Open in editor and Copy location.
 pub(super) fn file_menu(s: &App, k: &Kit, layer: &mut Vec<El>) {
     let Some(g) = s.menus.file.filter(|&g| g < s.keys.len()) else {
         return;
     };
     layer.push(rune_kit::scrim("file-menu-scrim", |s: &mut App| s.menus.file = None));
-    let mut c = col().key("file-menu").role("menu").w(240.0).padding(6.0).gap(2.0).items_stretch();
-    if let Some(w) = wholefile::header_button(s, g, k) {
-        c = c.child(row().h(28.0).px(8.0).items_center().child(w));
-    }
+    let mut c = col().key("file-menu").role("menu").w(240.0).padding(4.0).gap(0.0).items_stretch();
     let blocked = s.disk_path(g).err();
-    c = c.child(
-        Button::new("Open in editor")
-            .variant(ButtonVariant::Ghost)
-            .control_size(ControlSize::Small)
-            .disabled(blocked.is_some())
-            .help(blocked.unwrap_or("Open in editor at the cursor line"))
-            .shortcut("Ctrl+O")
-            .on_press(move |s: &mut App| {
-                s.menus.close();
-                s.open_file_in_editor(g);
-            })
-            .build(k)
-            .key(format!("open-{g}")),
-    );
-    let path = s.keys[g].clone();
-    c = c.child(
-        Button::new("Copy path")
-            .variant(ButtonVariant::Ghost)
-            .control_size(ControlSize::Small)
-            .on_press_tx(move |s: &mut App, tx: &mut Tx| {
-                s.menus.close();
-                tx.copy(path.clone());
-                s.status = format!("Copied {path}");
-            })
-            .build(k)
-            .key(format!("copy-path-{g}")),
-    );
+    let item = |key: String, label: &str, kbd: &str, disabled: bool| {
+        let mut r = row()
+            .key(key)
+            .role("menuitem")
+            .label(label.to_owned())
+            .h(28.0)
+            .px(8.0)
+            .gap(8.0)
+            .items_center()
+            .radius(radius::SMALL)
+            .child(
+                text(label.to_owned())
+                    .font(TYPE.ui)
+                    .color(if disabled { k.c.text_faint } else { k.c.text_base })
+                    .grow(1.0),
+            )
+            .child(super::ui::kbd_bare(kbd, k));
+        if !disabled {
+            r = k.interactive(r.cursor(Cursor::Pointer));
+        }
+        r
+    };
+    let mut open = item(format!("open-{g}"), "Open in editor", "Ctrl+O", blocked.is_some());
+    if let Some(why) = blocked {
+        open = open.help(why);
+    } else {
+        open = open.on_press(move |s: &mut App| {
+            s.menus.close();
+            s.open_file_in_editor(g);
+        });
+    }
+    c = c.child(open);
     if let Some(loc) = s.location(g) {
         c = c.child(
-            Button::new("Copy location")
-                .variant(ButtonVariant::Ghost)
-                .control_size(ControlSize::Small)
-                .shortcut("Y")
-                .on_press_tx(move |s: &mut App, tx: &mut Tx| {
-                    s.menus.close();
-                    tx.copy(loc.clone());
-                    s.status = format!("Copied {loc}");
-                })
-                .build(k)
-                .key(format!("copy-location-{g}")),
+            item(format!("copy-location-{g}"), "Copy location", "y", false).on_press_tx(move |s: &mut App, tx: &mut Tx| {
+                s.menus.close();
+                tx.copy(loc.clone());
+                s.status = format!("Copied {loc}");
+            }),
         );
     }
-    let surface = popover::raised(k, c, k.radius.xl);
+    let surface = popover::raised(k, c, radius::CARD);
     layer.push(popover::anchored(k, surface, &format!("file-more-{g}"), Placement::BottomEnd, 4.0));
 }
 
-/// Under a file's header: the overview's "why", the agent's file notes, then the re-anchor
-/// strip with the threads that can't sit on a line.
+/// Under a file's header: the triage reason (`Why …`), the agent's file notes, then the
+/// re-anchor strip with the threads that can't sit on a line.
 fn why_line(s: &App, local: usize, k: &Kit) -> Option<El> {
+    let (surf, _) = sr(k);
     let g = s.global(local);
     let why = s.keys.get(g).and_then(|key| s.why.get(key));
     let file_note = notes::file_card(s, g, k);
@@ -150,23 +214,34 @@ fn why_line(s: &App, local: usize, k: &Kit) -> Option<El> {
     if why.is_none() && file_note.is_none() && strip.is_none() {
         return None;
     }
-    let mut c = col().w_full().gap(4.0);
+    let mut c = col().w_full();
     if let Some(why) = why {
         c = c.child(
             row()
+                .key("why")
                 .w_full()
-                .px(16.0)
-                .py(4.0)
-                .child(text(format!("Why: {why}")).font(k.ty.small).color(k.c.text_muted).wrap()),
+                .pl(38.0)
+                .pr(12.0)
+                .pt(5.0)
+                .pb(6.0)
+                .gap(6.0)
+                .fill(surf.card_head)
+                .child(text("Why").font(TYPE.label).color(k.c.text_base))
+                .child(text(why.clone()).font(TYPE.small).color(k.c.text_muted).wrap().grow(1.0).shrink())
+                .child(hairline_bottom(surf.hairline)),
         );
-    }
-    if let Some(n) = file_note {
-        c = c.child(n);
     }
     if let Some(strip) = strip {
         c = c.child(strip);
     }
+    if let Some(n) = file_note {
+        c = c.child(n);
+    }
     Some(c)
+}
+
+fn hairline_bottom(c: rune::Color) -> El {
+    el().pin(Some(0.0), None, Some(0.0), Some(0.0)).h(1.0).fill(c).a11y_hidden()
 }
 
 /// What the last load did to file `g`'s threads: `2 threads moved · 1 addressed? · 1 orphaned`,
@@ -188,6 +263,7 @@ pub(super) fn strip_counts(s: &App, g: usize) -> (usize, usize, usize, usize) {
 }
 
 fn reanchor_strip(s: &App, g: usize, k: &Kit) -> Option<El> {
+    let (surf, _) = sr(k);
     let (moved, addressed, orphaned, outdated) = strip_counts(s, g);
     let ids = s.unplaced.get(&g).filter(|v| !v.is_empty());
     if moved + addressed + orphaned + outdated == 0 && ids.is_none() {
@@ -212,24 +288,22 @@ fn reanchor_strip(s: &App, g: usize, k: &Kit) -> Option<El> {
         parts.push(format!("{off_diff} outside the diff"));
     }
     let folded = s.composer_ui.folded_strips.contains(&g);
-    let mut head = row().w_full().gap(8.0).center_y().child(
-        text(parts.join(" · "))
-            .key("strip-summary")
-            .font(k.ty.small_medium)
-            .color(k.c.text_muted),
-    );
+    let mut head = row()
+        .w_full()
+        .gap(8.0)
+        .center_y()
+        .child(text(parts.join(" · ")).key("strip-summary").font(TYPE.small).color(k.c.text_muted));
     if ids.is_some() {
         head = head.child(
-            Button::new(if folded { "Show" } else { "Hide" })
-                .variant(ButtonVariant::Ghost)
-                .control_size(ControlSize::Small)
+            Ghost::new(format!("strip-toggle-{g}"))
+                .label(if folded { "Show" } else { "Hide" })
+                .height(22.0)
+                .build(k)
                 .on_press(move |s: &mut App| {
                     if !s.composer_ui.folded_strips.remove(&g) {
                         s.composer_ui.folded_strips.insert(g);
                     }
-                })
-                .build(k)
-                .key(format!("strip-toggle-{g}")),
+                }),
         );
     }
     let mut strip = col()
@@ -237,10 +311,14 @@ fn reanchor_strip(s: &App, g: usize, k: &Kit) -> Option<El> {
         .role("group")
         .label("Threads that moved or lost their line")
         .w_full()
-        .px(12.0)
-        .py(4.0)
-        .gap(4.0)
-        .child(head);
+        .pl(38.0)
+        .pr(12.0)
+        .pt(5.0)
+        .pb(6.0)
+        .gap(6.0)
+        .fill(surf.card_head)
+        .child(head)
+        .child(hairline_bottom(surf.hairline));
     if let Some(ids) = ids.filter(|_| !folded) {
         for t in ids.iter().filter_map(|id| ops::thread(&s.mirror, id)) {
             strip = strip.child(card(s, t, k));
@@ -249,47 +327,83 @@ fn reanchor_strip(s: &App, g: usize, k: &Kit) -> Option<El> {
     Some(strip)
 }
 
+/// The full-width row under a line: a card inset 12 on each side.
+fn inset(e: El) -> El {
+    col().w_full().px(12.0).pt(6.0).pb(8.0).child(e)
+}
+
 fn annotation(s: &App, a: &Annotation, k: &Kit) -> El {
-    let wrap = |e: El| col().w_full().px(12.0).py(4.0).child(e);
     if a.id == "composer" {
         if s.composer.is_none() || (s.composer_ui.long && s.composer_ui.card) {
             return el();
         }
         if s.composer_ui.long {
-            return wrap(composer::long_note(k));
+            return inset(composer::long_note(k));
         }
-        return wrap(composer::inline(s, k));
+        return inset(composer::inline(s, k));
     }
     if let Some(i) = a.id.strip_prefix(App::DRAFT_PREFIX) {
         return i
             .parse::<usize>()
             .ok()
             .and_then(|i| s.mirror.drafts.get(i))
-            .map_or_else(el, |d| wrap(composer::draft_mark(d, k)));
+            .map_or_else(el, |d| inset(composer::draft_mark(d, k)));
     }
     if let Some(id) = a.id.strip_prefix("note:") {
-        return s.note(id).map_or_else(el, |n| wrap(notes::note_view(s, &n, k)));
+        if s.is_folded(&a.id) {
+            return el();
+        }
+        return s.note(id).map_or_else(el, |n| inset(notes::note_view(s, &n, k)));
     }
     match ops::thread(&s.mirror, &a.id) {
-        Some(t) => wrap(card(s, t, k).max_w(CARD_MAX_W)),
+        Some(_) if s.is_folded(&a.id) => el(),
+        Some(t) => inset(card(s, t, k)),
         None => el(),
     }
 }
 
-/// A thread's card as every surface draws it: the diff, the strip, the Brief and the Map.
+/// The colours a thread card paints, from the scheme's roles.
+pub(super) fn card_look(k: &Kit) -> CardLook {
+    let (surf, r) = sr(k);
+    CardLook {
+        fill: surf.panel,
+        border: surf.card_border,
+        focus: r.focus,
+        shadow: r.shadow,
+        hairline: surf.hairline,
+        agent: (r.note_bg, r.note),
+        you: (surf.selected_row, r.accent),
+    }
+}
+
+/// `L23`, `L20–24`.
+fn short_lines(t: &Thread) -> String {
+    match t.anchor.lines() {
+        (a, b) if a == b => format!("L{a}"),
+        (a, b) => format!("L{a}–{b}"),
+    }
+}
+
+/// A thread's card as every surface draws it: the diff, the strip, the Brief and the Map. In
+/// the diff it is always open (folding sends it to the gutter); elsewhere it collapses to a line.
 pub(super) fn card(s: &App, t: &Thread, k: &Kit) -> El {
     let location = match s.file_of_thread(t) {
         Some(i) => anchor_label(&s.keys[i], &t.anchor),
         None if t.is_artifact() => App::thread_title(t),
         None => anchor_label(&rain_core::paths::join(&t.repo, &t.file_path), &t.anchor),
     };
+    let open = s.folds_to_gutter(t) || s.expanded.contains(&t.id);
     let mut c = ThreadCard::new(t)
-        .collapsed(!s.expanded.contains(&t.id))
+        .collapsed(!open)
         .focused(s.focused_thread.as_deref() == Some(t.id.as_str()))
         .hovered(s.composer_ui.hovered.as_deref() == Some(t.id.as_str()))
         .dismissing(s.composer_ui.dismissing.as_deref() == Some(t.id.as_str()))
         .location(location)
+        .look(card_look(k))
         .on_action(|s: &mut App, id: &str, a, tx: &mut Tx| s.card_action(id, a, tx));
+    if !t.is_artifact() {
+        c = c.lines(short_lines(t));
+    }
     if t.answer.as_ref().is_some_and(|a| a.status.pending()) {
         c = c.now(rain_comments::clock::now_iso());
     }
@@ -297,4 +411,93 @@ pub(super) fn card(s: &App, t: &Thread, k: &Kit) -> El {
         c = c.reply_composer(&s.reply_edit, |s: &mut App| &mut s.reply_edit);
     }
     c.build(k)
+}
+
+/// The marks column by a line: a folded thread's badge (its message count, tinted by state),
+/// a folded note's ✦, or an unsent draft's dashed ✎. A press unfolds; hovering previews.
+fn gutter_mark(s: &App, here: &[&Annotation], k: &Kit) -> Option<El> {
+    let (surf, r) = sr(k);
+    for a in here {
+        if let Some(t) = ops::thread(&s.mirror, &a.id).filter(|_| s.is_folded(&a.id)) {
+            let (fg, bg, ring) = if ops::waiting_on_user(t, ME) {
+                (k.c.warning.fg, k.c.warning.bg, k.c.warning.border)
+            } else if t.kind() == ThreadKind::Issue || t.blocking() {
+                (k.c.danger.fg, k.c.danger.bg, k.c.danger.border)
+            } else {
+                (k.c.info.fg, k.c.info.bg, k.c.info.border)
+            };
+            let who = t
+                .messages
+                .first()
+                .and_then(|m| m.author.clone())
+                .filter(|a| !a.trim().is_empty())
+                .unwrap_or_else(|| "you".into());
+            let n = t.messages.len();
+            let first = t
+                .messages
+                .first()
+                .map(|m| rain_comments::label::first_sentence(&m.body, 140))
+                .unwrap_or_default();
+            let said = format!(
+                "Folded {} · {who} · {n} message{} — Enter or click to unfold\n{first}",
+                t.kind().label(),
+                if n == 1 { "" } else { "s" }
+            );
+            let id = a.id.clone();
+            return Some(
+                mark_box(bg, Some(ring), false)
+                    .label(said.clone())
+                    .help(said)
+                    .on_press(move |s: &mut App| s.unfold(&id))
+                    .child(icons::draw(&icons::CHAT, 12.0, fg))
+                    .child(text(n.to_string()).font(TYPE.mark).color(fg)),
+            );
+        }
+    }
+    for a in here {
+        if a.id.starts_with("note:") && s.is_folded(&a.id) {
+            let id = a.id.clone();
+            let said = "Folded note — click to unfold".to_owned();
+            return Some(
+                mark_box(r.note_bg, Some(r.note_border), false)
+                    .label(said.clone())
+                    .help(said)
+                    .on_press(move |s: &mut App| s.unfold(&id))
+                    .child(icons::draw(&icons::SPARK, 12.0, r.note)),
+            );
+        }
+    }
+    for a in here {
+        if a.id.starts_with(App::DRAFT_PREFIX) {
+            let said = "Unsent draft — c to continue".to_owned();
+            return Some(
+                mark_box(rune::Color::TRANSPARENT, Some(surf.strong_line), true)
+                    .label(said.clone())
+                    .help(said)
+                    .child(icons::draw(&icons::EDIT, 11.0, k.c.text_muted)),
+            );
+        }
+    }
+    None
+}
+
+fn mark_box(bg: rune::Color, ring: Option<rune::Color>, dashed: bool) -> El {
+    let mut b = row()
+        .key("gm")
+        .role("button")
+        .h(16.0)
+        .min_w(18.0)
+        .px(3.0)
+        .gap(2.0)
+        .center()
+        .radius(radius::CHIP)
+        .fill(bg)
+        .cursor(Cursor::Pointer);
+    if let Some(r) = ring {
+        b = b.border(1.0, r);
+        if dashed {
+            b = b.border_dash(2.0, 2.0);
+        }
+    }
+    b
 }

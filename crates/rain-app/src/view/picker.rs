@@ -1,12 +1,14 @@
 //! The `Ctrl+P` picker panel: fuzzy rows on the left, the selected file's first hunk on the right.
 
 use rain_core::LineKind;
-use rune::{El, Key, KeyEvent, ScrollSpec, Tx, col, row, text};
+use rune::{El, Key, KeyEvent, ScrollSpec, Tx, col, el, row, text};
 use rune_kit::{Kit, TextInput};
 
-use super::board::group_color;
+use super::icons;
+use super::ui::{kbd, must_tag, sr};
 use crate::app::App;
 use crate::app::picker::Target;
+use crate::theme::{TYPE, radius};
 
 /// Lines of the first hunk the preview shows.
 const PREVIEW_LINES: usize = 14;
@@ -33,166 +35,220 @@ fn picker_key(s: &mut App, ev: &KeyEvent, tx: &mut Tx) -> bool {
     }
 }
 
-/// The overlay's panel.
+/// The overlay's panel: the query, the rows at the left, the selected row's preview at the
+/// right, and the keys at its foot.
 pub(super) fn picker(s: &App, k: &Kit) -> Option<El> {
+    let (surf, r) = sr(k);
     let rows = s.picker_rows();
     let sel = s.picker.sel.min(rows.len().saturating_sub(1));
-    let mut list = col().key("picker-rows").w_full().gap(1.0);
+    let mut list = col().key("picker-rows").w_full().px(6.0).py(6.0);
     for (i, e) in rows.iter().enumerate() {
-        let mut r = row()
+        let mut line = row()
             .key(format!("pick-{i}"))
             .role("option")
             .label(format!("{} {}", e.kind, e.label))
             .w_full()
+            .h(32.0)
             .px(8.0)
-            .py(4.0)
             .gap(8.0)
             .items_center()
-            .radius(k.radius.sm)
+            .radius(radius::BUTTON)
             .on_press_tx(move |s: &mut App, tx: &mut Tx| {
                 s.picker.sel = i;
                 s.picker_go(false, tx);
             });
-        let (glyph, color) = match &e.target {
-            Target::File(g) => {
-                let gr = s.group_of(*g);
-                (crate::app::board::core_group(gr).glyph().to_owned(), group_color(gr, k))
-            }
-            Target::Group(_) => ("≡".into(), k.c.text_faint),
-            Target::Brief(_) => ("◆".into(), k.c.icon_accent),
-            Target::Node(_) => ("▦".into(), k.c.icon_accent),
-            Target::Step(_) => ("▶".into(), k.c.icon_accent),
-            Target::Thread(_) => ("●".into(), k.c.warning.icon),
+        let glyph = match &e.target {
+            Target::File(_) => &icons::FILE,
+            Target::Group(_) => &icons::TREE,
+            Target::Brief(_) => &icons::BOOK,
+            Target::Node(_) => &icons::MAP,
+            Target::Step(_) => &icons::TOUR,
+            Target::Thread(_) => &icons::CHAT,
         };
-        r = r
-            .child(text(glyph).font(k.ty.small.mono()).color(color).w(26.0))
-            .child(text(e.label.clone()).font(k.ty.ui).color(k.c.text_base).truncate().shrink())
-            .child(
-                text(e.detail.clone())
-                    .font(k.ty.small)
-                    .color(k.c.text_faint)
-                    .truncate()
-                    .grow(1.0)
-                    .shrink()
-                    .min_w(0.0),
-            );
+        line = line
+            .child(icons::draw(glyph, 14.0, k.c.text_muted))
+            .child(text(e.label.clone()).font(TYPE.ui).color(k.c.text_base).truncate().shrink());
         if let Target::File(g) = e.target {
             let f = &s.diff.files()[g];
             let viewed = s.is_viewed(g);
-            r = r
-                .child(
-                    text(format!("+{} −{}", f.additions, f.deletions))
-                        .font(k.ty.small.mono())
-                        .color(k.c.text_muted),
-                )
-                .child(
-                    text(if viewed { "✓" } else { "○" })
-                        .font(k.ty.small)
-                        .color(if viewed { k.c.success.icon } else { k.c.icon_faint }),
-                );
+            if s.group_of(g) == rain_triage::Group::Must {
+                line = line.child(must_tag(k));
+            }
+            line = line
+                .child(text(format!("+{}", f.additions)).font(TYPE.micro_mono).color(k.c.success.fg))
+                .child(text(format!("−{}", f.deletions)).font(TYPE.micro_mono).color(k.c.danger.fg))
+                .child(el().grow(1.0).a11y_hidden())
+                .child(if viewed {
+                    icons::draw(&icons::CHECK, 14.0, r.accent)
+                } else {
+                    el().size(9.0, 9.0).radius(4.5).border(1.5, k.c.text_faint).a11y_hidden()
+                });
         } else {
-            r = r.child(text(e.kind).font(k.ty.small).color(k.c.text_faint));
+            let ink = if matches!(e.target, Target::Thread(_)) {
+                k.c.warning.fg
+            } else {
+                k.c.text_faint
+            };
+            line = line
+                .child(el().grow(1.0).a11y_hidden())
+                .child(text(e.kind).font(TYPE.micro).color(ink));
         }
-        if i == sel {
-            r = r.fill(k.c.layer_03).checked(true);
-        }
-        list = list.child(r);
+        line = if i == sel {
+            line.fill(surf.selected_row).checked(true)
+        } else {
+            k.interactive(line)
+        };
+        list = list.child(line);
     }
     if rows.is_empty() {
-        list = list.child(text("Nothing matches").font(k.ty.small).color(k.c.text_muted).px(8.0).py(6.0));
+        list = list.child(text("Nothing matches").font(TYPE.small).color(k.c.text_muted).px(8.0).py(6.0));
     }
     let preview = rows.get(sel).map(|e| preview(s, &e.target, k)).unwrap_or_else(col);
+    let input = row()
+        .key("picker-input-row")
+        .w_full()
+        .h(48.0)
+        .px(14.0)
+        .gap(10.0)
+        .items_center()
+        .child(icons::draw(&icons::SEARCH, 16.0, k.c.text_muted))
+        .child(
+            col().grow(1.0).min_w(0.0).child(
+                TextInput::new(&s.picker.edit)
+                    .placeholder("Go to a file, group, Brief section, Map node, step or thread")
+                    .label("Go to")
+                    .width(None)
+                    .plain()
+                    .on_edit(|s: &mut App| &mut s.picker.edit)
+                    .on_change(|s: &mut App, _: &mut Tx| s.picker.sel = 0)
+                    .on_key(picker_key)
+                    .build(k)
+                    .key("picker-input"),
+            ),
+        )
+        .child(kbd("Ctrl+P", k));
+    let foot = row()
+        .w_full()
+        .h(34.0)
+        .px(14.0)
+        .gap(16.0)
+        .items_center()
+        .fill(surf.card_head)
+        .child(text("↑↓ move").font(TYPE.small).color(k.c.text_faint))
+        .child(text("Enter go").font(TYPE.small).color(k.c.text_faint))
+        .child(text("Ctrl+Enter go and zoom").font(TYPE.small).color(k.c.text_faint).grow(1.0))
+        .child(text("Esc close").font(TYPE.small).color(k.c.text_faint));
     let panel = col()
         .key("picker")
         .role("dialog")
         .label("Go to file")
-        .w(1000.0)
-        .max_w(1400.0)
+        .w(940.0)
         .h(520.0)
-        .gap(6.0)
-        .padding(8.0)
-        .radius(k.radius.lg)
-        .fill(k.c.layer_01)
-        .border(1.0, k.c.border_base)
+        .radius(radius::ISLAND)
+        .fill(r.raised)
+        .border(1.0, surf.card_border)
+        .shadow(24.0, 64.0, r.shadow)
+        .clip_rounded(radius::ISLAND)
         .on_press(|_: &mut App| {})
-        .child(
-            TextInput::new(&s.picker.edit)
-                .placeholder("Go to a file, group, Brief section, Map node, step or thread")
-                .label("Go to")
-                .width(None)
-                .on_edit(|s: &mut App| &mut s.picker.edit)
-                .on_change(|s: &mut App, _: &mut Tx| s.picker.sel = 0)
-                .on_key(picker_key)
-                .build(k)
-                .key("picker-input"),
-        )
+        .child(input)
+        .child(el().w_full().h(1.0).fill(surf.hairline))
         .child(
             row()
                 .w_full()
                 .grow(1.0)
                 .min_h(0.0)
-                .gap(8.0)
                 .child(
                     col()
                         .key("picker-list")
-                        .w(680.0)
+                        .w(400.0)
                         .h_full()
                         .scroll(ScrollSpec { stick_bottom: false })
                         .child(list),
                 )
+                .child(el().w(1.0).h_full().fill(surf.hairline).a11y_hidden())
                 .child(preview),
         )
-        .child(
-            text("Enter go · Ctrl+Enter go and stay zoomed · ↑↓ choose · Esc close")
-                .font(k.ty.small)
-                .color(k.c.text_faint),
-        );
-    Some(col().w_full().items_center().pt(24.0).child(k.elevate(panel, &k.elevation.overlay)))
+        .child(el().w_full().h(1.0).fill(surf.hairline))
+        .child(foot);
+    Some(col().w_full().items_center().pt(34.0).child(panel))
 }
 
-/// The selected file's first hunk, or the entry's detail.
+/// The selected file's first hunk as the diff draws it, or a note that there is none.
 fn preview(s: &App, t: &Target, k: &Kit) -> El {
-    let pane = col()
-        .key("picker-preview")
-        .grow(1.0)
-        .min_w(0.0)
-        .h_full()
-        .padding(8.0)
-        .gap(1.0)
-        .radius(k.radius.md)
-        .fill(k.c.bg_deep);
+    let (surf, r) = sr(k);
+    let pane = col().key("picker-preview").w(0.0).grow(1.0).min_w(0.0).h_full().fill(surf.reader);
     let Target::File(g) = *t else {
-        return pane.child(text("No preview").font(k.ty.small).color(k.c.text_faint));
+        return pane.child(text("No preview").font(TYPE.small).color(k.c.text_faint).padding(14.0));
     };
     let f = &s.diff.files()[g];
-    let mut pane = pane.child(text(s.keys[g].clone()).font(k.ty.small_medium).color(k.c.text_base).truncate());
-    if let Some(i) = s.item(g) {
-        pane = pane.child(
-            text(format!("why: {}", i.reason.text))
-                .font(k.ty.small)
-                .color(k.c.text_muted)
-                .truncate(),
-        );
-    }
+    let key = &s.keys[g];
+    let (dir, name) = key.rsplit_once('/').map_or(("", key.as_str()), |(d, n)| (d, n));
+    let dir = if dir.is_empty() {
+        String::new()
+    } else {
+        format!("{}/", dir.replacen('/', " · ", 1))
+    };
     let start = f
         .lines
         .iter()
         .position(|l| l.kind != LineKind::Context)
         .unwrap_or(0)
         .saturating_sub(3);
+    let hunk = f
+        .hunks
+        .iter()
+        .find(|h| (h.lines.start as usize) <= start + 3 && (start + 3) < h.lines.end as usize)
+        .or(f.hunks.first())
+        .map(|h| rain_diffview::hunk_header(f, h))
+        .unwrap_or_default();
+    let mut pane = pane.child(
+        row()
+            .w_full()
+            .h(34.0)
+            .px(12.0)
+            .gap(0.0)
+            .items_center()
+            .child(text(dir).font(TYPE.small).color(k.c.text_muted).truncate_head().shrink())
+            .child(text(name.to_owned()).font(TYPE.label).color(k.c.text_base))
+            .child(el().grow(1.0).a11y_hidden())
+            .child(
+                text(format!("first hunk · {hunk}"))
+                    .font(TYPE.micro)
+                    .color(k.c.text_faint)
+                    .truncate()
+                    .shrink(),
+            ),
+    );
+    let num = rune::tok::TextStyle::new(12.0, 400.0).mono().lh(20.0);
     for i in start..(start + PREVIEW_LINES).min(f.lines.len()) {
         let l = &f.lines[i];
-        let (mark, color) = match l.kind {
-            LineKind::Added => ("+", k.c.success.fg),
-            LineKind::Removed => ("-", k.c.danger.fg),
-            _ => (" ", k.c.text_muted),
+        let (sign, ink, fill) = match l.kind {
+            LineKind::Added => ("+", k.c.success.fg, r.add_bg),
+            LineKind::Removed => ("−", k.c.danger.fg, r.del_bg),
+            _ => (" ", k.c.text_faint, surf.reader),
         };
-        let n = if l.new != 0 { l.new } else { l.old };
+        let n = |n: u32| {
+            row().w(38.0).pr(8.0).justify_end().child(
+                text(if n == 0 { String::new() } else { n.to_string() })
+                    .font(num)
+                    .color(k.c.text_faint),
+            )
+        };
         pane = pane.child(
-            text(format!("{n:>5} {mark} {}", f.line_text(i as u32)))
-                .font(crate::CODE)
-                .color(color)
-                .truncate(),
+            row()
+                .w_full()
+                .h(20.0)
+                .fill(fill)
+                .child(n(l.old))
+                .child(n(l.new))
+                .child(text(sign).font(crate::CODE).color(ink).w(18.0))
+                .child(
+                    text(f.line_text(i as u32).replace('\t', "    "))
+                        .font(crate::CODE)
+                        .color(k.c.text_base)
+                        .truncate()
+                        .shrink(),
+                ),
         );
     }
     pane

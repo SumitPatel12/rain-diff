@@ -838,11 +838,11 @@ fn the_status_bar_says_when_split_is_too_narrow() {
     let shows = |rt: &Runtime<App>, t: &str| rt.elements().iter().any(|e| !e.exiting && e.text.as_deref() == Some(t));
     let wide = sized_runtime(app(story(), true), (1920.0, 1080.0));
     assert!(wide.find("status-layout").is_some());
-    assert!(shows(&wide, "Split ▾") && !shows(&wide, "Split · narrow ▾"));
+    assert!(shows(&wide, "Split") && !shows(&wide, "Split · narrow"));
     let narrow = scene_runtime(app(story(), false), (1366.0, 768.0));
     assert!(crate::app::layout::columns_per_side(narrow.state.diff_width) < crate::app::layout::SPLIT_MIN_COLUMNS);
     assert_eq!(narrow.state.diff.mode(), DiffMode::Unified);
-    assert!(shows(&narrow, "Split · narrow ▾"));
+    assert!(shows(&narrow, "Split · narrow"));
     let why = narrow.state.layout_reason().unwrap();
     let layout = narrow
         .elements()

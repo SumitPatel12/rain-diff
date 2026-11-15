@@ -285,7 +285,7 @@ fn the_overview_without_a_brief_says_how_to_get_one() {
     settle(&mut rt);
     assert!(rt.find("overview-empty").is_some());
     assert!(rt.find("brief-facts").is_some(), "the facts stand in");
-    assert!(rt.find("brief-tour").is_none());
+    assert!(rt.find("brief-tour").is_some(), "Start tour shows, disabled, with no brief");
 }
 
 #[test]

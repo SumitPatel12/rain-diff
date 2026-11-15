@@ -2,17 +2,19 @@
 //! spotlit lines' starts stay readable. No scrim: the reader's own dimming is the focus, and the
 //! reader stays usable.
 
-use rune::{El, Tx, col, el, row, text};
-use rune_kit::{Button, ButtonVariant, Checkbox, ControlSize, Kit};
+use rune::{Cursor, El, Tx, col, el, row, text};
+use rune_kit::{ButtonVariant, Checkbox, Kit};
 
-use super::{TOOLBAR_HEIGHT, muted};
+use super::ui::{outline, sr};
+use super::{STATUS_HEIGHT, TOOLBAR_HEIGHT, muted};
 use crate::app::{App, FoundBy, TourStage};
+use crate::theme::{TYPE, radius};
 
-const CARD_W: f32 = 360.0;
-/// Room at the right for the diff's overview ruler and scrollbar.
-const RULER_CLEAR: f32 = 32.0;
+const CARD_W: f32 = 440.0;
+/// Room at the right for the diff's overview ruler.
+const RULER_CLEAR: f32 = 30.0;
 /// The status line under the reader.
-const STATUS_H: f32 = 26.0;
+const STATUS_H: f32 = STATUS_HEIGHT;
 
 pub(super) fn tour(s: &App, k: &Kit) -> Option<El> {
     let card = match s.tour.stage {
@@ -27,8 +29,8 @@ pub(super) fn tour(s: &App, k: &Kit) -> Option<El> {
         .w(CARD_W)
         .max_h(560.0)
         .gap(8.0)
-        .padding(14.0)
-        .clip_rounded(k.radius.xl)
+        .padding(16.0)
+        .clip_rounded(radius::ISLAND)
         .on_press(|_: &mut App| {})
         .child(card);
     Some(
@@ -41,35 +43,51 @@ pub(super) fn tour(s: &App, k: &Kit) -> Option<El> {
             .pr(RULER_CLEAR)
             .items_end()
             .justify_end()
-            .child(rune_kit::popover::raised(k, panel, k.radius.xl)),
+            .child(rune_kit::popover::raised(k, panel, radius::ISLAND)),
     )
 }
 
 fn heading(t: impl Into<String>, k: &Kit) -> El {
-    text(t.into()).font(k.ty.ui_medium).color(k.c.text_base).wrap()
+    text(t.into())
+        .font(rune::tok::TextStyle::new(15.0, 600.0).lh(22.0))
+        .color(k.c.text_base)
+        .wrap()
 }
 
 fn body(t: impl Into<String>, k: &Kit) -> El {
     text(t.into()).font(k.ty.ui).color(k.c.text_base).wrap()
 }
 
+/// The step's place, `2 / 6`, in the accent.
 fn pill(t: impl Into<String>, key: &str, k: &Kit) -> El {
-    row()
-        .key(key.to_owned())
-        .px(6.0)
-        .py(1.0)
-        .radius(k.radius.sm)
-        .fill(k.c.layer_02)
-        .child(text(t.into()).font(k.ty.mono).color(k.c.text_base))
+    let (_, r) = sr(k);
+    text(t.into()).key(key.to_owned()).font(TYPE.label).color(r.accent)
 }
 
+/// The card's one filled action (`Contrast`), else an outlined one.
 fn button(label: &str, key: &str, variant: ButtonVariant, k: &Kit, f: impl Fn(&mut App, &mut Tx) + 'static) -> El {
-    Button::new(label)
-        .variant(variant)
-        .control_size(ControlSize::Small)
-        .on_press_tx(f)
-        .build(k)
-        .key(key.to_owned())
+    let (_, r) = sr(k);
+    if variant != ButtonVariant::Contrast {
+        return outline(key.to_owned(), label.to_owned(), None, 26.0, k).on_press_tx(f);
+    }
+    k.interactive_with(
+        row()
+            .key(key.to_owned())
+            .role("button")
+            .label(label.to_owned())
+            .h(26.0)
+            .px(10.0)
+            .center()
+            .radius(radius::BUTTON)
+            .fill(r.accent)
+            .cursor(Cursor::Pointer)
+            .focusable(true)
+            .child(text(label.to_owned()).font(TYPE.small).color(r.on_accent).a11y_hidden()),
+        k.c.contrast_hover,
+        k.c.contrast_pressed,
+    )
+    .press_scale(0.97)
+    .on_press_tx(f)
 }
 
 fn start(s: &App, k: &Kit) -> El {
@@ -118,15 +136,15 @@ fn step(s: &App, k: &Kit) -> Option<El> {
     let n = s.tour_views().len();
     let i = s.tour.step;
     let place = if v.live { "Claude".to_owned() } else { format!("{}/{n}", i + 1) };
-    let mut head = row()
-        .w_full()
-        .gap(8.0)
-        .items_center()
-        .child(pill(place, "tour-count", k))
-        .child(heading(v.title.replace('`', ""), k).shrink().grow(1.0));
+    let mut count = row().gap(8.0).items_center().child(pill(place, "tour-count", k));
     if s.tour.understood.contains(&i) && !v.live {
-        head = head.child(muted("understood", k));
+        count = count.child(muted("understood", k));
     }
+    let head = col()
+        .w_full()
+        .gap(2.0)
+        .child(count)
+        .child(heading(v.title.replace('`', ""), k).w_full());
     let mut c = col().key("tour-step").w_full().gap(8.0).child(head);
     if v.at.as_ref().is_some_and(|a| a.changed) {
         c = c.child(
@@ -175,7 +193,7 @@ fn step(s: &App, k: &Kit) -> Option<El> {
         .w_full()
         .gap(6.0)
         .items_center()
-        .child(button("◀ p", "tour-prev", ButtonVariant::Ghost, k, |s, tx| s.tour_prev(tx)))
+        .child(button("‹ p", "tour-prev", ButtonVariant::Ghost, k, |s, tx| s.tour_prev(tx)))
         .child(el().grow(1.0));
     let primary = if !v.live && s.tour_findings_hidden(i) && !s.tour_findings(i).is_empty() {
         "Show findings (Space)"
@@ -186,14 +204,21 @@ fn step(s: &App, k: &Kit) -> Option<El> {
     };
     nav = nav
         .child(button(primary, "tour-space", ButtonVariant::Contrast, k, |s, tx| s.tour_space(tx)))
-        .child(button("n ▶", "tour-next", ButtonVariant::Ghost, k, |s, tx| s.tour_next(tx)));
+        .child(button("n ›", "tour-next", ButtonVariant::Ghost, k, |s, tx| s.tour_next(tx)));
     Some(c.child(nav))
 }
 
 /// "Findings at this step": a count while hidden, else who found what.
 fn findings(s: &App, i: usize, k: &Kit) -> El {
     let f = s.tour_findings(i);
-    let mut c = col().key("tour-findings").w_full().gap(4.0);
+    let (surf, _) = sr(k);
+    let mut c = col()
+        .key("tour-findings")
+        .w_full()
+        .gap(6.0)
+        .padding(10.0)
+        .radius(radius::CARD)
+        .fill(surf.well);
     if f.is_empty() {
         return c.child(muted("No findings on this range", k));
     }

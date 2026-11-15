@@ -1,7 +1,7 @@
 //! The composer with its Comment and Question modes: inline under the anchored line, as a
 //! floating panel on an artifact, or as the draggable long editor with a Markdown preview.
 
-use rain_comments::{Composer, ComposerMode, anchor_label};
+use rain_comments::{Composer, ComposerMode};
 use rain_core::{Draft, ThreadKind};
 use rune::{El, Tx, col, row, text};
 use rune_kit::{Kit, Markdown};
@@ -17,7 +17,10 @@ fn title(s: &App) -> String {
         return a.title.clone();
     }
     match &s.composer {
-        Some(c) => anchor_label(s.keys.get(c.file).map_or("", String::as_str), &c.anchor),
+        Some(c) => match c.anchor.lines() {
+            (a, b) if a == b => format!("on line {a}"),
+            (a, b) => format!("on lines {a}–{b}"),
+        },
         None => String::new(),
     }
 }
@@ -64,7 +67,11 @@ fn wired(s: &App, k: &Kit, rows: (usize, usize), long: bool, bare: bool) -> El {
         .on_mode(|s: &mut App, m: ComposerMode, _: &mut Tx| s.set_composer_mode(m))
         .on_kind(|s: &mut App, kd: ThreadKind, _: &mut Tx| s.set_composer_kind(kd))
         .on_blocking(|s: &mut App, _: &mut Tx| s.toggle_composer_blocking())
-        .on_expand(|s: &mut App, _: &mut Tx| s.toggle_long_editor());
+        .on_expand(|s: &mut App, _: &mut Tx| s.toggle_long_editor())
+        .kind_menu(s.composer_ui.kind_menu, |s: &mut App, _: &mut Tx| {
+            s.composer_ui.kind_menu = !s.composer_ui.kind_menu;
+        })
+        .look(super::diff::card_look(k));
     if s.composer.is_some() {
         c = c.on_suggest(|s: &mut App, _: &mut Tx| s.insert_suggestion());
     }

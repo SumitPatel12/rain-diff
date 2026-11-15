@@ -1,56 +1,41 @@
-//! Note cards: agent story, file and line notes and the overview's intent notes, all with a
-//! purple rail so they never read as comment threads.
+//! Note cards: agent story, file and line notes and the overview's intent notes, on their own
+//! tint with a note rail, so they never read as comment threads.
 
-use rain_core::Note;
-use rune::{Color, El, col, el, row, text};
-use rune_kit::{Button, ButtonVariant, ControlSize, Kit, Markdown};
+use rain_core::{Anchor, Note};
+use rune::{Color, Cursor, El, col, el, row, text};
+use rune_kit::{Kit, Markdown};
 
+use super::icons;
+use super::ui::{Ghost, sr};
 use crate::app::App;
+use crate::theme::{TYPE, radius};
 
 /// Bodies longer than this many lines start clipped behind "Show all".
 pub(super) const CLIP_LINES: usize = 8;
 
 pub(super) fn note_purple(k: &Kit) -> Color {
-    crate::theme::scheme_of(k).note_purples().0
+    sr(k).1.note
 }
 
-/// Text on a [`note_purple`] fill: white on the saturated purple, the page on a palette's paler one.
-pub(super) fn on_note_purple(k: &Kit) -> Color {
-    match crate::theme::scheme_of(k) {
-        crate::theme::Scheme::Dark | crate::theme::Scheme::Light => Color::WHITE,
-        _ => k.c.page,
-    }
-}
-
-/// The purple for label text: in dark and light the rail's purple misses 4.5:1 on its own tint.
-pub(super) fn note_ink(k: &Kit) -> Color {
-    crate::theme::scheme_of(k).note_purples().1
-}
-
-/// "Intent note" for the overview's notes, else "Note from <author>".
+/// "Intent" for the overview's notes, else "Note".
 pub(super) fn note_label(n: &Note) -> String {
-    if n.is_overview() {
-        return "Intent note".into();
-    }
-    match n.author.as_deref().map(str::trim).filter(|a| !a.is_empty()) {
-        Some(a) => format!("Note from {a}"),
-        None => "Note".into(),
-    }
+    if n.is_overview() { "Intent".into() } else { "Note".into() }
 }
 
-fn shell(key: String, label: &str, k: &Kit, content: El) -> El {
-    row()
-        .key(key)
-        .role("note")
-        .label(label.to_owned())
-        .w_full()
-        .gap(8.0)
-        .items_stretch()
-        .padding(8.0)
-        .radius(k.radius.md)
-        .fill(k.alpha(note_purple(k), 0.10))
-        .child(el().w(3.0).radius(1.5).fill(note_purple(k)))
-        .child(content)
+/// ` · claude · L23–24`: who wrote it and where it sits.
+fn note_meta(n: &Note) -> String {
+    let mut parts = Vec::new();
+    if let Some(a) = n.author.as_deref().map(str::trim).filter(|a| !a.is_empty()) {
+        parts.push(a.to_owned());
+    }
+    match n.anchor {
+        Some(Anchor::Line { line, .. }) => parts.push(format!("L{line}")),
+        Some(Anchor::Range { start, end, .. }) => parts.push(format!("L{start}–{end}")),
+        Some(Anchor::Span { start_line, end_line, .. }) if start_line == end_line => parts.push(format!("L{start_line}")),
+        Some(Anchor::Span { start_line, end_line, .. }) => parts.push(format!("L{start_line}–{end_line}")),
+        None => {}
+    }
+    parts.iter().map(|p| format!("· {p}")).collect::<Vec<_>>().join(" ")
 }
 
 /// Characters of body text per drawn line, for the clip estimate.
@@ -91,54 +76,138 @@ fn long(body: &str) -> bool {
     drawn_lines(body) > CLIP_LINES
 }
 
-/// One note, keyed `note-<id>`: label, optional title, Markdown body; long bodies clip with a
-/// "Show all" toggle.
+/// A small header button on a note: hover overlay, muted text.
+fn note_button(key: String, icon: &'static rune::Icon, label: Option<&str>, help: &str, k: &Kit) -> El {
+    let mut g = Ghost::new(key).icon(icon).help(help).height(22.0);
+    if let Some(l) = label {
+        g = g.label(l);
+    }
+    g.build(k)
+}
+
+/// One note, keyed `note-<id>`: `✦ Intent · claude · L23–24` with Pop out and Fold, an optional
+/// title, then the Markdown body; long bodies clip with a "Show all" toggle. Popped out, it
+/// collapses to "Open in a window · Bring back".
 pub(super) fn note_view(s: &App, n: &Note, k: &Kit) -> El {
+    let (_, r) = sr(k);
     let label = note_label(n);
+    let id = n.id.clone();
+    let fold_key = format!("note:{}", n.id);
+    let popped = s.note_popped(&n.id);
     let mut head = row()
         .key("note-head")
         .w_full()
-        .gap(8.0)
+        .h(24.0)
+        .gap(6.0)
         .items_center()
-        .child(text(label.clone()).font(k.ty.small_medium).color(note_ink(k)));
+        .child(icons::draw(&icons::SPARK, 14.0, r.note))
+        .child(text(label.clone()).font(TYPE.label).color(r.note))
+        .child(text(note_meta(n)).font(TYPE.small).color(k.c.text_faint).truncate().shrink());
     if let Some(t) = n.title.as_deref().map(str::trim).filter(|t| !t.is_empty()) {
+        head = head.child(text(t.to_owned()).font(TYPE.strong).color(k.c.text_base).truncate().shrink());
+    }
+    head = head.child(el().grow(1.0).a11y_hidden());
+    if !popped {
+        let pop = id.clone();
         head = head.child(
-            text(t.to_owned())
-                .font(k.ty.ui_medium)
-                .color(k.c.text_base)
-                .grow(1.0)
-                .shrink()
-                .truncate(),
+            note_button(
+                format!("note-popout-{}", n.id),
+                &icons::POPOUT,
+                Some("Pop out"),
+                "Open in its own window",
+                k,
+            )
+            .on_press(move |s: &mut App| s.pop_out_note(&pop)),
         );
     }
+    if n.anchor.is_some() {
+        let fk = fold_key.clone();
+        head = head.child(
+            note_button(format!("note-fold-{}", n.id), &icons::FOLD, None, "Fold into the gutter", k)
+                .on_press(move |s: &mut App| s.toggle_fold(&fk)),
+        );
+    }
+    let mut content = col().grow(1.0).shrink().min_w(0.0).gap(2.0).child(head);
+    if popped {
+        let back = id.clone();
+        content = content.child(
+            row()
+                .key("note-popped")
+                .gap(8.0)
+                .items_center()
+                .child(text("Open in a window").font(TYPE.small).color(k.c.text_muted))
+                .child(
+                    k.interactive(
+                        row()
+                            .key(format!("note-bring-back-{}", n.id))
+                            .role("button")
+                            .label("Bring back")
+                            .px(6.0)
+                            .h(22.0)
+                            .items_center()
+                            .radius(radius::CHIP)
+                            .cursor(Cursor::Pointer)
+                            .child(text("Bring back").font(TYPE.small).color(k.c.text_accent).a11y_hidden()),
+                    )
+                    .on_press(move |s: &mut App| s.bring_back_note(&back)),
+                ),
+        );
+        return shell(format!("note-{}", n.id), &label, k, content);
+    }
     let md = Markdown::new(n.body.clone()).selectable(true).build(k);
-    let mut content = col().grow(1.0).shrink().gap(4.0).child(head);
     if long(&n.body) {
         let open = s.note_expanded(&n.id);
-        let body = col().key("note-body").w_full().child(md);
+        let body = col().key("note-body").w_full().max_w(1000.0).child(md);
         content = content.child(if open {
             body
         } else {
-            body.max_h(k.ty.body.line_height * CLIP_LINES as f32).clip_fade(0.0, 0.0, 0.0, 24.0)
+            body.max_h(TYPE.ui.line_height * CLIP_LINES as f32).clip_fade(0.0, 0.0, 0.0, 24.0)
         });
-        let id = n.id.clone();
+        let more = id.clone();
         content = content.child(
             row().child(
-                Button::new(if open { "Show less" } else { "Show all" })
-                    .variant(ButtonVariant::Ghost)
-                    .control_size(ControlSize::Small)
-                    .on_press(move |s: &mut App| s.toggle_note_expanded(&id))
-                    .build(k)
-                    .key(format!("note-more-{}", n.id)),
+                note_button(
+                    format!("note-more-{}", n.id),
+                    if open { &icons::CHEV_U } else { &icons::CHEV_D },
+                    Some(if open { "Show less" } else { "Show all" }),
+                    if open { "Show less" } else { "Show all" },
+                    k,
+                )
+                .on_press(move |s: &mut App| s.toggle_note_expanded(&more)),
             ),
         );
     } else {
-        content = content.child(col().key("note-body").w_full().child(md));
+        content = content.child(col().key("note-body").w_full().max_w(1000.0).child(md));
     }
     shell(format!("note-{}", n.id), &label, k, content)
 }
 
-/// The story notes, at the top of the inspector; `None` when there are none.
+/// The note's card: its tint, ring and 4 point corners, with the rail at the left edge.
+fn shell(key: String, label: &str, k: &Kit, content: El) -> El {
+    let (_, r) = sr(k);
+    row()
+        .key(key)
+        .role("note")
+        .label(label.to_owned())
+        .w_full()
+        .pl(14.0)
+        .pr(8.0)
+        .pt(6.0)
+        .pb(9.0)
+        .radius(radius::CHIP)
+        .fill(r.note_bg)
+        .border(1.0, r.note_border)
+        .child(
+            el().pin(Some(0.0), Some(0.0), None, Some(0.0))
+                .w(3.0)
+                .corners([radius::CHIP, 0.0, 0.0, radius::CHIP])
+                .fill(r.note)
+                .a11y_hidden(),
+        )
+        .child(content)
+}
+
+/// The story notes, at the top of the Overview; `None` when there are none.
 pub(super) fn story_card(s: &App, k: &Kit) -> Option<El> {
     let notes = s.story_notes();
     if notes.is_empty() {
@@ -164,7 +233,8 @@ pub(super) fn file_card(s: &App, g: usize, k: &Kit) -> Option<El> {
         .label("File notes")
         .w_full()
         .px(12.0)
-        .py(4.0)
+        .pt(6.0)
+        .pb(2.0)
         .gap(6.0);
     for n in notes {
         c = c.child(note_view(s, n, k));

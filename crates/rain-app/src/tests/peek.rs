@@ -44,7 +44,7 @@ fn a_hover_dwell_opens_the_peek_and_leaving_closes_it_after_the_grace() {
     assert!(rt.find("peek").is_some(), "the card is drawn");
     assert!(rt.find("peek-open").is_some() && rt.find("peek-popout").is_some() && rt.find("peek-close").is_some());
     let card = rt.elements().into_iter().find(|e| e.key.as_deref() == Some("peek")).unwrap();
-    assert!(card.rect[2] <= 640.5, "640 wide at most: {:?}", card.rect);
+    assert!(card.rect[2] <= 660.5, "660 wide at most: {:?}", card.rect);
     assert!(card.rect[3] <= 420.5, "420 high at most: {:?}", card.rect);
     let anchor = rt
         .elements()

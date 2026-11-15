@@ -599,6 +599,20 @@ impl App {
     pub fn presence_state(&self) -> PresenceState {
         effective_state(&self.conversation.presence, now_ms())
     }
+
+    /// The agent's latest message on any thread, `claude: <first sentence>`; `None` before it
+    /// has said anything.
+    pub fn latest_agent_message(&self) -> Option<String> {
+        let m = self
+            .mirror
+            .threads
+            .iter()
+            .flat_map(|t| &t.messages)
+            .filter(|m| m.author.as_deref().is_some_and(|a| !a.trim().is_empty()))
+            .max_by(|a, b| a.created_at.cmp(&b.created_at))?;
+        let who = m.author.as_deref().unwrap_or("agent");
+        Some(format!("{who}: {}", rain_comments::label::first_sentence(&m.body, 140)))
+    }
 }
 
 impl App {
@@ -1061,8 +1075,12 @@ mod tests {
                     .into_iter()
                     .find(|e| e.key.as_deref() == Some("overlay-conversation"))
                     .expect("overlay");
-                assert!((panel.rect[2] - 420.0).abs() < 1.0, "420 pt wide: {:?}", panel.rect);
-                assert!(panel.rect[0] + panel.rect[2] >= size.0 - 1.0, "on the right edge: {:?}", panel.rect);
+                assert!((panel.rect[2] - 380.0).abs() < 1.0, "380 pt wide: {:?}", panel.rect);
+                assert!(
+                    panel.rect[0] + panel.rect[2] >= size.0 - 9.0,
+                    "an island at the right edge: {:?}",
+                    panel.rect
+                );
                 for key in [
                     "conv-section-waiting",
                     "conv-section-addressed",

@@ -21,5 +21,7 @@ mod view;
 mod testing;
 
 pub use model::{hunk_header, language};
-pub use state::{Align, Annotation, DiffMode, DiffState, EXPAND_STEP, Expand, Layout, LineRange, LineRef, Opened, SpanSelection, Spot};
-pub use view::{DiffView, SCROLL_KEY};
+pub use state::{
+    Align, Annotation, DiffMode, DiffState, EXPAND_STEP, Expand, Layout, LineRange, LineRef, Metrics, Opened, SpanSelection, Spot,
+};
+pub use view::{DiffColors, DiffView, SCROLL_KEY};
