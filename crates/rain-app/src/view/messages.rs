@@ -82,9 +82,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn primitives_build_in_both_themes() {
-        for (dark, chrome) in [true, false].into_iter().flat_map(|d| crate::settings::Chrome::ALL.map(|c| (d, c))) {
-            let k = crate::theme::look(dark, chrome, crate::settings::Density::Compact).kit;
+    fn primitives_build_in_every_scheme() {
+        for scheme in crate::theme::Scheme::ALL {
+            let k = crate::theme::look(scheme).kit;
             let go: Action = ("Reload", |s: &mut App, tx: &mut Tx| s.reload_now(tx));
             for t in [Tone::Info, Tone::Warning, Tone::Danger, Tone::Success] {
                 let _ = banner("b", "3 new commits".into(), t, Some(go), &k);

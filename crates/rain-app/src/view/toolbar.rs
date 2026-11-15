@@ -6,8 +6,11 @@ use rune::{El, Tx, el, row, text};
 use rune_kit::{Button, ButtonVariant, ControlSize, Kit, Menu, MenuEntry, MenuItem, Placement, Toolbar};
 
 use crate::app::{App, MoreSub};
-use crate::settings::{Chrome, Density, Theme};
-use crate::theme::{Look, NARROW};
+use crate::settings::{Density, Theme};
+use crate::theme::Look;
+
+/// Below this window width the title leaves out the repos and refs.
+const NARROW: f32 = 1500.0;
 
 /// The document's title, else the session's id.
 fn heading(s: &App) -> Option<String> {
@@ -162,16 +165,10 @@ fn pick<T: Copy + PartialEq + 'static>(label: &str, value: T, now: T, set: fn(&m
     }))
 }
 
-/// `⋯`: the views, Appearance (chrome, theme, density), keys and the palette.
+/// `⋯`: the views, Appearance (theme, density), keys and the palette.
 fn more_menu(s: &App, k: &Kit, layer: &mut Vec<El>) -> El {
     let open = s.menus.more_sub;
-    let chrome = Chrome::ALL
-        .iter()
-        .map(|&c| pick(c.label(), c, s.chrome(), App::set_chrome))
-        .collect();
-    let theme = [("System", Theme::System), ("Light", Theme::Light), ("Dark", Theme::Dark)]
-        .map(|(l, t)| pick(l, t, s.settings.theme, App::set_theme))
-        .into();
+    let theme = Theme::PICKS.map(|(t, l)| pick(l, t, s.settings.theme, App::set_theme)).into();
     let density = [("Compact", Density::Compact), ("Comfortable", Density::Comfortable)]
         .map(|(l, d)| pick(l, d, s.settings.density, App::set_density))
         .into();
@@ -189,7 +186,6 @@ fn more_menu(s: &App, k: &Kit, layer: &mut Vec<El>) -> El {
         .item(command_item("Filter files", Command::FilterFiles))
         .separator()
         .group_label("Appearance")
-        .item(sub("Chrome", MoreSub::Chrome, open, chrome))
         .item(sub("Theme", MoreSub::Theme, open, theme))
         .item(sub("Density", MoreSub::Density, open, density))
         .separator()

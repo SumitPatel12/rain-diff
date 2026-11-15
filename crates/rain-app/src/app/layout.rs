@@ -19,7 +19,6 @@ pub const SIDE_GUTTER: f32 = 80.0;
 /// A submenu of the top bar's `⋯` menu.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MoreSub {
-    Chrome,
     Theme,
     Density,
 }

@@ -8,6 +8,7 @@ use rune::{Key, Mods, Runtime};
 
 use super::*;
 use crate::app::{PeekTarget, ReaderTab};
+use crate::theme::Scheme;
 
 const STORY_BRIEF: &str = include_str!("../../../../fixtures/brief/story.json");
 
@@ -176,24 +177,34 @@ fn pop_out_fills_the_window_state_and_a_second_replaces_it() {
     let t = chip_target(&rt);
     let first = rt.state.peek_content(&t);
     let mut w = crate::PeekWindow::default();
-    w.show(first.clone(), true);
+    w.show(first.clone(), Scheme::Dark);
     assert_eq!(w.content.as_ref(), Some(&first));
-    assert_eq!(w.dark, Some(true));
+    assert_eq!(w.scheme, Some(Scheme::Dark));
     let other = PeekTarget {
         key: "server/src/Api/VouchersController.cs".into(),
         lines: Some((23, 23)),
         ..t
     };
     let second = rt.state.peek_content(&other);
-    w.show(second.clone(), false);
+    w.show(second.clone(), Scheme::Everforest);
     assert_eq!(w.content, Some(second));
-    assert_eq!(w.dark, Some(false));
+    assert_eq!(w.scheme, Some(Scheme::Everforest));
     fn send<T: Send>(_: &T) {}
     send(&w);
     let mut win = Runtime::new(w, crate::peek_window::view, (760.0, 480.0), rune::Env::new(true, 1.0));
     win.frame(0.0);
     assert!(win.find("peek-window-head").is_some());
     assert!(win.find("peek-row-0").is_some());
+    let root = win
+        .elements()
+        .into_iter()
+        .find(|e| e.key.as_deref() == Some("peek-window"))
+        .unwrap();
+    assert_eq!(
+        root.fill,
+        crate::theme::look(Scheme::Everforest).s.reader,
+        "the pop-out keeps the main window's scheme"
+    );
 }
 
 #[test]

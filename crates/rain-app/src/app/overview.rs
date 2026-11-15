@@ -418,14 +418,13 @@ impl App {
         })
     }
 
-    /// "Pop out": the open peek in its own window, in this window's theme and chrome.
+    /// "Pop out": the open peek in its own window, in this window's theme.
     pub fn pop_out_peek(&mut self) {
         let Some(t) = self.brief.peek.open.clone() else { return };
         let content = self.peek_content(&t);
-        let dark = self.seen_dark.get();
-        let chrome = self.chrome();
+        let scheme = self.seen_scheme.get();
         self.close_peek();
-        self.status = if crate::peek_window::show(content, dark, chrome) {
+        self.status = if crate::peek_window::show(content, scheme) {
             format!("{} popped out · Esc closes it", t.label)
         } else {
             "No window to pop out into here".into()

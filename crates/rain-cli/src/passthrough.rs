@@ -28,8 +28,6 @@ const VALUE: &[&str] = &[
     "--window",
     "--snap-on-patch",
     "--hot-control",
-    // Rain's `--chrome zed|islands`; the app reads it from the process arguments.
-    "--chrome",
 ];
 const FLAG: &[&str] = &[
     "--whole-window",
@@ -39,6 +37,7 @@ const FLAG: &[&str] = &[
     "--list-scenes",
     "--first-pixels",
     "--list-windows",
+    "--chrome",
     "--hot",
 ];
 /// Flags whose value is optional.
@@ -132,9 +131,9 @@ mod tests {
     }
 
     #[test]
-    fn chrome_takes_its_value_out_of_what_clap_sees() {
-        let (ours, rune) = split(&s(&["--snap", "a.png", "--chrome", "islands", "HEAD"]));
+    fn chrome_is_runes_flag_and_takes_no_value() {
+        let (ours, rune) = split(&s(&["--snap", "a.png", "--chrome", "HEAD"]));
         assert_eq!(ours, s(&["HEAD"]));
-        assert_eq!(rune.args, s(&["--snap", "a.png", "--chrome", "islands"]));
+        assert_eq!(rune.args, s(&["--snap", "a.png", "--chrome"]));
     }
 }

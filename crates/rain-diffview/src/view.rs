@@ -58,42 +58,11 @@ const SPOT_W: f32 = 2.0;
 /// `tx.scroll_to_y(SCROLL_KEY, y)`. A view keyed `k` scrolls as `"{k}/scroll"`.
 pub const SCROLL_KEY: &str = "diff/scroll";
 
-/// How each file sits in the list: a full-width header bar between hairlines, or an inset card
-/// with a border, rounded ends and a gap between files.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub enum FileFrame {
-    #[default]
-    Bar,
-    Card {
-        inset: f32,
-        gap: f32,
-        radius: f32,
-    },
-}
-
-impl FileFrame {
-    /// Points the frame takes from each side of the view.
-    fn side(self) -> f32 {
-        match self {
-            FileFrame::Bar => 0.0,
-            FileFrame::Card { inset, .. } => inset + 1.0,
-        }
-    }
-
-    fn hash_into(self, h: &mut impl Hasher) {
-        match self {
-            FileFrame::Bar => 0u32.hash(h),
-            FileFrame::Card { inset, gap, radius } => [inset, gap, radius].map(f32::to_bits).hash(h),
-        }
-    }
-}
-
-/// Where a row sits in its file: the header starts the file's frame, the last row ends it.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-struct Edge {
-    head: bool,
-    last: bool,
-    last_file: bool,
+/// Fills a theme gives added and removed lines in place of the kit-derived tints.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct ChangeFills {
+    add: Color,
+    del: Color,
 }
 
 type Get<S> = Rc<dyn Fn(&S) -> &DiffState>;
@@ -117,7 +86,8 @@ pub struct DiffView<S> {
     get_mut: GetMut<S>,
     key: String,
     calm: bool,
-    frame: FileFrame,
+    fills: Option<ChangeFills>,
+    selection: Option<Color>,
     annotation: Option<Rc<dyn Fn(&S, &Annotation) -> El>>,
     header: Option<Rc<dyn Fn(&S, usize) -> El>>,
     header_annotation: Option<Rc<dyn Fn(&S, usize) -> Option<El>>>,
@@ -137,7 +107,8 @@ impl<S: 'static> DiffView<S> {
             get_mut: Rc::new(get_mut),
             key: "diff".into(),
             calm: false,
-            frame: FileFrame::Bar,
+            fills: None,
+            selection: None,
             annotation: None,
             header: None,
             header_annotation: None,
@@ -186,10 +157,16 @@ impl<S: 'static> DiffView<S> {
         self
     }
 
-    /// How each file is framed ([`FileFrame::Bar`] by default). Rows and keys are the same in
-    /// every frame, so switching keeps the reading place.
-    pub fn frame(mut self, frame: FileFrame) -> Self {
-        self.frame = frame;
+    /// Paint added and removed lines `add` and `del` rather than tints of the kit's success and
+    /// danger colours; their gutters and changed words mix those colours in, as the tints do.
+    pub fn change_fills(mut self, add: Color, del: Color) -> Self {
+        self.fills = Some(ChangeFills { add, del });
+        self
+    }
+
+    /// The text selection's colour, in place of the kit's.
+    pub fn selection_color(mut self, c: Color) -> Self {
+        self.selection = Some(c);
         self
     }
 
@@ -243,13 +220,7 @@ impl<S: 'static> DiffView<S> {
 
     pub fn build(self, s: &S, k: &Kit) -> El {
         let st = (self.get)(s);
-        let mut look = Look::new(k);
-        let mut h = std::hash::DefaultHasher::new();
-        look.version.hash(&mut h);
-        look.card_border.hash(&mut h);
-        self.frame.hash_into(&mut h);
-        look.version = h.finish();
-        let side = 2.0 * self.frame.side();
+        let look = Look::new(k, self.fills, self.selection);
         let wrap = st.wraps();
         let key = self.key.clone();
         if !wrap && let Some(r) = rune::memo::layout(&format!("{key}/scroll")) {
@@ -265,7 +236,7 @@ impl<S: 'static> DiffView<S> {
             .role("list")
             .label("Diff");
         if !wrap {
-            list = list.min_w((v.content_width(st) + side).max(st.view_width()));
+            list = list.min_w(v.content_width(st).max(st.view_width()));
         }
         let build = v.clone();
         let vis_mut = v.d.get_mut.clone();
@@ -326,7 +297,7 @@ impl<S: 'static> DiffView<S> {
             let (adv, gutter) = (v.look.adv, BAR + v.look.number_w(digits) + CODE_PAD.0 + CODE_PAD.1);
             let fit = v.d.get_mut.clone();
             root = root.on_layout_tx(move |s: &mut S, r, tx| {
-                let cols = (((r[2] - side - 1.0) / 2.0 - gutter) / adv).max(0.0) as u32;
+                let cols = (((r[2] - 1.0) / 2.0 - gutter) / adv).max(0.0) as u32;
                 if !fit(s).set_columns_per_side(cols) {
                     tx.live_only();
                 }
@@ -336,15 +307,8 @@ impl<S: 'static> DiffView<S> {
             root = root.child(spot);
         }
         if let Some(f) = st.sticky() {
-            let header = v.file_header(s, st, f, true, false);
-            let sticky = match v.d.frame {
-                FileFrame::Bar => header,
-                FileFrame::Card { inset, .. } => row()
-                    .w_full()
-                    .px(inset)
-                    .child(col().key("card").w_full().px(1.0).fill(v.look.card_border).child(header)),
-            };
-            root = root.child(sticky.key("sticky").absolute(0.0, 0.0).w_full());
+            let header = v.file_header(s, st, f, true);
+            root = root.child(header.key("sticky").absolute(0.0, 0.0).w_full());
         }
         root
     }
@@ -364,6 +328,18 @@ fn tint(base: Color, hue: Color, t: f32) -> Color {
     Color::from_oklab([0, 1, 2, 3].map(|i| if i == 3 { a[3] } else { a[i] + (b[i] - a[i]) * t }))
 }
 
+/// `t` of the way from `a` to `b` in sRGB: `b` at alpha `t` painted over `a`.
+fn srgb_mix(a: Color, b: Color, t: f32) -> Color {
+    use rune::color::{srgb_decode, srgb_encode};
+    let m = |x: f32, y: f32| srgb_decode(srgb_encode(x) + (srgb_encode(y) - srgb_encode(x)) * t);
+    Color {
+        r: m(a.r, b.r),
+        g: m(a.g, b.g),
+        b: m(a.b, b.b),
+        a: a.a,
+    }
+}
+
 /// Colours and type, from the kit's palette so themes restyle them.
 struct Look {
     font: TextStyle,
@@ -376,7 +352,6 @@ struct Look {
     muted: Color,
     faint: Color,
     border: Color,
-    card_border: Color,
     header_bg: Color,
     hover: Color,
     add: Tints,
@@ -408,17 +383,27 @@ struct Tints {
 }
 
 impl Look {
-    fn new(k: &Kit) -> Look {
+    fn new(k: &Kit, fills: Option<ChangeFills>, selection: Option<Color>) -> Look {
         let c = &k.c;
         let bg = c.bg_base;
         let dark = k.dark;
-        let tints = |hue: Color, fg: Color| Tints {
-            line: tint(bg, hue, if dark { 0.13 } else { 0.1 }),
-            gutter: tint(bg, hue, if dark { 0.2 } else { 0.17 }),
-            word: tint(bg, hue, if dark { 0.32 } else { 0.27 }),
-            number: tint(c.text_muted, hue, 0.7),
-            bar: hue,
-            count: fg,
+        let tints = |hue: Color, fg: Color, fill: Option<Color>| {
+            let (line, gutter, word) = match fill {
+                Some(line) => (line, srgb_mix(line, hue, 0.12), srgb_mix(line, hue, 0.25)),
+                None => (
+                    tint(bg, hue, if dark { 0.13 } else { 0.1 }),
+                    tint(bg, hue, if dark { 0.2 } else { 0.17 }),
+                    tint(bg, hue, if dark { 0.32 } else { 0.27 }),
+                ),
+            };
+            Tints {
+                line,
+                gutter,
+                word,
+                number: tint(c.text_muted, hue, 0.7),
+                bar: hue,
+                count: fg,
+            }
         };
         let font = TextStyle {
             size: 13.0,
@@ -445,16 +430,15 @@ impl Look {
             muted: c.text_muted,
             faint: c.text_faint,
             border: c.border_weak,
-            card_border: c.border_base,
             header_bg: c.layer_01,
             hover: k.alpha(c.text_base, if dark { 0.06 } else { 0.035 }),
-            add: tints(c.success.icon, c.success.fg),
-            del: tints(c.danger.icon, c.danger.fg),
+            add: tints(c.success.icon, c.success.fg, fills.map(|f| f.add)),
+            del: tints(c.danger.icon, c.danger.fg, fills.map(|f| f.del)),
             gap_bg: tint(bg, info, if dark { 0.1 } else { 0.06 }),
             empty_bg: tint(bg, c.text_base, if dark { 0.03 } else { 0.025 }),
             selected: tint(bg, info, if dark { 0.2 } else { 0.14 }),
             selected_gutter: tint(bg, info, if dark { 0.32 } else { 0.26 }),
-            selection: k.selection(),
+            selection: selection.unwrap_or_else(|| k.selection()),
             accent: info,
             on_accent: c.white,
             range_bar: warn,
@@ -470,6 +454,9 @@ impl Look {
             look.text,
             look.add.bar,
             look.del.bar,
+            look.add.line,
+            look.del.line,
+            look.selection,
             look.accent,
             look.header_bg,
             look.range_bar,
@@ -569,7 +556,7 @@ impl<S: 'static> View<S> {
     /// The most a full-width part of a row (a header, an annotation) spans: the viewport, not
     /// the unwrapped content.
     fn view_w(&self, st: &DiffState, split_half: bool) -> Option<f32> {
-        let w = st.view_width() - 2.0 * self.d.frame.side();
+        let w = st.view_width();
         (w > 0.0 && !st.wraps()).then_some(if split_half { (w / 2.0).floor() } else { w })
     }
 
@@ -606,14 +593,13 @@ impl<S: 'static> View<S> {
         let r = st.rows[i];
         let key = st.key_of(r);
         let dim = st.dimmed(i);
-        let edge = self.edge(st, i);
-        let lit = |e: El| self.framed(if dim { e.opacity(DIM) } else { e }, edge);
+        let lit = |e: El| if dim { e.opacity(DIM) } else { e };
         match r {
-            Row::File(f) => lit(self.file_row(s, st, f as usize, edge)),
-            Row::Note(f) => memo(&key, (self.look.version, st.rev, st.view_width().to_bits(), dim, edge), || {
+            Row::File(f) => lit(self.file_row(s, st, f as usize)),
+            Row::Note(f) => memo(&key, (self.look.version, st.rev, st.view_width().to_bits(), dim), || {
                 lit(self.note(st, f as usize))
             }),
-            Row::Gap { f, gap } => memo(&key, (self.look.version, st.rev, st.view_width().to_bits(), dim, edge), || {
+            Row::Gap { f, gap } => memo(&key, (self.look.version, st.rev, st.view_width().to_bits(), dim), || {
                 lit(self.gap(st, f as usize, gap as usize))
             }),
             _ if !st.annotations().is_empty() && self.d.annotation.is_some() && self.annotated(st, r) => lit(self.line(s, st, i, &key)),
@@ -627,55 +613,10 @@ impl<S: 'static> View<S> {
                     self.marks(st, i, r),
                     self.d.calm,
                     dim,
-                    edge,
                 );
                 memo(&key, version, || lit(self.line(s, st, i, &key)))
             }
         }
-    }
-
-    /// Where row `i` sits in its file's frame; all false for [`FileFrame::Bar`].
-    fn edge(&self, st: &DiffState, i: usize) -> Edge {
-        if self.d.frame == FileFrame::Bar {
-            return Edge::default();
-        }
-        let r = st.rows[i];
-        let next = st.rows.get(i + 1);
-        Edge {
-            head: matches!(r, Row::File(_)),
-            last: next.is_none_or(|n| matches!(n, Row::File(_))),
-            last_file: next.is_none(),
-        }
-    }
-
-    /// A row inside its file's card: side borders, the top border and corners on the header,
-    /// the bottom ones on the file's last row, the gap above each file.
-    fn framed(&self, e: El, edge: Edge) -> El {
-        let FileFrame::Card { inset, gap, radius } = self.d.frame else {
-            return e;
-        };
-        let l = &self.look;
-        let (top, bottom) = (if edge.head { radius } else { 0.0 }, if edge.last { radius } else { 0.0 });
-        let mut inner = col().key("card-in").w_full().fill(l.bg).child(e);
-        if edge.head || edge.last {
-            let (t, b) = ((top - 1.0).max(0.0), (bottom - 1.0).max(0.0));
-            inner = inner.clip_corners([t, t, b, b]);
-        }
-        let card = col()
-            .key("card")
-            .w_full()
-            .fill(l.card_border)
-            .corners([top, top, bottom, bottom])
-            .px(1.0)
-            .pt(if edge.head { 1.0 } else { 0.0 })
-            .pb(if edge.last { 1.0 } else { 0.0 })
-            .child(inner);
-        col()
-            .w_full()
-            .px(inset)
-            .pt(if edge.head { gap } else { 0.0 })
-            .pb(if edge.last_file { gap } else { 0.0 })
-            .child(card)
     }
 
     fn annotated(&self, st: &DiffState, r: Row) -> bool {
@@ -1291,8 +1232,8 @@ impl<S: 'static> View<S> {
     }
 
     /// A file's row: its header, and the file-level widget under it when the app gives one.
-    fn file_row(&self, s: &S, st: &DiffState, f: usize, edge: Edge) -> El {
-        let header = self.file_header(s, st, f, false, edge.last);
+    fn file_row(&self, s: &S, st: &DiffState, f: usize) -> El {
+        let header = self.file_header(s, st, f, false);
         let Some(slot) = self.d.header_annotation.as_ref().and_then(|b| b(s, f)) else {
             return header;
         };
@@ -1303,7 +1244,7 @@ impl<S: 'static> View<S> {
         col().w_full().child(header.key("header")).child(c.child(slot))
     }
 
-    fn file_header(&self, s: &S, st: &DiffState, f: usize, sticky: bool, ends_card: bool) -> El {
+    fn file_header(&self, s: &S, st: &DiffState, f: usize, sticky: bool) -> El {
         let l = &self.look;
         let file = &st.files()[f];
         let collapsed = st.collapsed(f);
@@ -1381,10 +1322,8 @@ impl<S: 'static> View<S> {
         if let (false, Some(w)) = (sticky, self.view_w(st, false)) {
             h = h.w(w).sticky_left(0.0);
         }
-        // A card's own border draws its top edge, and the bottom one when the file is folded.
-        let card = self.d.frame != FileFrame::Bar;
-        h = h.child(line("top", if f > 0 && !sticky && !card { l.border } else { l.header_bg }));
-        h.child(inner).child(line("bottom", if ends_card { l.header_bg } else { l.border }))
+        h = h.child(line("top", if f > 0 && !sticky { l.border } else { l.header_bg }));
+        h.child(inner).child(line("bottom", l.border))
     }
 }
 

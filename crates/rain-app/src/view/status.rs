@@ -159,15 +159,12 @@ pub(super) fn status_bar(s: &App, look: &Look, layer: &mut Vec<El>) -> El {
     bar = bar
         .child(super::conversation::presence_dot(s, k))
         .child(layout_menu(s, look, layer));
-    if look.shape.region_lines {
-        bar = bar.child(
-            rune::el()
-                .key("status-line")
-                .pin(Some(0.0), Some(0.0), Some(0.0), None)
-                .h(1.0)
-                .fill(look.s.hairline)
-                .a11y_hidden(),
-        );
-    }
-    bar
+    bar.child(
+        rune::el()
+            .key("status-line")
+            .pin(Some(0.0), Some(0.0), Some(0.0), None)
+            .h(1.0)
+            .fill(look.s.hairline)
+            .a11y_hidden(),
+    )
 }

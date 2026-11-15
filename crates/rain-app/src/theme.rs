@@ -1,21 +1,95 @@
-//! The chrome token layer: for a chrome style (Zed or Islands), theme and density, the surfaces
-//! regions paint, their shape, and the kits every view and rune-kit component builds with.
+//! The token layer: for a scheme, the surfaces regions paint and the kits every view and rune-kit
+//! component builds with. Flat panels meet at hairlines.
+//!
+//! Dark and light are Rune's neutral kit on Zed-like surfaces. Everforest and the two Gruvbox
+//! darks repaint the kit from their own palettes: Everforest from Rain's variant (the medium
+//! dark palette on the hard variant's `bg_dim`), Gruvbox from morhetz/gruvbox's `gruvbox.vim`.
 
-use rain_diffview::FileFrame;
+use rain_diagram::DiagramStyle;
 use rune::Color;
-use rune_kit::{Kit, Radius};
+use rune_kit::{Kit, Radius, StateColors};
 
-use crate::settings::{Chrome, Density};
+/// A colour scheme the window can draw in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Scheme {
+    Dark,
+    Light,
+    Everforest,
+    GruvboxHard,
+    GruvboxMedium,
+}
 
-/// Below this window width Islands' file cards sit closer to the reader's edges.
-pub const NARROW: f32 = 1500.0;
+impl Scheme {
+    pub const ALL: [Scheme; 5] = [
+        Scheme::Dark,
+        Scheme::Light,
+        Scheme::Everforest,
+        Scheme::GruvboxHard,
+        Scheme::GruvboxMedium,
+    ];
+
+    pub fn is_dark(self) -> bool {
+        self != Scheme::Light
+    }
+
+    /// The code colours that go with the scheme.
+    pub fn syntax(self) -> rain_syntax::Palette {
+        match self {
+            Scheme::Dark => rain_syntax::Palette::GithubDark,
+            Scheme::Light => rain_syntax::Palette::GithubLight,
+            Scheme::Everforest => rain_syntax::Palette::Everforest,
+            Scheme::GruvboxHard | Scheme::GruvboxMedium => rain_syntax::Palette::Gruvbox,
+        }
+    }
+
+    /// Colours by token kind for Markdown code blocks: the kit's own in dark and light, the
+    /// palette's in the others.
+    pub fn code_kinds(self, k: &Kit) -> rune_kit::syntax::SyntaxTheme {
+        let base = rune_kit::syntax::SyntaxTheme::from_kit(k);
+        match self {
+            Scheme::Dark | Scheme::Light => base,
+            _ => self.syntax().syntax_theme(base),
+        }
+    }
+
+    /// The Map's colours.
+    pub fn diagram(self) -> DiagramStyle {
+        match self {
+            Scheme::Dark => DiagramStyle::dark(),
+            Scheme::Light => DiagramStyle::light(),
+            Scheme::Everforest => DiagramStyle::everforest(),
+            Scheme::GruvboxHard => DiagramStyle::gruvbox(true),
+            Scheme::GruvboxMedium => DiagramStyle::gruvbox(false),
+        }
+    }
+
+    /// Added and removed lines' fills where the palette has its own (Everforest's `bg-green`
+    /// and `bg-red`); `None` keeps the diff's tints of the kit's success and danger colours.
+    pub fn change_fills(self) -> Option<(Color, Color)> {
+        (self == Scheme::Everforest).then(|| (hex(ef::BG_GREEN), hex(ef::BG_RED)))
+    }
+
+    /// The code selection where the palette has its own (Everforest's `bg-visual`).
+    pub fn selection(self) -> Option<Color> {
+        (self == Scheme::Everforest).then(|| hex(ef::BG_VISUAL))
+    }
+
+    /// The note rail's purple and the purple of note labels.
+    pub fn note_purples(self) -> (Color, Color) {
+        match self {
+            Scheme::Dark => (rune::oklch(0.606, 0.219, 292.7), rune::oklch(0.72, 0.219, 292.7)),
+            Scheme::Light => (rune::oklch(0.606, 0.219, 292.7), rune::oklch(0.52, 0.219, 292.7)),
+            Scheme::Everforest => (hex(ef::PURPLE), hex(ef::PURPLE)),
+            Scheme::GruvboxHard | Scheme::GruvboxMedium => (hex(gb::PURPLE), hex(gb::PURPLE)),
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Surfaces {
-    /// Behind everything: Islands' sea, Zed's bar colour.
-    pub ground: Color,
+    /// Behind everything, and the top bar.
     pub bar: Color,
-    /// Sidebar and (Zed) tab strip.
+    /// Sidebar and tab strip.
     pub panel: Color,
     /// Reader, Overview page and diff body.
     pub reader: Color,
@@ -26,99 +100,88 @@ pub struct Surfaces {
     pub card_border: Color,
     pub strong_line: Color,
     pub selected_row: Color,
-    pub tab_active: Color,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum TabStyle {
-    /// The active tab takes the reader's fill and opens into it.
-    Merge,
-    /// The active tab is filled and underlined in the accent.
-    Underline,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Shape {
-    pub island_gap: f32,
-    pub island_radius: f32,
-    /// Hairlines between bar and body, sidebar and reader, tabs and content, body and status.
-    pub region_lines: bool,
-    pub file_frame: FileFrame,
-    pub card_inset: f32,
-    pub card_gap: f32,
-    /// The list's current row is an inset pill rather than a full-width band.
-    pub row_pill: bool,
-    pub tab_style: TabStyle,
-}
-
-impl Shape {
-    /// The file frame at a window `width`: Islands' cards come in closer on narrow windows.
-    pub fn frame(&self, width: f32) -> FileFrame {
-        match self.file_frame {
-            FileFrame::Card { gap, radius, .. } => FileFrame::Card {
-                inset: if width > 0.0 && width < NARROW { 8.0 } else { self.card_inset },
-                gap,
-                radius,
-            },
-            f => f,
-        }
-    }
-
-    /// Points the file frame takes from the reader's width at a window `width`.
-    pub fn card_sides(&self, width: f32) -> f32 {
-        match self.frame(width) {
-            FileFrame::Card { inset, .. } => 2.0 * (inset + 1.0),
-            FileFrame::Bar => 0.0,
-        }
-    }
 }
 
 #[derive(Clone, Debug)]
 pub struct Look {
-    pub chrome: Chrome,
+    pub scheme: Scheme,
     pub dark: bool,
     /// What every view and rune-kit component builds with.
     pub kit: Kit,
     /// `kit` with the main pane's corner and edge for `SplitView::build` only.
     pub shell: Kit,
     pub s: Surfaces,
-    pub shape: Shape,
 }
 
 fn hex(s: &str) -> Color {
     rune::color::hex(s).unwrap_or(Color::BLACK)
 }
 
-/// The surface table for a chrome style and theme; `accent` tints the selection fills.
-pub fn surfaces(chrome: Chrome, dark: bool, k: &Kit) -> Surfaces {
-    let accent = k.c.bg_accent;
-    let [ground, panel, reader, card_head, well, hairline, card_border, strong_line] = match (chrome, dark) {
-        (Chrome::Zed, true) => [
+/// Rain's Everforest dark: sainnhe/everforest's medium dark palette, and the hard variant's
+/// `bg_dim` as the page.
+mod ef {
+    pub const PAGE: &str = "#1e2326";
+    pub const BG0: &str = "#2d353b";
+    pub const BG1: &str = "#343f44";
+    pub const BG2: &str = "#3d484d";
+    pub const BG3: &str = "#475258";
+    pub const BG4: &str = "#4f585e";
+    pub const BG_VISUAL: &str = "#543a48";
+    pub const BG_RED: &str = "#514045";
+    pub const BG_GREEN: &str = "#425047";
+    pub const BG_BLUE: &str = "#3a515d";
+    pub const BG_YELLOW: &str = "#4d4c43";
+    pub const FG: &str = "#d3c6aa";
+    pub const RED: &str = "#e67e80";
+    pub const YELLOW: &str = "#dbbc7f";
+    pub const GREEN: &str = "#a7c080";
+    pub const BLUE: &str = "#7fbbb3";
+    pub const PURPLE: &str = "#d699b6";
+    pub const GREY1: &str = "#859289";
+    pub const GREY2: &str = "#9da9a0";
+}
+
+/// morhetz/gruvbox dark: `bg0_h`, `bg0`, `bg0_s`, `bg1`-`bg4`, `fg1`, `fg3`, `fg4` and the
+/// bright accents, verbatim from `colors/gruvbox.vim`.
+mod gb {
+    pub const BG0_H: &str = "#1d2021";
+    pub const BG0: &str = "#282828";
+    pub const BG0_S: &str = "#32302f";
+    pub const BG1: &str = "#3c3836";
+    pub const BG2: &str = "#504945";
+    pub const BG3: &str = "#665c54";
+    pub const BG4: &str = "#7c6f64";
+    pub const FG1: &str = "#ebdbb2";
+    pub const FG3: &str = "#bdae93";
+    pub const FG4: &str = "#a89984";
+    pub const RED: &str = "#fb4934";
+    pub const GREEN: &str = "#b8bb26";
+    pub const YELLOW: &str = "#fabd2f";
+    pub const BLUE: &str = "#83a598";
+    pub const PURPLE: &str = "#d3869b";
+}
+
+/// bar, panel, reader, card_head, well, hairline, card_border, strong_line.
+fn surface_hexes(scheme: Scheme) -> [&'static str; 8] {
+    match scheme {
+        Scheme::Dark => [
             "#2b2d32", "#232529", "#1c1d20", "#232529", "#18191c", "#3a3d44", "#464950", "#464950",
         ],
-        (Chrome::Zed, false) => [
+        Scheme::Light => [
             "#e3e4e7", "#eeeff1", "#fbfbfc", "#f1f2f4", "#f4f5f7", "#d4d6db", "#c4c6cb", "#c4c6cb",
         ],
-        (Chrome::Islands, true) => [
-            "#2e3034", "#1d1e21", "#1d1e21", "#25272b", "#191a1d", "#2c2e33", "#36383e", "#3b3e44",
-        ],
-        (Chrome::IslandsDeep, true) => [
-            "#0f1012", "#232529", "#232529", "#2a2c31", "#1e2023", "#2f3237", "#3a3d43", "#42454c",
-        ],
-        (Chrome::Islands | Chrome::IslandsDeep, false) => [
-            "#e4e6ea", "#ffffff", "#ffffff", "#f5f6f8", "#f2f3f5", "#e8e9ec", "#d9dbe0", "#d0d3d8",
-        ],
+        // Darken the page, never the cards: the ground drops below the ladder, panels stay bg1.
+        Scheme::Everforest => [ef::PAGE, ef::BG1, ef::BG0, ef::BG1, ef::BG0, ef::BG3, ef::BG4, ef::BG4],
+        Scheme::GruvboxHard => [gb::BG0_S, gb::BG0, gb::BG0_H, gb::BG0, gb::BG0_H, gb::BG2, gb::BG3, gb::BG4],
+        Scheme::GruvboxMedium => [gb::BG1, gb::BG0_S, gb::BG0, gb::BG0_S, gb::BG0_H, gb::BG2, gb::BG3, gb::BG4],
     }
-    .map(hex);
-    let (selected, tab) = match (chrome, dark) {
-        (Chrome::Zed, true) => (0.16, None),
-        (Chrome::Zed, false) => (0.12, None),
-        (Chrome::Islands | Chrome::IslandsDeep, true) => (0.18, Some(0.10)),
-        (Chrome::Islands | Chrome::IslandsDeep, false) => (0.12, Some(0.08)),
-    };
+}
+
+/// The surface table for a scheme; `k`'s accent tints the selection fill.
+pub fn surfaces(scheme: Scheme, k: &Kit) -> Surfaces {
+    let [bar, panel, reader, card_head, well, hairline, card_border, strong_line] = surface_hexes(scheme).map(hex);
     Surfaces {
-        ground,
-        bar: ground,
+        bar,
         panel,
         reader,
         card_head,
@@ -126,83 +189,169 @@ pub fn surfaces(chrome: Chrome, dark: bool, k: &Kit) -> Surfaces {
         hairline,
         card_border,
         strong_line,
-        selected_row: k.alpha(accent, selected),
-        tab_active: tab.map_or(reader, |a| k.alpha(accent, a)),
+        selected_row: k.alpha(k.c.bg_accent, if scheme.is_dark() { 0.16 } else { 0.12 }),
     }
 }
 
-pub fn shape(chrome: Chrome, density: Density) -> Shape {
-    match chrome {
-        Chrome::Zed => Shape {
-            island_gap: 0.0,
-            island_radius: 0.0,
-            region_lines: true,
-            file_frame: FileFrame::Bar,
-            card_inset: 0.0,
-            card_gap: 0.0,
-            row_pill: false,
-            tab_style: TabStyle::Merge,
-        },
-        Chrome::Islands | Chrome::IslandsDeep => {
-            let (gap, radius) = match density {
-                Density::Comfortable => (8.0, 10.0),
-                Density::Compact => (4.0, 8.0),
-            };
-            Shape {
-                island_gap: gap,
-                island_radius: radius,
-                region_lines: false,
-                file_frame: FileFrame::Card {
-                    inset: 12.0,
-                    gap: 12.0,
-                    radius: 8.0,
-                },
-                card_inset: 12.0,
-                card_gap: 12.0,
-                row_pill: true,
-                tab_style: TabStyle::Underline,
-            }
+/// A palette's roles: raised layers, text, and the accents for each state.
+struct Tones {
+    raised: [&'static str; 3],
+    text: [&'static str; 3],
+    primary: &'static str,
+    link: &'static str,
+    /// (accent, opaque tint) for success, warning, danger and info; no tint mixes the accent
+    /// in at an alpha.
+    states: [(&'static str, Option<&'static str>); 4],
+}
+
+fn tones(scheme: Scheme) -> Option<Tones> {
+    let gruvbox = Tones {
+        raised: [gb::BG1, gb::BG2, gb::BG3],
+        text: [gb::FG1, gb::FG3, gb::FG4],
+        primary: gb::BLUE,
+        link: gb::BLUE,
+        states: [(gb::GREEN, None), (gb::YELLOW, None), (gb::RED, None), (gb::BLUE, None)],
+    };
+    match scheme {
+        Scheme::Dark | Scheme::Light => None,
+        Scheme::Everforest => Some(Tones {
+            raised: [ef::BG1, ef::BG2, ef::BG3],
+            text: [ef::FG, ef::GREY2, ef::GREY1],
+            primary: ef::GREEN,
+            link: ef::BLUE,
+            states: [
+                (ef::GREEN, Some(ef::BG_GREEN)),
+                (ef::YELLOW, Some(ef::BG_YELLOW)),
+                (ef::RED, Some(ef::BG_RED)),
+                (ef::BLUE, Some(ef::BG_BLUE)),
+            ],
+        }),
+        Scheme::GruvboxHard | Scheme::GruvboxMedium => Some(gruvbox),
+    }
+}
+
+/// Repaints the neutral dark kit from a palette, so no neutral grey or hue is left showing.
+fn paint(kit: &mut Kit, t: &Tones, s: &Surfaces) {
+    let [l2, l3, l4] = t.raised.map(hex);
+    let [fg, muted, faint] = t.text.map(hex);
+    let (primary, link) = (hex(t.primary), hex(t.link));
+    let state = |(accent, tint): (&str, Option<&str>)| {
+        let a = hex(accent);
+        StateColors {
+            bg: tint.map_or(a.alpha(0.15), hex),
+            fg: a,
+            border: a,
+            icon: a,
         }
-    }
+    };
+    let [success, warning, danger, info] = t.states.map(state);
+    let c = &mut kit.c;
+    c.layer_02 = l2;
+    c.layer_03 = l3;
+    c.layer_04 = l4;
+    c.bg_inverse = fg;
+    c.bg_contrast = fg;
+    c.bg_icon_button_contrast = fg;
+    c.bg_button_neutral = l2;
+    c.bg_accent = primary;
+    c.submit_fg = s.bar;
+    c.submit_icon = s.bar;
+    c.text_base = fg;
+    c.text_muted = muted;
+    c.text_faint = faint;
+    c.text_inverse = s.reader;
+    c.text_contrast = s.reader;
+    c.text_accent = link;
+    c.icon_base = fg;
+    c.icon_muted = muted;
+    c.icon_faint = faint;
+    c.icon_inverse = s.reader;
+    c.icon_contrast = s.reader;
+    c.icon_accent = primary;
+    c.border_focus = primary;
+    c.hover = fg.alpha(0.06);
+    c.pressed = fg.alpha(0.10);
+    c.knob = fg;
+    c.knob_on = fg;
+    c.success = success;
+    c.warning = warning;
+    c.danger = danger;
+    c.info = info;
+    c.surface_base = l2;
+    c.surface_weak = s.card_head;
+    c.surface_hover = l2;
+    c.surface_raised = s.card_head;
+    c.surface_raised_base = s.card_head;
+    c.surface_raised_hover = l2;
+    c.surface_float = fg;
+    c.surface_disabled = s.card_head;
+    c.border_hover = s.strong_line;
+    c.border_active = primary;
+    c.border_disabled = l2;
+    c.text_strong = fg;
+    c.text_weak = muted;
+    c.text_invert_strong = s.reader;
+    c.icon_weaker = faint;
+    c.std_border = s.card_border;
+    c.std_icon = muted;
+    c.std_icon_invert = s.reader;
+    c.std_icon_strong = fg;
+    c.std_text = fg;
+    kit.ring = Some(ring);
 }
 
-pub fn look(dark: bool, chrome: Chrome, density: Density) -> Look {
+/// Elevation rings in the palette's border rather than the neutral kit's grey.
+fn ring(c: &rune_kit::Palette) -> Color {
+    c.border_base
+}
+
+pub fn look(scheme: Scheme) -> Look {
+    let dark = scheme.is_dark();
     let mut kit = Kit::neutral(dark);
-    let s = surfaces(chrome, dark, &kit);
-    let shape = shape(chrome, density);
+    let tones = tones(scheme);
+    if let Some(t) = &tones {
+        kit.c.bg_accent = hex(t.primary);
+    }
+    let s = surfaces(scheme, &kit);
+    if let Some(t) = &tones {
+        paint(&mut kit, t, &s);
+    }
     let c = &mut kit.c;
-    c.page = s.ground;
-    c.bg_deep = s.ground;
+    c.page = s.bar;
+    c.bg_deep = s.bar;
     c.layer_01 = s.card_head;
     c.bg_base = s.reader;
     c.border_weak = s.hairline;
     c.border_base = s.card_border;
     c.border_strong = s.strong_line;
-    kit.radius = match chrome {
-        Chrome::Zed => Radius {
-            xs: 2.0,
-            sm: 3.0,
-            md: 4.0,
-            lg: 6.0,
-            xl: 8.0,
-        },
-        Chrome::Islands | Chrome::IslandsDeep => Radius {
-            xs: 2.0,
-            sm: 4.0,
-            md: 6.0,
-            lg: 8.0,
-            xl: 10.0,
-        },
+    if tones.is_some() {
+        c.border_muted = s.hairline;
+    }
+    kit.radius = Radius {
+        xs: 2.0,
+        sm: 3.0,
+        md: 4.0,
+        lg: 6.0,
+        xl: 8.0,
     };
     let mut shell = kit.clone();
-    shell.radius.lg = shape.island_radius;
-    shell.c.border_muted = if shape.region_lines { s.hairline } else { Color::TRANSPARENT };
+    shell.radius.lg = 0.0;
+    shell.c.border_muted = s.hairline;
     Look {
-        chrome,
+        scheme,
         dark,
         kit,
         shell,
         s,
-        shape,
     }
+}
+
+/// The scheme a kit from [`look`] was built for, told by its page colour (each scheme's bar is
+/// its own); a kit from elsewhere reads as dark or light.
+pub fn scheme_of(k: &Kit) -> Scheme {
+    let page = k.c.page;
+    Scheme::ALL
+        .into_iter()
+        .find(|&s| hex(surface_hexes(s)[0]) == page)
+        .unwrap_or(if k.dark { Scheme::Dark } else { Scheme::Light })
 }

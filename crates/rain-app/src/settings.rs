@@ -4,13 +4,60 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::theme::Scheme;
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "kebab-case")]
 pub enum Theme {
     #[default]
     System,
     Light,
     Dark,
+    Everforest,
+    GruvboxHard,
+    GruvboxMedium,
+}
+
+impl Theme {
+    /// Every pick in the Theme menu's order, with its label.
+    pub const PICKS: [(Theme, &'static str); 6] = [
+        (Theme::System, "System"),
+        (Theme::Light, "Light"),
+        (Theme::Dark, "Dark"),
+        (Theme::Everforest, "Everforest"),
+        (Theme::GruvboxHard, "Gruvbox Dark Hard"),
+        (Theme::GruvboxMedium, "Gruvbox Dark Medium"),
+    ];
+
+    /// The scheme drawn for this setting; `System` follows `system_dark`.
+    pub fn scheme(self, system_dark: bool) -> Scheme {
+        match self {
+            Theme::System if system_dark => Scheme::Dark,
+            Theme::System | Theme::Light => Scheme::Light,
+            Theme::Dark => Scheme::Dark,
+            Theme::Everforest => Scheme::Everforest,
+            Theme::GruvboxHard => Scheme::GruvboxHard,
+            Theme::GruvboxMedium => Scheme::GruvboxMedium,
+        }
+    }
+
+    /// The setting for a `--theme` value that names one of Rain's own schemes; `None` for
+    /// `dark`, `light` and the rest, which Rune's `--theme` handles.
+    pub fn from_flag(v: &str) -> Option<Theme> {
+        match v {
+            "everforest" => Some(Theme::Everforest),
+            "gruvbox-hard" => Some(Theme::GruvboxHard),
+            "gruvbox-medium" => Some(Theme::GruvboxMedium),
+            _ => None,
+        }
+    }
+}
+
+/// `T` from its JSON value, or its default when the value names nothing `T` knows, so an
+/// unknown theme or a newer file's value doesn't throw away the rest of the settings.
+fn or_default<'de, D: serde::Deserializer<'de>, T: serde::de::DeserializeOwned + Default>(d: D) -> Result<T, D::Error> {
+    let v = serde_json::Value::deserialize(d)?;
+    Ok(serde_json::from_value(v).unwrap_or_default())
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -44,49 +91,6 @@ impl ViewLayout {
     }
 }
 
-/// The window's surface treatment: flat panels split by hairlines, or rounded islands on a ground
-/// (in dark, JetBrains' lighter ground or a darker one).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Chrome {
-    #[default]
-    Zed,
-    Islands,
-    #[serde(rename = "islands-deep")]
-    IslandsDeep,
-}
-
-impl Chrome {
-    pub const ALL: [Chrome; 3] = [Chrome::Zed, Chrome::Islands, Chrome::IslandsDeep];
-
-    pub fn label(self) -> &'static str {
-        match self {
-            Chrome::Zed => "Zed",
-            Chrome::Islands => "Islands",
-            Chrome::IslandsDeep => "Islands, dark ground",
-        }
-    }
-
-    pub fn parse(s: &str) -> Option<Chrome> {
-        match s.trim().to_ascii_lowercase().as_str() {
-            "zed" => Some(Chrome::Zed),
-            "islands" => Some(Chrome::Islands),
-            "islands-deep" => Some(Chrome::IslandsDeep),
-            _ => None,
-        }
-    }
-
-    pub fn islands(self) -> bool {
-        self != Chrome::Zed
-    }
-}
-
-/// An unknown chrome name reads as the default instead of failing the whole file.
-fn chrome_or_default<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Chrome, D::Error> {
-    let v = serde_json::Value::deserialize(d)?;
-    Ok(v.as_str().and_then(Chrome::parse).unwrap_or_default())
-}
-
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CodeSize {
     S,
@@ -100,10 +104,9 @@ pub enum CodeSize {
 pub struct Settings {
     pub window: (f32, f32),
     pub sidebar_width: f32,
+    #[serde(deserialize_with = "or_default")]
     pub theme: Theme,
     pub density: Density,
-    #[serde(deserialize_with = "chrome_or_default")]
-    pub chrome: Chrome,
     pub layout: ViewLayout,
     pub code_size: CodeSize,
     /// The file list beside the reader; closed it is a rail.
@@ -132,7 +135,6 @@ impl Default for Settings {
             sidebar_width: 300.0,
             theme: Theme::System,
             density: Density::Compact,
-            chrome: Chrome::Zed,
             layout: ViewLayout::Split,
             code_size: CodeSize::M,
             list_open: true,
@@ -310,20 +312,67 @@ mod tests {
     }
 
     #[test]
-    fn chrome_defaults_to_zed_round_trips_and_unknown_falls_back() {
-        assert_eq!(Settings::default().chrome, Chrome::Zed);
-        assert_eq!(Settings::parse(b"{}").unwrap().chrome, Chrome::Zed);
-        let s = Settings {
-            chrome: Chrome::Islands,
-            ..Settings::default()
-        };
-        let out = serde_json::to_string(&s).unwrap();
-        assert!(out.contains(r#""chrome":"islands""#), "{out}");
-        assert_eq!(Settings::parse(out.as_bytes()).unwrap(), s);
-        let odd = Settings::parse(br#"{"chrome": "fluent", "theme": "dark", "codeSize": "L"}"#).unwrap();
-        assert_eq!(odd.chrome, Chrome::Zed);
-        assert_eq!((odd.theme, odd.code_size), (Theme::Dark, CodeSize::L), "other keys are kept");
-        assert_eq!(Settings::parse(br#"{"chrome": 3}"#).unwrap().chrome, Chrome::Zed);
+    fn an_old_chrome_key_is_ignored_and_never_written_back() {
+        let dir = std::env::temp_dir().join(format!("rain-settings-chrome-{}", std::process::id()));
+        let path = dir.join("settings.json");
+        std::fs::create_dir_all(&dir).unwrap();
+        for old in ["islands", "islands-deep", "zed"] {
+            let text = format!(r#"{{"theme": "dark", "chrome": "{old}", "codeSize": "L"}}"#);
+            std::fs::write(&path, text).unwrap();
+            let s = Settings::try_load(&path).expect("an old file still loads");
+            assert_eq!((s.theme, s.code_size), (Theme::Dark, CodeSize::L), "the other keys are kept");
+            assert!(!s.migrated);
+            s.save(&path).unwrap();
+            let out = std::fs::read_to_string(&path).unwrap();
+            assert!(!out.contains("chrome"), "{out}");
+            assert_eq!(Settings::load(&path), s);
+        }
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn every_theme_round_trips_and_an_unknown_one_falls_back() {
+        let dir = std::env::temp_dir().join(format!("rain-settings-theme-{}", std::process::id()));
+        let path = dir.join("settings.json");
+        for (theme, word) in [
+            (Theme::System, "system"),
+            (Theme::Light, "light"),
+            (Theme::Dark, "dark"),
+            (Theme::Everforest, "everforest"),
+            (Theme::GruvboxHard, "gruvbox-hard"),
+            (Theme::GruvboxMedium, "gruvbox-medium"),
+        ] {
+            let s = Settings {
+                theme,
+                code_size: CodeSize::L,
+                ..Settings::default()
+            };
+            s.save(&path).unwrap();
+            let text = std::fs::read_to_string(&path).unwrap();
+            assert!(text.contains(&format!("\"theme\": \"{word}\"")), "{text}");
+            assert_eq!(Settings::load(&path), s);
+            let typed = Settings::parse(format!(r#"{{"theme": "{word}"}}"#).as_bytes()).unwrap();
+            assert_eq!(typed.theme, theme);
+        }
+        for odd in [r#""solarized""#, "42", "null", r#""Dark""#] {
+            let s = Settings::parse(format!(r#"{{"theme": {odd}, "codeSize": "L"}}"#).as_bytes())
+                .unwrap_or_else(|e| panic!("{odd} still loads: {e}"));
+            assert_eq!((s.theme, s.code_size), (Theme::System, CodeSize::L), "{odd}");
+        }
+        assert_eq!(Settings::parse(br#"{"codeSize": "S"}"#).unwrap().theme, Theme::System);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_theme_draws_its_scheme() {
+        assert_eq!(Theme::System.scheme(true), Scheme::Dark);
+        assert_eq!(Theme::System.scheme(false), Scheme::Light);
+        assert_eq!(Theme::Light.scheme(true), Scheme::Light);
+        assert_eq!(Theme::Everforest.scheme(false), Scheme::Everforest);
+        assert_eq!(Theme::GruvboxHard.scheme(false), Scheme::GruvboxHard);
+        assert_eq!(Theme::GruvboxMedium.scheme(false), Scheme::GruvboxMedium);
+        assert_eq!(Theme::from_flag("gruvbox-hard"), Some(Theme::GruvboxHard));
+        assert_eq!(Theme::from_flag("dark"), None, "Rune's own --theme values stay Rune's");
     }
 
     #[test]

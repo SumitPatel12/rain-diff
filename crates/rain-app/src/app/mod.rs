@@ -45,7 +45,8 @@ use rune::{TextEdit, Tx};
 use rune_kit::PaneState;
 
 use crate::load::{self, Data, LARGE_FILE_LINES, Msg};
-use crate::settings::{Chrome, Density, Settings, Theme, ViewLayout};
+use crate::settings::{Density, Settings, Theme, ViewLayout};
+use crate::theme::Scheme;
 
 pub use ask::AskState;
 pub use board::BoardState;
@@ -169,9 +170,9 @@ pub struct App {
     window_size: Option<(f32, f32)>,
     pub status: String,
     pub warm: bool,
-    /// The theme the highlighter was made for, and the one the view last drew.
-    hl_dark: Option<bool>,
-    pub seen_dark: Cell<bool>,
+    /// The code palette the highlighter was made for, and the scheme the view last drew.
+    hl_palette: Option<rain_syntax::Palette>,
+    pub seen_scheme: Cell<Scheme>,
     pending_goto: Option<String>,
     rx: Option<Receiver<Msg>>,
     texts_tx: Option<Sender<Msg>>,
@@ -281,8 +282,8 @@ impl App {
             window_size: None,
             status: settings_error.unwrap_or_default(),
             warm: false,
-            hl_dark: None,
-            seen_dark: Cell::new(true),
+            hl_palette: None,
+            seen_scheme: Cell::new(Scheme::Dark),
             pending_goto: goto,
             rx: None,
             texts_tx: None,
@@ -312,7 +313,7 @@ impl App {
         }
         rain_syntax::warm();
         self.warm = true;
-        self.hl_dark = None;
+        self.hl_palette = None;
     }
 
     pub fn reload(&mut self) {
@@ -361,7 +362,7 @@ impl App {
         self.enter_chapter(self.chapter);
         self.apply_split();
         self.rebuild_annotations();
-        self.hl_dark = None;
+        self.hl_palette = None;
         if self.pending_goto.is_none() {
             self.pending_goto = keep.clone();
             self.brief.restore_tab = keep.is_some();
@@ -449,7 +450,7 @@ impl App {
                     },
                     Msg::Warm => {
                         self.warm = true;
-                        self.hl_dark = None;
+                        self.hl_palette = None;
                     }
                     texts @ Msg::Texts { .. } => self.install_texts(texts),
                 }
@@ -462,10 +463,9 @@ impl App {
                 self.filter_version = self.seen_version;
                 self.apply_filter(&self.tree.filter.clone());
             }
-            let dark = self.seen_dark.get();
-            if self.warm && self.hl_dark != Some(dark) {
-                self.hl_dark = Some(dark);
-                let palette = rain_syntax::Palette::for_dark(dark);
+            let palette = self.seen_scheme.get().syntax();
+            if self.warm && self.hl_palette != Some(palette) {
+                self.hl_palette = Some(palette);
                 self.diff.set_highlighter(rain_syntax::highlighter(palette));
                 for v in self.subsets_mut() {
                     v.diff.set_highlighter(rain_syntax::highlighter(palette));
@@ -724,7 +724,7 @@ impl App {
     // ----- misc commands -----
 
     pub fn toggle_theme(&mut self) {
-        let dark = self.seen_dark.get();
+        let dark = self.seen_scheme.get().is_dark();
         self.settings.theme = if dark { Theme::Light } else { Theme::Dark };
         self.save_settings();
     }
@@ -745,27 +745,6 @@ impl App {
     pub fn set_density(&mut self, density: Density) {
         self.settings.density = density;
         self.save_settings();
-    }
-
-    /// The chrome on screen: `--chrome` for this run, else the saved one.
-    pub fn chrome(&self) -> Chrome {
-        self.launch
-            .chrome
-            .as_deref()
-            .and_then(Chrome::parse)
-            .unwrap_or(self.settings.chrome)
-    }
-
-    /// Switches the chrome on the next frame and saves it; a `--chrome` override ends here.
-    pub fn set_chrome(&mut self, chrome: Chrome) {
-        self.launch.chrome = None;
-        self.settings.chrome = chrome;
-        self.save_settings();
-        self.status = format!("Chrome: {}", chrome.label());
-    }
-
-    pub fn toggle_chrome(&mut self) {
-        self.set_chrome(if self.chrome().islands() { Chrome::Zed } else { Chrome::Islands });
     }
 
     /// Closes the topmost layer `Esc` reaches before the filter: the palette, the top overlay,
@@ -888,7 +867,6 @@ impl App {
             Command::Reload => self.reload_now(tx),
             Command::ToggleTheme => self.toggle_theme(),
             Command::ToggleDensity => self.toggle_density(),
-            Command::ToggleChrome => self.toggle_chrome(),
             Command::ToggleChaptersQueue => {
                 self.status = "Chapters and the queue are groups in the list now".into();
             }

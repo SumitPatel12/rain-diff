@@ -10,17 +10,21 @@ use crate::app::App;
 /// Bodies longer than this many lines start clipped behind "Show all".
 pub(super) const CLIP_LINES: usize = 8;
 
-pub(super) fn note_purple() -> Color {
-    rune::oklch(0.606, 0.219, 292.7)
+pub(super) fn note_purple(k: &Kit) -> Color {
+    crate::theme::scheme_of(k).note_purples().0
 }
 
-/// The purple for label text: the rail's purple misses 4.5:1 on its own tint in both themes.
-pub(super) fn note_ink(k: &Kit) -> Color {
-    if k.dark {
-        rune::oklch(0.72, 0.219, 292.7)
-    } else {
-        rune::oklch(0.52, 0.219, 292.7)
+/// Text on a [`note_purple`] fill: white on the saturated purple, the page on a palette's paler one.
+pub(super) fn on_note_purple(k: &Kit) -> Color {
+    match crate::theme::scheme_of(k) {
+        crate::theme::Scheme::Dark | crate::theme::Scheme::Light => Color::WHITE,
+        _ => k.c.page,
     }
+}
+
+/// The purple for label text: in dark and light the rail's purple misses 4.5:1 on its own tint.
+pub(super) fn note_ink(k: &Kit) -> Color {
+    crate::theme::scheme_of(k).note_purples().1
 }
 
 /// "Intent note" for the overview's notes, else "Note from <author>".
@@ -44,8 +48,8 @@ fn shell(key: String, label: &str, k: &Kit, content: El) -> El {
         .items_stretch()
         .padding(8.0)
         .radius(k.radius.md)
-        .fill(k.alpha(note_purple(), 0.10))
-        .child(el().w(3.0).radius(1.5).fill(note_purple()))
+        .fill(k.alpha(note_purple(k), 0.10))
+        .child(el().w(3.0).radius(1.5).fill(note_purple(k)))
         .child(content)
 }
 

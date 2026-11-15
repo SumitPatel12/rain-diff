@@ -79,7 +79,7 @@ fn csharp_tokens_get_their_colours() {
     assert_eq!(token_at("sql", samples::SQL, "SELECT"), Some(Token::Keyword));
     assert_eq!(token_at("ps1", samples::POWERSHELL, "$repos ="), Some(Token::Variable));
     for mode in [Mode::Fast, Mode::Rich] {
-        for p in [Palette::GithubDark, Palette::GithubLight] {
+        for p in Palette::ALL {
             let at = |needle| paint_at(mode, p, "cs", code, needle);
             let color = |t| Some(Paint::Color(p.color(t)));
             assert_eq!(at("public sealed"), color(Token::Keyword), "{mode:?}");
@@ -173,9 +173,9 @@ fn fast_scss_keeps_line_comments_apart_from_urls() {
 }
 
 #[test]
-fn every_sample_is_coloured_and_tidy_in_both_palettes() {
+fn every_sample_is_coloured_and_tidy_in_every_palette() {
     for mode in [Mode::Fast, Mode::Rich] {
-        for palette in [Palette::GithubDark, Palette::GithubLight] {
+        for palette in Palette::ALL {
             for (lang, code) in samples::ALL {
                 let hl = highlight_with(mode, palette, Some(lang), code);
                 assert_tidy(code, &hl);
@@ -246,4 +246,33 @@ fn bench_chunks_and_warm() {
         }
     }
     assert!(w.as_millis() <= 400, "warm took {w:?}");
+}
+
+#[test]
+fn everforest_and_gruvbox_paint_only_their_palette_hexes() {
+    let hex = |p: Palette, t| p.color(t).hex()[..7].to_owned();
+    let everforest = [
+        "#859289", "#83c092", "#d699b6", "#e67e80", "#dbbc7f", "#a7c080", "#7fbbb3", "#9da9a0", "#e69875", "#dbbc7f",
+    ];
+    let gruvbox = [
+        "#928374", "#b8bb26", "#d3869b", "#fb4934", "#fabd2f", "#b8bb26", "#83a598", "#a89984", "#83a598", "#8ec07c",
+    ];
+    for (p, want) in [(Palette::Everforest, everforest), (Palette::Gruvbox, gruvbox)] {
+        assert_eq!(Token::ALL.map(|t| hex(p, t)), want, "{p:?}");
+        assert!(p.is_dark());
+        let main = [Token::Comment, Token::String, Token::Keyword, Token::Type, Token::Number].map(|t| p.color(t));
+        for i in 0..main.len() {
+            for j in 0..i {
+                assert_ne!(main[i], main[j], "{p:?} keeps comments, strings, keywords, types and numbers apart");
+            }
+        }
+        let theme = p.syntax_theme(rune_kit::syntax::SyntaxTheme::neutral(true));
+        assert_eq!(theme.color(rune_kit::syntax::Syntax::Keyword), p.color(Token::Keyword));
+        assert_eq!(theme.color(rune_kit::syntax::Syntax::Property), p.color(Token::Variable));
+        let code = "public class A {}";
+        assert_ne!(
+            highlighter(p).highlight(Some("cs"), code),
+            highlighter(Palette::GithubDark).highlight(Some("cs"), code)
+        );
+    }
 }

@@ -566,10 +566,10 @@ pub(super) fn dot(n: usize, k: &Kit) -> El {
         .h(16.0)
         .px(5.0)
         .radius(8.0)
-        .fill(notes::note_purple())
+        .fill(notes::note_purple(k))
         .items_center()
         .label(format!("{n} thread(s)"))
-        .child(text(n.to_string()).font(k.ty.small_medium).color(rune::Color::WHITE))
+        .child(text(n.to_string()).font(k.ty.small_medium).color(notes::on_note_purple(k)))
 }
 
 /// Byte ranges of `src` inside fenced code blocks (``` or ~~~), fences included.
@@ -734,7 +734,8 @@ pub(super) fn md_body(s: &App, id: &str, body: &str, k: &Kit) -> El {
         .style(
             rune_kit::MarkdownStyle::from_kit(k)
                 .inline_code_bg(rune::Color::TRANSPARENT)
-                .inline_code_pad(1.0),
+                .inline_code_pad(1.0)
+                .syntax_theme(s.seen_scheme.get().code_kinds(k)),
         )
         .selectable(true)
         .on_link_tx(move |s: &mut App, url: &str, tx: &mut Tx| {

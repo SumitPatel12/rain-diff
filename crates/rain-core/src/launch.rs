@@ -41,6 +41,4 @@ pub struct Launch {
     pub fixture: Option<PathBuf>,
     /// Context lines around each change; `None` is git's default of 3.
     pub context: Option<u32>,
-    /// `zed` or `islands` for this run only, over the saved setting.
-    pub chrome: Option<String>,
 }

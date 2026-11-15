@@ -45,7 +45,9 @@ cargo run -p rain -- --tree                                     # element tree d
 
 Scenes: `files split zoomed composer composer-question thread-states orphan palette ruler filter wholefile notes
 finish since-round reload-banner conversation presence brief brief-folded map board board-single picker error`
-(`wholefile` needs `--repo`). `RUNE_GPU_LOG=1` prints the adapter and backend.
+(`wholefile` needs `--repo`). Scenes start from default settings, so they follow `--theme dark|light`;
+`--theme everforest|gruvbox-hard|gruvbox-medium` draws a scene in that theme. `RUNE_GPU_LOG=1` prints the adapter
+and backend.
 
 ## Settings
 
@@ -55,7 +57,6 @@ finish since-round reload-banner conversation presence brief brief-folded map bo
 ```json
 {
   "theme": "system",
-  "chrome": "zed",
   "layout": "split",
   "density": "compact",
   "codeSize": "M",
@@ -66,8 +67,7 @@ finish since-round reload-banner conversation presence brief brief-folded map bo
 
 | Key | Values |
 |---|---|
-| `theme` | `system` (default), `light`, `dark` |
-| `chrome` | `zed` (default: flat panels split by hairlines), `islands` (rounded islands on a ground), `islands-deep` (islands on a darker ground) |
+| `theme` | `system` (default; follows the OS), `light`, `dark`, `everforest`, `gruvbox-hard`, `gruvbox-medium`. An unknown value falls back to `system`. Pick one live under `⋯` › Appearance › Theme or with `Theme:` in the palette; Toggle theme flips between light and dark |
 | `layout` | `split` (default; falls back to unified when a side is too narrow, and says so), `auto` (the same, silently), `unified` |
 | `density` | `compact` (default), `comfortable` |
 | `codeSize` | `S`, `M` (default), `L` |

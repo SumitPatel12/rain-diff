@@ -3,10 +3,11 @@
 
 use rain_core::LineKind;
 use rune::{Color, El, Span, TextStyle, Tx, col, el, row, text};
-use rune_kit::syntax::{Paint, SyntaxTheme};
+use rune_kit::syntax::Paint;
 use rune_kit::{Button, ButtonVariant, ControlSize, Kit, Placement, popover};
 
 use crate::app::{App, PeekContent};
+use crate::theme::Look;
 
 const WIDTH: f32 = 640.0;
 const MAX_HEIGHT: f32 = 420.0;
@@ -25,12 +26,34 @@ struct Tints {
     sign: Color,
 }
 
-fn tints(k: &Kit, kind: LineKind) -> Option<Tints> {
-    let hue = match kind {
-        LineKind::Added => k.c.success.icon,
-        LineKind::Removed => k.c.danger.icon,
+/// `t` of the way from `a` to `b` in sRGB, as the diff mixes a theme's own line fills.
+fn srgb_mix(a: Color, b: Color, t: f32) -> Color {
+    use rune::color::{srgb_decode, srgb_encode};
+    let m = |x: f32, y: f32| srgb_decode(srgb_encode(x) + (srgb_encode(y) - srgb_encode(x)) * t);
+    Color {
+        r: m(a.r, b.r),
+        g: m(a.g, b.g),
+        b: m(a.b, b.b),
+        a: a.a,
+    }
+}
+
+fn tints(look: &Look, kind: LineKind) -> Option<Tints> {
+    let k = &look.kit;
+    let fills = look.scheme.change_fills();
+    let (hue, fill) = match kind {
+        LineKind::Added => (k.c.success.icon, fills.map(|f| f.0)),
+        LineKind::Removed => (k.c.danger.icon, fills.map(|f| f.1)),
         LineKind::Context => return None,
     };
+    if let Some(line) = fill {
+        return Some(Tints {
+            line,
+            gutter: srgb_mix(line, hue, 0.12),
+            word: srgb_mix(line, hue, 0.25),
+            sign: hue,
+        });
+    }
     let bg = k.c.bg_base;
     let d = k.dark;
     Some(Tints {
@@ -50,11 +73,13 @@ fn code_font(k: &Kit) -> TextStyle {
 }
 
 /// The peek's lines: what the card and the pop-out window both draw.
-pub(crate) fn code(c: &PeekContent, k: &Kit) -> El {
+pub(crate) fn code(c: &PeekContent, look: &Look) -> El {
+    let k = &look.kit;
     let font = code_font(k);
     let joined = c.rows.iter().map(|r| r.text.as_str()).collect::<Vec<_>>().join("\n");
-    let highlights = rain_syntax::highlight(rain_syntax::Palette::for_dark(k.dark), c.lang.as_deref(), &joined);
-    let theme = SyntaxTheme::from_kit(k);
+    let palette = look.scheme.syntax();
+    let highlights = rain_syntax::highlight(palette, c.lang.as_deref(), &joined);
+    let theme = look.scheme.code_kinds(k);
     let mut out = col().key("peek-code").w_full().py(4.0);
     if c.rows.is_empty() {
         return out.child(
@@ -89,7 +114,7 @@ pub(crate) fn code(c: &PeekContent, k: &Kit) -> El {
                 Span::new(rg.start.max(start) - start, rg.end.min(end) - start).color(color)
             })
             .collect();
-        let t = tints(k, r.kind);
+        let t = tints(look, r.kind);
         if let Some(t) = &t {
             for w in &r.words {
                 spans.push(Span::new(w.start.min(r.text.len()), w.end.min(r.text.len())).bg(t.word, 2.0));
@@ -176,7 +201,8 @@ fn head(c: &PeekContent, k: &Kit) -> El {
 }
 
 /// The open peek, hung under its anchor; `None` when closed.
-pub(super) fn layer(s: &App, k: &Kit) -> Option<El> {
+pub(super) fn layer(s: &App, look: &Look) -> Option<El> {
+    let k = &look.kit;
     let t = s.brief.peek.open.as_ref()?;
     let c = s.peek_content(t);
     let width = WIDTH.min((s.diff_width - 32.0).max(320.0));
@@ -192,7 +218,7 @@ pub(super) fn layer(s: &App, k: &Kit) -> Option<El> {
         .on_hover_change(|s: &mut App, inside, tx: &mut Tx| s.peek_card_hover(inside, tx))
         .child(head(&c, k))
         .child(el().w_full().h(1.0).fill(k.c.border_weak))
-        .child(col().w_full().min_h(0.0).shrink().child(popover::fit_scroll(code(&c, k))));
+        .child(col().w_full().min_h(0.0).shrink().child(popover::fit_scroll(code(&c, look))));
     let surface = popover::raised(k, card, k.radius.xl);
     Some(popover::anchored(k, surface, &t.anchor, Placement::BottomStart, 6.0))
 }

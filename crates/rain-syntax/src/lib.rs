@@ -1,9 +1,9 @@
 //! Syntax highlighting for the diff view behind a [`rune_kit::syntax::Highlighter`], coloured by
-//! a GitHub-like [`Palette`]: rune-kit's linear scanners (plus a C# extension) where they fit,
+//! a [`Palette`] (GitHub-like, Everforest or Gruvbox): rune-kit's linear scanners (plus a C# extension) where they fit,
 //! syntect grammars (two-face's extended set, Oniguruma regexes) for the rest; see [`engine`].
 //!
 //! syntect scopes are classified into ten [`Token`]s by one syntect theme whose foreground colours are
-//! token indices, so the two palettes share the theme and a palette is a lookup table.
+//! token indices, so every palette shares the theme and a palette is a lookup table.
 
 use std::ops::Range;
 use std::str::FromStr;
@@ -28,6 +28,8 @@ pub const MAX_BYTES: usize = 32 * 1024;
 pub enum Palette {
     GithubDark,
     GithubLight,
+    Everforest,
+    Gruvbox,
 }
 
 /// A kind of token, each a colour of a [`Palette`].
@@ -60,37 +62,61 @@ impl Token {
     ];
 }
 
-/// sRGB hex per token, in [`Token::ALL`] order: (GitHub dark, GitHub light), after Primer's
-/// "prettylights" syntax colours, with distinct picks where Primer reuses one.
-const HEX: [(&str, &str); 10] = [
-    ("#8b949e", "#6e7781"),
-    ("#a5d6ff", "#0a3069"),
-    ("#79c0ff", "#0550ae"),
-    ("#ff7b72", "#cf222e"),
-    ("#ffa657", "#953800"),
-    ("#d2a8ff", "#8250df"),
-    ("#e3b341", "#7d4e00"),
-    ("#9198a1", "#57606a"),
-    ("#7ee787", "#116329"),
-    ("#56d4dd", "#1b7c83"),
+/// sRGB hex per token, in [`Token::ALL`] order, one row per [`Palette`]. GitHub dark and light
+/// follow Primer's "prettylights" syntax colours, with distinct picks where Primer reuses one.
+/// Everforest and Gruvbox take only their palettes' own hexes, as their Vim themes assign them.
+const HEX: [[&str; 10]; 4] = [
+    [
+        "#8b949e", "#a5d6ff", "#79c0ff", "#ff7b72", "#ffa657", "#d2a8ff", "#e3b341", "#9198a1", "#7ee787", "#56d4dd",
+    ],
+    [
+        "#6e7781", "#0a3069", "#0550ae", "#cf222e", "#953800", "#8250df", "#7d4e00", "#57606a", "#116329", "#1b7c83",
+    ],
+    // grey1, aqua, purple, red, yellow, green, blue, grey2, orange, yellow
+    [
+        "#859289", "#83c092", "#d699b6", "#e67e80", "#dbbc7f", "#a7c080", "#7fbbb3", "#9da9a0", "#e69875", "#dbbc7f",
+    ],
+    // gray, green, purple, red, yellow, green, blue, fg4, blue, aqua
+    [
+        "#928374", "#b8bb26", "#d3869b", "#fb4934", "#fabd2f", "#b8bb26", "#83a598", "#a89984", "#83a598", "#8ec07c",
+    ],
 ];
 
 impl Palette {
+    pub const ALL: [Palette; 4] = [Palette::GithubDark, Palette::GithubLight, Palette::Everforest, Palette::Gruvbox];
+
     pub fn for_dark(dark: bool) -> Palette {
         if dark { Palette::GithubDark } else { Palette::GithubLight }
     }
 
     pub fn is_dark(self) -> bool {
-        self == Palette::GithubDark
+        self != Palette::GithubLight
     }
 
     pub fn color(self, t: Token) -> Color {
-        static COLORS: OnceLock<[[Color; 10]; 2]> = OnceLock::new();
-        let colors = COLORS.get_or_init(|| {
-            let parse = |s: &str| rune::color::hex(s).expect("palette hex");
-            [HEX.map(|(d, _)| parse(d)), HEX.map(|(_, l)| parse(l))]
-        });
-        colors[usize::from(!self.is_dark())][t as usize]
+        static COLORS: OnceLock<[[Color; 10]; 4]> = OnceLock::new();
+        let colors = COLORS.get_or_init(|| HEX.map(|row| row.map(|s| rune::color::hex(s).expect("palette hex"))));
+        colors[self as usize][t as usize]
+    }
+
+    /// `base` with the token kinds rune-kit's scanners paint ([`Syntax`]) in this palette, for
+    /// Markdown code blocks and anything else that colours by kind.
+    pub fn syntax_theme(self, base: rune_kit::syntax::SyntaxTheme) -> rune_kit::syntax::SyntaxTheme {
+        [
+            Syntax::Keyword,
+            Syntax::String,
+            Syntax::Number,
+            Syntax::Comment,
+            Syntax::Type,
+            Syntax::Function,
+            Syntax::Property,
+            Syntax::Punctuation,
+        ]
+        .into_iter()
+        .fold(base, |t, k| match kind_token(k) {
+            Some(tok) => t.with(k, self.color(tok)),
+            None => t,
+        })
     }
 }
 

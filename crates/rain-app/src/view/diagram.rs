@@ -16,7 +16,7 @@ const PANE_WIDTH: f32 = 320.0;
 pub(crate) const STACK_WIDTH: f32 = 700.0;
 
 pub(super) fn map_overlay(s: &App, k: &Kit, cx: &mut Cx<App>) -> El {
-    let style = DiagramStyle::for_theme(k.dark);
+    let style = s.seen_scheme.get().diagram();
     let targets = s.overview.as_ref().map(|l| l.targets.clone()).unwrap_or_default();
     let names = rain_overview::tab_names(&targets);
     let mut picker = row().key("map-tabs").role("tablist").gap(4.0).items_center();

@@ -1,5 +1,5 @@
-//! The window: a thin shell of toolbar, list, reader, overlays and status line in the chrome's
-//! look (theme.rs). Each feature draws its own part from its module.
+//! The window: a thin shell of toolbar, list, reader, overlays and status line in the look from
+//! theme.rs. Each feature draws its own part from its module.
 
 mod board;
 mod composer;
@@ -28,8 +28,8 @@ use rune::{Color, Cx, El, col, el, row, text};
 use rune_kit::{Kit, SplitView};
 
 use crate::app::{App, Overlay, Phase};
-use crate::settings::{Density, Theme};
-use crate::theme::{self, Look};
+use crate::settings::Density;
+use crate::theme::{self, Look, Scheme};
 
 /// rune-kit's toolbar band; overlays start under it.
 const TOOLBAR_HEIGHT: f32 = 48.0;
@@ -48,12 +48,8 @@ pub(crate) fn toolbar_title(s: &App) -> String {
 pub(crate) use overview::{cite_target, demote_headings, inline_cites, link_cites, parse_cite};
 pub(crate) use peek::code as peek_code;
 
-pub fn dark_of(s: &App, cx: &Cx<App>) -> bool {
-    match s.settings.theme {
-        Theme::System => cx.system_dark(),
-        Theme::Light => false,
-        Theme::Dark => true,
-    }
+pub fn scheme_of(s: &App, cx: &Cx<App>) -> Scheme {
+    s.settings.theme.scheme(cx.system_dark())
 }
 
 /// The window's width as last laid out, so narrow rules hold from the first frames.
@@ -61,29 +57,24 @@ pub(crate) fn window_width(s: &App) -> f32 {
     rune::memo::layout_size("app").map_or(s.window_width, |size| size[0])
 }
 
-/// The look for this frame: the chrome, theme and density as set now, so a switch applies live.
-pub(crate) fn look_of(s: &App, dark: bool) -> Look {
-    theme::look(dark, s.chrome(), s.settings.density)
-}
-
 pub fn view(s: &App, cx: &mut Cx<App>) -> El {
-    let dark = dark_of(s, cx);
-    s.seen_dark.set(dark);
-    let look = look_of(s, dark);
+    let scheme = scheme_of(s, cx);
+    s.seen_scheme.set(scheme);
+    let look = theme::look(scheme);
     let k = &look.kit;
     let mut layer: Vec<El> = Vec::new();
     let body = SplitView::new(reader(s, &look))
         .sidebar(&s.sidebar, |s: &mut App| &mut s.sidebar, sidebar::pane(s, &look))
         .toolbar(toolbar::toolbar(s, &look, &mut layer))
         .titlebar_inset(cx.titlebar_inset())
-        .frame_inset(look.shape.island_gap)
+        .frame_inset(0.0)
         .build(&look.shell);
     let mut root = col()
         .key("app")
         .w_full()
         .h_full()
         .on_layout(|s: &mut App, r: [f32; 4]| s.set_window_size((r[2], r[3])))
-        .fill(look.s.ground)
+        .fill(look.s.bar)
         .child(col().w_full().grow(1.0).min_h(0.0).child(body))
         .child(status::status_bar(s, &look, &mut layer));
     if s.phase == Phase::Ready {
@@ -92,7 +83,7 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
                 root = root.child(e.absolute(0.0, 0.0));
             }
         }
-        if let Some(p) = peek::layer(s, k) {
+        if let Some(p) = peek::layer(s, &look) {
             root = root.child(p);
         }
     }
@@ -206,7 +197,6 @@ fn lines_label(a: &rain_core::Anchor) -> String {
 /// The reader: the tab strip, banners, then the Overview or the find bar, filter and diff.
 fn reader(s: &App, look: &Look) -> El {
     let k = &look.kit;
-    let sides = look.shape.card_sides(window_width(s));
     let pane = col()
         .key("main")
         .w_full()
@@ -214,7 +204,7 @@ fn reader(s: &App, look: &Look) -> El {
         .min_w(0.0)
         .min_h(0.0)
         .fill(look.s.reader)
-        .on_layout(move |s: &mut App, r: [f32; 4]| s.set_diff_width(r[2] - sides));
+        .on_layout(|s: &mut App, r: [f32; 4]| s.set_diff_width(r[2]));
     let pane = match &s.phase {
         Phase::Loading(msg) => pane
             .items_center()
@@ -238,9 +228,6 @@ fn reader(s: &App, look: &Look) -> El {
         Phase::Ready if s.layout.is_zoomed() => ready(s, k, pane),
         Phase::Ready => ready(s, k, pane.child(tabs::strip(s, look))),
     };
-    if !look.shape.region_lines {
-        return pane;
-    }
     let line = look.s.hairline;
     let top = el()
         .key("reader-top-line")

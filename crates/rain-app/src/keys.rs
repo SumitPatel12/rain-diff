@@ -48,7 +48,7 @@ pub fn on_key(s: &mut App, ev: &KeyEvent, tx: &mut Tx) -> bool {
     }
     if s.phase != Phase::Ready {
         return match cmd {
-            Some(c @ (Command::Reload | Command::ToggleTheme | Command::ToggleChrome | Command::Escape)) => s.run(c, tx),
+            Some(c @ (Command::Reload | Command::ToggleTheme | Command::Escape)) => s.run(c, tx),
             _ => false,
         };
     }

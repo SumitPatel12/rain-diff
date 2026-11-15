@@ -31,7 +31,6 @@ fn sentence(title: &str) -> String {
 /// What a list row needs of the look, shared by the virtual rows.
 struct RowLook {
     kit: Kit,
-    pill: bool,
     selected: Color,
 }
 
@@ -125,7 +124,6 @@ fn body(s: &App, look: &Look) -> El {
     }
     let kit = Rc::new(RowLook {
         kit: k.clone(),
-        pill: look.shape.row_pill,
         selected: look.s.selected_row,
     });
     let n = listing.rows.len();
@@ -275,7 +273,6 @@ fn file_row(s: &App, g: usize, key: String, look: &RowLook) -> El {
             Color::TRANSPARENT
         })
         .a11y_hidden();
-    let row_key = key.clone();
     let mut r = list_row(key, k, s)
         .h(ROW_HEIGHT)
         .gap(6.0)
@@ -325,10 +322,6 @@ fn file_row(s: &App, g: usize, key: String, look: &RowLook) -> El {
             .w(12.0)
             .a11y_hidden(),
     );
-    if look.pill {
-        let inner = if current { r.fill(look.selected).checked(true) } else { r };
-        return row().key(row_key).w_full().h(ROW_HEIGHT).px(6.0).child(inner.key("pill"));
-    }
     if !current {
         return r;
     }

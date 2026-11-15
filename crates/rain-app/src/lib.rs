@@ -32,7 +32,7 @@ pub use keys::{command_of, on_key};
 pub use load::LARGE_FILE_LINES;
 pub use peek_window::PeekWindow;
 pub use render::render_overview;
-pub use settings::{Chrome, CodeSize, Density, Settings, Theme, ViewLayout};
+pub use settings::{CodeSize, Density, Settings, Theme, ViewLayout};
 pub use view::view;
 
 /// The installed JetBrains Mono Nerd Font's family name.
@@ -86,7 +86,7 @@ fn load_fonts() -> (Vec<&'static [u8]>, bool) {
 static START: OnceLock<(Launch, Arc<Shared>, Instant)> = OnceLock::new();
 
 /// `--fixture`, `--overview`, `--session`, `--goto`, `--comments`, `--repo` (repeatable, with
-/// `--base`/`--target`/`--merge-base` applying to all), `--clean`, `-w`, `--chrome`: read from the arguments
+/// `--base`/`--target`/`--merge-base` applying to all), `--clean`, `-w`: read from the arguments
 /// Rune did not take, for runs where no CLI built the [`Launch`] (scenes, `cargo run -p rain`).
 pub fn launch_from_args(args: &[String]) -> Launch {
     let mut l = Launch::default();
@@ -110,7 +110,6 @@ pub fn launch_from_args(args: &[String]) -> Launch {
             "--merge-base" => merge_base = true,
             "--clean" => l.clean = true,
             "-w" | "--ignore-whitespace" => l.ignore_whitespace = true,
-            "--chrome" => l.chrome = Some(next(&mut i)),
             _ => {}
         }
         i += 1;
@@ -138,37 +137,10 @@ fn start() -> &'static (Launch, Arc<Shared>, Instant) {
     START.get_or_init(|| (launch_from_args(rune::extra_args()), Arc::new(Shared::default()), Instant::now()))
 }
 
-/// `--chrome <zed|islands>` from the process arguments: Rune takes the flag itself, so it never
-/// reaches the arguments it leaves.
-fn chrome_arg(args: impl IntoIterator<Item = String>) -> Option<String> {
-    let mut args = args.into_iter();
-    args.by_ref().find(|a| a == "--chrome")?;
-    args.next().filter(|v| settings::Chrome::parse(v).is_some())
-}
-
-/// The arguments for Rune without Rain's `--chrome <value>`: Rune's own `--chrome` draws macOS
-/// traffic lights over headless snaps.
-fn rune_argv(args: impl IntoIterator<Item = String>) -> Vec<String> {
-    let mut out = Vec::new();
-    let mut args = args.into_iter();
-    while let Some(a) = args.next() {
-        if a == "--chrome" {
-            args.next();
-        } else {
-            out.push(a);
-        }
-    }
-    out
-}
-
 fn init() -> App {
     let (launch, shared, at) = start();
-    let mut launch = launch.clone();
-    if launch.chrome.is_none() {
-        launch.chrome = chrome_arg(std::env::args());
-    }
     let mut app = App::new(
-        launch,
+        launch.clone(),
         shared.clone(),
         Some(rain_comments::SessionFile::dir()),
         Some(Settings::default_path()),
@@ -189,6 +161,18 @@ fn poll(s: &mut App, _t: f64, tx: &mut Tx) -> bool {
     s.poll(tx)
 }
 
+/// `--theme everforest|gruvbox-hard|gruvbox-medium` from the process arguments: Rune takes
+/// `--theme` itself (any value but `light` draws dark), so scenes read Rain's own schemes here.
+fn theme_flag() -> Option<Theme> {
+    theme_in(std::env::args())
+}
+
+fn theme_in(args: impl IntoIterator<Item = String>) -> Option<Theme> {
+    let mut args = args.into_iter();
+    args.by_ref().find(|a| a == "--theme")?;
+    Theme::from_flag(&args.next()?)
+}
+
 /// Scenes load on the spot, start from default settings (so `--theme` and the panes don't
 /// follow the user's saved ones) and never write the session or settings files.
 fn scene_base(s: &mut App) {
@@ -199,9 +183,9 @@ fn scene_base(s: &mut App) {
     };
     s.reset_settings(Settings {
         window: s.settings.window,
+        theme: theme_flag().unwrap_or_default(),
         ..Settings::default()
     });
-    s.settings.chrome = s.chrome();
     s.settings_path = None;
     s.load_now();
 }
@@ -211,7 +195,9 @@ fn scene_base(s: &mut App) {
 fn scene_session(s: &mut App) {
     s.autosave = None;
     s.settings_path = None;
-    s.settings.chrome = s.chrome();
+    if let Some(t) = theme_flag() {
+        s.settings.theme = t;
+    }
     s.load_now();
 }
 
@@ -355,14 +341,6 @@ fn scene_whole(s: &mut App) {
     s.diff.set_whole(g, true);
     s.fetch_texts(g);
     s.goto_later(s.keys.get(g).cloned().unwrap_or_default());
-}
-
-/// The files scene in one chrome, whatever `--chrome` says.
-fn scene_chrome(s: &mut App, chrome: settings::Chrome) {
-    scene_base(s);
-    seed_threads(s);
-    s.launch.chrome = None;
-    s.settings.chrome = chrome;
 }
 
 fn spec() -> AppSpec<App> {
@@ -538,8 +516,6 @@ fn spec() -> AppSpec<App> {
                 }];
                 s.load_now();
             }),
-            ("chrome-zed", |s| scene_chrome(s, settings::Chrome::Zed)),
-            ("chrome-islands", |s| scene_chrome(s, settings::Chrome::Islands)),
             ("overview-empty", |s| {
                 scene_base(s);
                 s.set_reader_tab(app::ReaderTab::Overview);
@@ -586,11 +562,7 @@ pub fn run(launch: Launch, shared: Arc<Shared>) -> bool {
         launch
     };
     let _ = START.set((launch, shared, Instant::now()));
-    let mut app = rune::App::new(spec())
-        .args(rune_argv(std::env::args().skip(1)))
-        .modifier_keys()
-        .on_close(on_close)
-        .on_window(icon::apply);
+    let mut app = rune::App::new(spec()).modifier_keys().on_close(on_close).on_window(icon::apply);
     peek_window::register(&mut app);
     app.run();
     CLOSE_REQUESTED.load(Ordering::SeqCst)

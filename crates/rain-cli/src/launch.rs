@@ -103,7 +103,6 @@ pub fn build_launch(o: &OpenArgs) -> Launch {
         clean: o.clean,
         fixture: o.fixture.as_deref().map(absolute),
         context: Some(o.context),
-        chrome: None,
     }
 }
 

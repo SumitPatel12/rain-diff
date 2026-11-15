@@ -235,8 +235,8 @@ impl App {
         let diffs: Vec<FileDiff> = picks.iter().map(|(&g, hs)| only_hunks(&self.diff.files()[g], hs)).collect();
         let mut diff = DiffState::new(diffs);
         diff.set_repo_ids(self.repos.iter().map(|r| r.id.clone()).collect());
-        if let Some(dark) = self.hl_dark {
-            diff.set_highlighter(rain_syntax::highlighter(rain_syntax::Palette::for_dark(dark)));
+        if let Some(palette) = self.hl_palette {
+            diff.set_highlighter(rain_syntax::highlighter(palette));
         }
         diff.set_mode(self.diff.mode());
         diff.set_collapsed_where(true, |f| f.lines.len() > LARGE_FILE_LINES);

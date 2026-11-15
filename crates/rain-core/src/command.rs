@@ -50,7 +50,6 @@ pub enum Command {
     Reload,
     ToggleTheme,
     ToggleDensity,
-    ToggleChrome,
     Escape,
     /// Round-2 commands with no chord and no place in [`Command::ALL`]; the round-2 shell still
     /// dispatches them until the round-3 shell replaces it.
@@ -63,7 +62,7 @@ pub enum Command {
 }
 
 impl Command {
-    pub const ALL: [Command; 49] = [
+    pub const ALL: [Command; 48] = [
         Command::CursorDown,
         Command::CursorUp,
         Command::NextHunk,
@@ -111,16 +110,14 @@ impl Command {
         Command::Reload,
         Command::ToggleTheme,
         Command::ToggleDensity,
-        Command::ToggleChrome,
         Command::Escape,
     ];
 
     /// Reached from the palette only.
-    pub const PALETTE_ONLY: [Command; 6] = [
+    pub const PALETTE_ONLY: [Command; 5] = [
         Command::LayoutAuto,
         Command::CopyAll,
         Command::ToggleTheme,
-        Command::ToggleChrome,
         Command::GoOverview,
         Command::GoChanges,
     ];
@@ -187,7 +184,6 @@ impl Command {
             Command::Reload => "Reload diff",
             Command::ToggleTheme => "Toggle theme",
             Command::ToggleDensity => "Toggle density",
-            Command::ToggleChrome => "Switch chrome: Zed / Islands",
             Command::Escape => "Close / clear",
             Command::NextChapter => "Next chapter",
             Command::PrevChapter => "Previous chapter",

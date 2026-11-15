@@ -14,15 +14,15 @@ pub(super) fn diff_view(s: &App, k: &Kit) -> El {
     let ka = k.clone();
     let kh = k.clone();
     let kw = k.clone();
-    let frame = crate::theme::shape(s.chrome(), s.settings.density).frame(super::window_width(s));
-    // An island already encloses the files: cards keep their head band and gap, no outline.
-    let mut kd = k.clone();
-    if s.chrome().islands() {
-        kd.c.border_base = kd.c.bg_base;
+    let scheme = s.seen_scheme.get();
+    let mut v = DiffView::new(|s: &App| s.active(), |s: &mut App| s.active_mut()).calm_added_files(true);
+    if let Some((add, del)) = scheme.change_fills() {
+        v = v.change_fills(add, del);
     }
-    let v = DiffView::new(|s: &App| s.active(), |s: &mut App| s.active_mut())
-        .frame(frame)
-        .calm_added_files(true)
+    if let Some(c) = scheme.selection() {
+        v = v.selection_color(c);
+    }
+    let v = v
         .annotation(move |s: &App, a: &Annotation| annotation(s, a, &ka))
         .header_actions(move |s: &App, local: usize| header_actions(s, local, &kh))
         .header_annotation(move |s: &App, local: usize| why_line(s, local, &kw))
@@ -37,7 +37,7 @@ pub(super) fn diff_view(s: &App, k: &Kit) -> El {
         .grow(1.0)
         .min_h(0.0)
         .on_secondary_press(|s: &mut App, p: rune::PointerPress, _: &mut Tx| s.open_diff_menu((p.x, p.y)))
-        .child(ruler::wire(v, s).build(s, &kd))
+        .child(ruler::wire(v, s).build(s, k))
 }
 
 /// Thread cards read at most this wide, however wide the reader.

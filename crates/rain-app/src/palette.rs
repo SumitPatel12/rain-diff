@@ -1,4 +1,4 @@
-//! Ctrl+K: commands with their chords, layouts, file filters, notes, files, chapters and
+//! Ctrl+K: commands with their chords, layouts, themes, file filters, notes, files, chapters and
 //! threads, fuzzy-matched.
 
 use rain_core::command::Command;
@@ -8,7 +8,7 @@ use rune::Tx;
 
 use crate::app::App;
 use crate::app::ask::{self, AskItem};
-use crate::settings::ViewLayout;
+use crate::settings::{Theme, ViewLayout};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Item {
@@ -21,6 +21,7 @@ pub enum Item {
     FilterTag(FileTag),
     Note(String),
     Layout(ViewLayout),
+    Theme(Theme),
     Ask(AskItem),
 }
 
@@ -81,6 +82,12 @@ pub fn entries(s: &App) -> Vec<Entry> {
         item: Item::Layout(*l),
         label: format!("Layout: {}", l.label().to_lowercase()),
         hint: if *l == s.settings.layout { "on".into() } else { String::new() },
+        kind: "Setting",
+    }));
+    out.extend(Theme::PICKS.iter().map(|&(t, label)| Entry {
+        item: Item::Theme(t),
+        label: format!("Theme: {}", label.to_lowercase()),
+        hint: if t == s.settings.theme { "on".into() } else { String::new() },
         kind: "Setting",
     }));
     out.extend(filter_entries(s));
@@ -243,6 +250,7 @@ pub fn run_selected(s: &mut App, tx: &mut Tx) {
         Item::FilterRepo(_) | Item::FilterTag(_) => toggle_filter(s, &e.item, tx),
         Item::Note(id) => open_note(s, &id, tx),
         Item::Layout(l) => s.set_layout(l),
+        Item::Theme(t) => s.set_theme(t),
         Item::Ask(a) => s.apply_ask_item(a),
     }
 }

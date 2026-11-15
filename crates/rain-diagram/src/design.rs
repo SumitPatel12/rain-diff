@@ -137,7 +137,8 @@ pub struct DiagramStyle {
     pub removed_border: Color,
     pub neutral_fill: Color,
     pub shadow: Color,
-    /// The reviewed share of a node's files: its bar and the tint of a fully viewed card.
+    /// The reviewed share of a node's files: its bar and the tint laid over a fully viewed card
+    /// (see-through, or it hides the card's text).
     pub viewed: Color,
     pub viewed_fill: Color,
     /// A node's thread-count badge and the selection ring.
@@ -245,6 +246,91 @@ impl DiagramStyle {
             viewed_fill: rgba(56, 139, 253, 0.10),
             thread: hex(0xa371f7),
             thread_text: hex(0x0d1117),
+            keys: keys.map(hex),
+            key_fills: keys.map(|k| hex(k).alpha(0.14)),
+        }
+    }
+
+    /// Everforest dark: the medium palette on the hard variant's deepest ground, the palette's
+    /// hexes only; translucent colours are those hexes at an alpha.
+    pub fn everforest() -> DiagramStyle {
+        let keys = [0x83c092, 0xd699b6, 0x7fbbb3, 0xe69875, 0x9da9a0];
+        let (green, yellow, red, grey0) = (hex(0xa7c080), hex(0xdbbc7f), hex(0xe67e80), hex(0x7a8478));
+        DiagramStyle {
+            dark: true,
+            background: hex(0x1e2326),
+            dot: grey0.alpha(0.22),
+            lane: grey0.alpha(0.07),
+            card: hex(0x343f44),
+            card_border: hex(0x4f585e),
+            foreground: hex(0xd3c6aa),
+            muted: hex(0x9da9a0),
+            edge: grey0,
+            chip: hex(0x3d484d),
+            pill: hex(0x2d353b),
+            pill_border: hex(0x3d484d),
+            lifeline: hex(0x475258),
+            added: green,
+            added_text: green,
+            added_fill: hex(0x425047),
+            added_border: green.alpha(0.4),
+            modified: yellow,
+            modified_text: yellow,
+            modified_fill: hex(0x4d4c43),
+            modified_border: yellow.alpha(0.4),
+            removed: red,
+            removed_text: red,
+            removed_fill: hex(0x514045),
+            removed_border: red.alpha(0.4),
+            neutral_fill: hex(0x3d484d),
+            shadow: rgba(0, 0, 0, 0.3),
+            viewed: hex(0x7fbbb3),
+            viewed_fill: hex(0x7fbbb3).alpha(0.10),
+            thread: hex(0xd699b6),
+            thread_text: hex(0x1e2326),
+            keys: keys.map(hex),
+            key_fills: keys.map(|k| hex(k).alpha(0.14)),
+        }
+    }
+
+    /// Gruvbox dark (morhetz/gruvbox) with the bright accents, on `bg0_h` when `hard` and `bg0`
+    /// otherwise.
+    pub fn gruvbox(hard: bool) -> DiagramStyle {
+        let keys = [0x8ec07c, 0xd3869b, 0x83a598, 0xfe8019, 0xa89984];
+        let (green, yellow, red, gray) = (hex(0xb8bb26), hex(0xfabd2f), hex(0xfb4934), hex(0x928374));
+        let ground = hex(if hard { 0x1d2021 } else { 0x282828 });
+        DiagramStyle {
+            dark: true,
+            background: ground,
+            dot: gray.alpha(0.22),
+            lane: gray.alpha(0.07),
+            card: hex(0x3c3836),
+            card_border: hex(0x665c54),
+            foreground: hex(0xebdbb2),
+            muted: hex(0xbdae93),
+            edge: gray,
+            chip: hex(0x504945),
+            pill: ground,
+            pill_border: hex(0x504945),
+            lifeline: hex(0x504945),
+            added: green,
+            added_text: green,
+            added_fill: green.alpha(0.15),
+            added_border: green.alpha(0.4),
+            modified: yellow,
+            modified_text: yellow,
+            modified_fill: yellow.alpha(0.15),
+            modified_border: yellow.alpha(0.4),
+            removed: red,
+            removed_text: red,
+            removed_fill: red.alpha(0.12),
+            removed_border: red.alpha(0.4),
+            neutral_fill: hex(0x504945),
+            shadow: rgba(0, 0, 0, 0.28),
+            viewed: hex(0x83a598),
+            viewed_fill: hex(0x83a598).alpha(0.10),
+            thread: hex(0xd3869b),
+            thread_text: hex(0x1d2021),
             keys: keys.map(hex),
             key_fills: keys.map(|k| hex(k).alpha(0.14)),
         }

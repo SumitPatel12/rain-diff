@@ -6,22 +6,21 @@ use std::sync::OnceLock;
 use rune::{AppHandle, AppSpec, Cx, El, Key, KeyEvent, Tx, WindowHandle, WindowOptions, WindowSpec, col, row, text};
 
 use crate::app::PeekContent;
-use crate::settings::{Chrome, Density};
+use crate::settings::Theme;
+use crate::theme::Scheme;
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct PeekWindow {
     pub content: Option<PeekContent>,
-    /// The main window's theme when it popped out; `None` follows the system.
-    pub dark: Option<bool>,
-    /// The main window's chrome when it popped out.
-    pub chrome: Chrome,
+    /// The main window's scheme when it popped out; `None` follows the system.
+    pub scheme: Option<Scheme>,
 }
 
 impl PeekWindow {
     /// What a pop-out puts in the window: a second pop-out replaces the first.
-    pub fn show(&mut self, content: PeekContent, dark: bool) {
+    pub fn show(&mut self, content: PeekContent, scheme: Scheme) {
         self.content = Some(content);
-        self.dark = Some(dark);
+        self.scheme = Some(scheme);
     }
 }
 
@@ -29,12 +28,9 @@ static HANDLES: OnceLock<(AppHandle<PeekWindow>, WindowHandle)> = OnceLock::new(
 
 /// Sends `content` to the peek window and brings it to the front; false where there is no such
 /// window (tests, headless renders).
-pub(crate) fn show(content: PeekContent, dark: bool, chrome: Chrome) -> bool {
+pub(crate) fn show(content: PeekContent, scheme: Scheme) -> bool {
     let Some((app, window)) = HANDLES.get() else { return false };
-    app.update(move |w: &mut PeekWindow, _| {
-        w.show(content, dark);
-        w.chrome = chrome;
-    });
+    app.update(move |w: &mut PeekWindow, _| w.show(content, scheme));
     window.open();
     window.focus();
     true
@@ -68,9 +64,9 @@ fn on_key(_: &mut PeekWindow, ev: &KeyEvent, tx: &mut Tx) -> bool {
 }
 
 pub fn view(w: &PeekWindow, cx: &mut Cx<PeekWindow>) -> El {
-    let dark = w.dark.unwrap_or_else(|| cx.system_dark());
-    let look = crate::theme::look(dark, w.chrome, Density::default());
-    let k = look.kit;
+    let scheme = w.scheme.unwrap_or_else(|| Theme::System.scheme(cx.system_dark()));
+    let look = crate::theme::look(scheme);
+    let k = &look.kit;
     let mut root = col().key("peek-window").w_full().h_full().fill(look.s.reader);
     let Some(c) = &w.content else {
         return root.child(
@@ -109,7 +105,7 @@ pub fn view(w: &PeekWindow, cx: &mut Cx<PeekWindow>) -> El {
             .grow(1.0)
             .min_h(0.0)
             .scroll(rune::ScrollSpec { stick_bottom: false })
-            .child(crate::view::peek_code(c, &k)),
+            .child(crate::view::peek_code(c, &look)),
     )
 }
 
@@ -123,6 +119,5 @@ fn sample(w: &mut PeekWindow) {
         return;
     };
     w.content = Some(a.peek_content(&t));
-    w.dark = None;
-    w.chrome = a.chrome();
+    w.scheme = crate::theme_flag().map(|t| t.scheme(true));
 }

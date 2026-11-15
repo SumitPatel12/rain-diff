@@ -759,3 +759,24 @@ fn stacked_lanes_keep_every_card_and_drop_only_cross_lane_lines() {
         "no lanes, nothing to stack"
     );
 }
+
+#[test]
+fn every_style_keeps_its_overlays_see_through_and_its_text_readable() {
+    let contrast = |a: rune::Color, b: rune::Color| {
+        let (la, lb) = (a.luminance(), b.luminance());
+        (la.max(lb) + 0.05) / (la.min(lb) + 0.05)
+    };
+    for st in [
+        DiagramStyle::dark(),
+        DiagramStyle::light(),
+        DiagramStyle::everforest(),
+        DiagramStyle::gruvbox(true),
+        DiagramStyle::gruvbox(false),
+    ] {
+        assert!(st.viewed_fill.a < 1.0, "a viewed card's tint lies over its text");
+        assert!(st.key_fills.iter().all(|c| c.a < 1.0));
+        let text = contrast(st.foreground, st.card);
+        assert!(text >= 4.5, "card text: {text:.2}");
+    }
+    assert_ne!(DiagramStyle::gruvbox(true).background, DiagramStyle::gruvbox(false).background);
+}

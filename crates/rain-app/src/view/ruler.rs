@@ -25,20 +25,25 @@ pub(super) fn ruler(s: &App, k: &Kit) -> El {
     };
     let marks = s.ruler_marks(track);
     let kc = k.clone();
-    let painted = memo("ruler-marks", (s.ruler.builds.get(), k.dark, track.round() as i32), move || {
-        let mut shape = Shape::new();
-        for m in marks.iter() {
-            let [x0, y0, x1, y1] = m.rect();
-            let c = m.color(&kc, note_purple());
-            shape = if m.outlined() {
-                let [x0, y0, x1, y1] = [x0 + 0.5, y0 + 0.5, x1 - 0.5, y1 - 0.5];
-                shape.stroke_with(vec![[x0, y0], [x1, y0], [x1, y1], [x0, y1]], true, 1.0, LineCap::Butt, c)
-            } else {
-                shape.fill(vec![[x0, y0], [x1, y0], [x1, y1], [x0, y1]], c)
-            };
-        }
-        canvas(shape).w(W).h(track.max(0.0)).a11y_hidden()
-    });
+    let purple = note_purple(k);
+    let painted = memo(
+        "ruler-marks",
+        (s.ruler.builds.get(), s.seen_scheme.get(), track.round() as i32),
+        move || {
+            let mut shape = Shape::new();
+            for m in marks.iter() {
+                let [x0, y0, x1, y1] = m.rect();
+                let c = m.color(&kc, purple);
+                shape = if m.outlined() {
+                    let [x0, y0, x1, y1] = [x0 + 0.5, y0 + 0.5, x1 - 0.5, y1 - 0.5];
+                    shape.stroke_with(vec![[x0, y0], [x1, y0], [x1, y1], [x0, y1]], true, 1.0, LineCap::Butt, c)
+                } else {
+                    shape.fill(vec![[x0, y0], [x1, y0], [x1, y1], [x0, y1]], c)
+                };
+            }
+            canvas(shape).w(W).h(track.max(0.0)).a11y_hidden()
+        },
+    );
     let mut strip = el()
         .key("ruler")
         .role("scrollbar")

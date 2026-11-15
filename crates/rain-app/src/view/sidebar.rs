@@ -1,4 +1,4 @@
-//! The list pane's host: the list on the panel surface, framed per chrome.
+//! The list pane's host: the list on the panel surface.
 
 use rune::{El, col};
 
@@ -11,23 +11,14 @@ pub(super) fn sidebar(s: &App, look: &Look) -> El {
     col().key("side").w_full().h_full().min_h(0.0).child(board::board(s, look))
 }
 
-/// The list in the shell's sidebar: edge to edge under a hairline (Zed), or a rounded island
-/// with the gap around it (Islands).
+/// The list in the shell's sidebar, edge to edge under a hairline.
 pub(super) fn pane(s: &App, look: &Look) -> El {
-    let (gap, r) = (look.shape.island_gap, look.shape.island_radius);
-    let list = col().key("side-panel").w_full().grow(1.0).min_h(0.0).fill(look.s.panel);
-    if look.shape.region_lines {
-        return list
-            .child(hairline(look.s.hairline))
-            .child(col().w_full().grow(1.0).min_h(0.0).child(sidebar(s, look)));
-    }
     col()
-        .key("side-island")
+        .key("side-panel")
         .w_full()
-        .h_full()
+        .grow(1.0)
         .min_h(0.0)
-        .pl(gap)
-        .pr(gap)
-        .pb(gap)
-        .child(list.radius(r).clip_rounded(r).child(sidebar(s, look)))
+        .fill(look.s.panel)
+        .child(hairline(look.s.hairline))
+        .child(col().w_full().grow(1.0).min_h(0.0).child(sidebar(s, look)))
 }

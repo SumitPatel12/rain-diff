@@ -23,8 +23,8 @@ impl Subset {
     pub fn new(app: &App, files: Vec<usize>, prev: Option<&Subset>) -> Subset {
         let mut diff = DiffState::new(files.iter().map(|&g| Arc::clone(&app.diff.files()[g])).collect());
         diff.set_repo_ids(app.repos.iter().map(|r| r.id.clone()).collect());
-        if let Some(dark) = app.hl_dark {
-            diff.set_highlighter(rain_syntax::highlighter(rain_syntax::Palette::for_dark(dark)));
+        if let Some(palette) = app.hl_palette {
+            diff.set_highlighter(rain_syntax::highlighter(palette));
         }
         diff.set_mode(app.diff.mode());
         diff.set_collapsed_where(true, |f| f.lines.len() > LARGE_FILE_LINES);
