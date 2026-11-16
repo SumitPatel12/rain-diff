@@ -299,6 +299,7 @@ fn file_row(s: &App, g: usize, key: String, look: &RowLook) -> El {
     let mut r = row()
         .key("row")
         .role("button")
+        .hover_group()
         .label(said.join(", "))
         .w_full()
         .h(h)
@@ -357,12 +358,31 @@ fn file_row(s: &App, g: usize, key: String, look: &RowLook) -> El {
             .fill(super::ui::group_mark(group, k).1)
             .a11y_hidden(),
     );
-    // The check's slot is always there, so marking a file viewed moves nothing beside it.
-    r = r.child(if viewed {
-        icons::draw(&icons::CHECK, 16.0, look.r.accent).key("viewed")
+    // The viewed toggle sits in a fixed slot, so marking a file moves nothing beside it: a check
+    // once viewed, an empty ring on hover before; a press flips it without opening the file.
+    let mark = if viewed {
+        icons::draw(&icons::CHECK, 16.0, look.r.accent)
     } else {
-        el().key("viewed-slot").size(16.0, 16.0).a11y_hidden()
-    });
+        el().size(12.0, 12.0)
+            .radius(6.0)
+            .border(1.5, k.c.text_faint)
+            .group_opacity(0.0, 1.0)
+            .a11y_hidden()
+    };
+    r = r.child(
+        row()
+            .key(if viewed { "viewed" } else { "viewed-slot" })
+            .role("checkbox")
+            .label(if viewed { "Viewed" } else { "Mark viewed" })
+            .checked(viewed)
+            .help(if viewed { "Viewed · press to unmark  v" } else { "Mark viewed  v" })
+            .size(20.0, 20.0)
+            .center()
+            .radius(radius::KEY)
+            .cursor(Cursor::Pointer)
+            .on_press(move |s: &mut App| s.set_viewed(g, !viewed))
+            .child(mark),
+    );
     let r = if current {
         r.fill(look.s.selected_row)
             .checked(true)

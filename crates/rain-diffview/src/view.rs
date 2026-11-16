@@ -41,6 +41,16 @@ static CHEVRON_DOWN: Icon = Icon {
     view: 16.0,
     body: r#"<path d="M4.5 6.25L8 9.75L11.5 6.25" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>"#,
 };
+static PLUS: Icon = Icon {
+    name: "kit-diff-plus",
+    view: 16.0,
+    body: r#"<path d="M8 3.5v9M3.5 8h9" stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none"/>"#,
+};
+static QUESTION: Icon = Icon {
+    name: "kit-diff-question",
+    view: 16.0,
+    body: r#"<path d="M5.6 5.9a2.5 2.5 0 1 1 3.4 2.3c-.6.3-1 .8-1 1.5v.4" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/><circle cx="8" cy="12.9" r="1.1" fill="currentColor"/>"#,
+};
 static CHEVRON_RIGHT: Icon = Icon {
     name: "kit-diff-chevron-right",
     view: 16.0,
@@ -867,10 +877,10 @@ impl<S: 'static> View<S> {
                 .gap(2.0)
                 .group_opacity(0.0, 1.0);
             if let Some(cb) = self.d.on_comment.clone() {
-                add = add.child(self.hover_button(f, at, "plus", "+", "Comment on this line (c)", l.comment, cb));
+                add = add.child(self.hover_button(f, at, "plus", &PLUS, "Comment on this line  c", l.comment, cb));
             }
             if let Some(cb) = self.d.on_ask.clone() {
-                add = add.child(self.hover_button(f, at, "ask", "?", "Ask about this line (?)", l.ask, cb));
+                add = add.child(self.hover_button(f, at, "ask", &QUESTION, "Ask about this line  ?", l.ask, cb));
             }
             cell = cell.child(add);
         }
@@ -878,7 +888,7 @@ impl<S: 'static> View<S> {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn hover_button(&self, f: usize, at: LineRef, key: &str, glyph: &str, label: &str, fill: Color, cb: LinesFn<S>) -> El {
+    fn hover_button(&self, f: usize, at: LineRef, key: &str, glyph: &'static Icon, label: &str, fill: Color, cb: LinesFn<S>) -> El {
         let l = &self.look;
         let get = self.d.get_mut.clone();
         row()
@@ -886,21 +896,14 @@ impl<S: 'static> View<S> {
             .size(18.0, 16.0)
             .center()
             .radius(4.0)
-            .fill(fill)
+            // Solid, so the code under the gutter never shows through.
+            .fill(fill.alpha(1.0))
             .cursor(Cursor::Pointer)
             .role("button")
             .label(label.to_owned())
             .help(label.to_owned())
-            .child(
-                text(glyph.to_owned())
-                    .font(TextStyle {
-                        size: 11.0,
-                        line_height: 16.0,
-                        weight: 700.0,
-                        ..l.label
-                    })
-                    .color(l.on_accent),
-            )
+            // A drawn glyph, centred in its box (text glyphs sit on a baseline, not the middle).
+            .child(icon(glyph, 12.0).color(l.on_accent).a11y_hidden())
             .on_press_tx(move |s: &mut S, tx| {
                 let st = get(s);
                 let lines = match st.selection() {

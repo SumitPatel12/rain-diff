@@ -323,11 +323,7 @@ fn thread_row(s: &App, t: &Thread, section: Section, k: &Kit) -> El {
         .on_press_tx(move |s: &mut App, tx: &mut Tx| s.show_thread(&id, tx))
         .child(top)
         .child(text(said).font(TYPE.small).color(k.c.text_base).truncate());
-    c = if focused {
-        c.fill(k.c.pressed).outline(2.0, 0.0, k.c.border_focus)
-    } else {
-        k.interactive(c)
-    };
+    c = if focused { c.fill(k.c.pressed) } else { k.interactive(c) };
     if section == Section::Orphaned {
         let snap = t.orphan.as_ref().map(|o| &o.snapshot).or(t.code_snapshot.as_ref());
         let sha = t

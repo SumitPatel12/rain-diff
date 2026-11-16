@@ -503,11 +503,8 @@ fn section(s: &App, k: &Kit, id: &str, title: Option<(&str, bool)>, label: &str,
         .mx(-12.0)
         .radius(radius::CARD)
         .child(section_head(s, k, id, title, threads.len()));
-    if s.brief.hover_section.as_deref() == Some(id) {
+    if s.brief.hover_section.as_deref() == Some(id) || s.brief.focus.as_deref() == Some(id) {
         c = c.fill(k.c.hover);
-    }
-    if s.brief.focus.as_deref() == Some(id) {
-        c = c.outline(2.0, 2.0, k.c.border_focus);
     }
     if !body.trim().is_empty() {
         c = c.child(md_body(s, id, body, k));
@@ -563,11 +560,8 @@ fn invariant(s: &App, k: &Kit, n: usize, id: &str, body: &str, extra: El) -> El 
         // The head row is 24 points, then a 4 point gap: the number sits on the body's first line.
         .child(text(format!("{n}.")).font(TYPE.body).color(k.c.text_muted).w(20.0).pt(28.0))
         .child(item);
-    if s.brief.hover_section.as_deref() == Some(id) {
+    if s.brief.hover_section.as_deref() == Some(id) || s.brief.focus.as_deref() == Some(id) {
         c = c.fill(k.c.hover);
-    }
-    if s.brief.focus.as_deref() == Some(id) {
-        c = c.outline(2.0, 2.0, k.c.border_focus);
     }
     hoverable(c, id)
 }

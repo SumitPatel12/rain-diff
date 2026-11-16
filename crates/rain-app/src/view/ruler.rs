@@ -1,11 +1,9 @@
-//! The overview ruler at the diff's right edge: the diff's scrollbar, with marks for hunks,
-//! file starts, threads, notes, find hits and the cursor line.
+//! The diff's scrollbar at its right edge: a plain track and thumb.
 
 use rain_diffview::DiffView;
-use rune::{El, LineCap, Shape, Spring, canvas, el, memo};
+use rune::{El, Spring, el};
 use rune_kit::Kit;
 
-use super::notes::note_purple;
 use crate::app::{App, RulerState};
 
 const W: f32 = RulerState::WIDTH;
@@ -16,36 +14,13 @@ pub(super) fn ruler(s: &App, k: &Kit) -> El {
     if d.row_count() == 0 {
         return el();
     }
-    let track = s.ruler.track.get();
     let [offset, max, ..] = s.ruler.live.get();
     let pct = if max > 0.0 {
         (offset / max * 100.0).clamp(0.0, 100.0).round()
     } else {
         0.0
     };
-    let marks = s.ruler_marks(track);
-    let kc = k.clone();
-    let purple = note_purple(k);
-    let painted = memo(
-        "ruler-marks",
-        (s.ruler.builds.get(), s.seen_scheme.get(), track.round() as i32),
-        move || {
-            let mut shape = Shape::new();
-            for m in marks.iter() {
-                let [x0, y0, x1, y1] = m.rect();
-                let c = m.color(&kc, purple);
-                shape = if m.outlined() {
-                    let [x0, y0, x1, y1] = [x0 + 0.5, y0 + 0.5, x1 - 0.5, y1 - 0.5];
-                    shape.stroke_with(vec![[x0, y0], [x1, y0], [x1, y1], [x0, y1]], true, 1.0, LineCap::Butt, c)
-                } else {
-                    shape.fill(vec![[x0, y0], [x1, y0], [x1, y1], [x0, y1]], c)
-                };
-            }
-            canvas(shape).w(W).h(track.max(0.0)).a11y_hidden()
-        },
-    );
-    let mut strip = el()
-        .key("ruler")
+    el().key("ruler")
         .role("scrollbar")
         .label("Diff position")
         .range_value(pct as f64, 0.0, 100.0)
@@ -61,22 +36,6 @@ pub(super) fn ruler(s: &App, k: &Kit) -> El {
                 s.ruler_hover(None, tx);
             }
         })
-        .child(painted.absolute(0.0, 0.0));
-    if let Some((f, at)) = d.cursor()
-        && let Some(row) = d.row_of_line(f, at)
-        && track > 2.0
-    {
-        let y = (d.row_y(row as usize) / d.rows_height().max(1.0) * track).floor().min(track - 2.0);
-        strip = strip.child(
-            el().key("ruler-cursor")
-                .absolute(0.0, y)
-                .w(W)
-                .h(2.0)
-                .fill(k.c.text_base)
-                .a11y_hidden(),
-        );
-    }
-    strip
         .child(
             el().key("ruler-thumb")
                 .absolute(0.0, 0.0)

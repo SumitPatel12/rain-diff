@@ -137,8 +137,6 @@ pub struct App {
     pub mirror: Session,
     /// Per file, whether the mirror has it viewed at its current hash (see [`App::is_viewed`]).
     viewed_files: Vec<bool>,
-    /// Bumped whenever the mirror's threads or drafts change.
-    pub(crate) threads_rev: u64,
     pub seen_version: u64,
     pub seen_overview_version: u64,
     /// The chapter `J`/`K` last moved to.
@@ -275,7 +273,6 @@ impl App {
             chapters: Chapters::default(),
             mirror: Session::default(),
             viewed_files: Vec::new(),
-            threads_rev: 0,
             seen_version: u64::MAX,
             seen_overview_version: 0,
             chapter: 0,
@@ -375,7 +372,6 @@ impl App {
         self.seen_version = self.mirror.version;
         self.seen_overview_version = self.mirror.overview_version;
         self.recompute_viewed();
-        self.threads_rev += 1;
         self.rebuild_overview_views();
         self.install_brief_facts(&d.triage);
         self.settle_reader_tab();

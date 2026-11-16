@@ -354,7 +354,7 @@ impl<'t, S: 'static> ThreadCard<'t, S> {
         self
     }
 
-    /// The shell's cursor is on this card: it draws a focus outline.
+    /// The shell's cursor is on this card: its response buttons show without a hover.
     pub fn focused(mut self, f: bool) -> Self {
         self.focused = f;
         self
@@ -462,9 +462,6 @@ impl<'t, S: 'static> ThreadCard<'t, S> {
             .focusable(true);
         if look.shadow.a > 0.0 {
             card = card.shadow(6.0, 16.0, look.shadow);
-        }
-        if self.focused {
-            card = card.outline(2.0, 2.0, look.focus);
         }
         if self.settled_dim && matches!(t.state, ThreadState::Resolved | ThreadState::Dismissed) {
             card = card.opacity(0.75);

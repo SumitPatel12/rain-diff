@@ -100,8 +100,17 @@ pub(super) fn map_view(s: &App, k: &Kit, cx: &mut Cx<App>) -> El {
         .pr(8.0)
         .gap(10.0)
         .items_center()
-        .child(tabs)
-        .child(el().grow(1.0).a11y_hidden());
+        // Many views overflow the header: the tabs scroll sideways (wheel or drag), fading at
+        // the cut edge, and the zoom stays put at the right.
+        .child(
+            row()
+                .key("map-tabs-scroll")
+                .grow(1.0)
+                .min_w(0.0)
+                .scroll_x()
+                .scroll_edge_fade(24.0)
+                .child(tabs),
+        );
     if let Some((_, hidden)) = &stacked {
         header = header.child(muted(format!("Lanes stacked · {hidden} link(s) hidden"), k).key("map-stacked"));
     }

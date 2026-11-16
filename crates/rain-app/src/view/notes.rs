@@ -2,7 +2,7 @@
 //! tint with a note rail, so they never read as comment threads.
 
 use rain_core::{Anchor, Note};
-use rune::{Color, Cursor, El, col, el, row, text};
+use rune::{Cursor, El, col, el, row, text};
 use rune_kit::{Kit, Markdown};
 
 use super::icons;
@@ -12,10 +12,6 @@ use crate::theme::{TYPE, radius};
 
 /// Bodies longer than this many lines start clipped behind "Show all".
 pub(super) const CLIP_LINES: usize = 8;
-
-pub(super) fn note_purple(k: &Kit) -> Color {
-    sr(k).1.note
-}
 
 /// "Intent" for the overview's notes, else "Note".
 pub(super) fn note_label(n: &Note) -> String {

@@ -24,9 +24,6 @@ impl App {
         self.mirror = fresh;
         self.seen_version = version;
         self.recompute_viewed();
-        if threads_changed {
-            self.threads_rev += 1;
-        }
         let overview_changed = overview_version != self.seen_overview_version;
         if overview_changed {
             self.seen_overview_version = overview_version;
