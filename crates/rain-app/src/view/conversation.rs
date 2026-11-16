@@ -265,6 +265,7 @@ fn kind_ink(t: &Thread, k: &Kit) -> Color {
 }
 
 fn thread_row(s: &App, t: &Thread, section: Section, k: &Kit) -> El {
+    let (surf, _) = sr(k);
     let id = t.id.clone();
     let focused = s.focused_thread.as_deref() == Some(t.id.as_str());
     let in_reader = !t.is_artifact() && s.file_of_thread(t).is_some_and(|g| s.current() == Some(g));
@@ -312,10 +313,13 @@ fn thread_row(s: &App, t: &Thread, section: Section, k: &Kit) -> El {
         .role("button")
         .label(format!("{head} · {}", location(s, t)))
         .w_full()
-        .px(10.0)
-        .py(8.0)
-        .gap(4.0)
+        .px(12.0)
+        .py(10.0)
+        .gap(6.0)
         .radius(radius::CARD)
+        // Each thread is its own card on the island, so neighbours never run together.
+        .fill(surf.card_head)
+        .border(1.0, surf.card_border)
         .on_press_tx(move |s: &mut App, tx: &mut Tx| s.show_thread(&id, tx))
         .child(top)
         .child(text(said).font(TYPE.small).color(k.c.text_base).truncate());
@@ -458,6 +462,7 @@ fn verdict_label(v: Verdict) -> &'static str {
 }
 
 fn rounds(s: &App, k: &Kit) -> Vec<El> {
+    let (surf, _) = sr(k);
     s.mirror
         .rounds
         .iter()
@@ -469,9 +474,12 @@ fn rounds(s: &App, k: &Kit) -> Vec<El> {
                 .key(format!("conv-round-{}", r.n))
                 .label(line)
                 .w_full()
-                .px(10.0)
-                .py(6.0)
-                .gap(4.0)
+                .px(12.0)
+                .py(10.0)
+                .gap(6.0)
+                .radius(radius::CARD)
+                .fill(surf.card_head)
+                .border(1.0, surf.card_border)
                 .child(
                     row()
                         .gap(8.0)
@@ -524,7 +532,7 @@ fn filter_chip(key: &'static str, label: String, on: bool, k: &Kit) -> El {
 }
 
 fn body(s: &App, k: &Kit) -> El {
-    let mut list = col().w_full().px(6.0).pb(12.0).gap(2.0);
+    let mut list = col().w_full().px(10.0).pb(12.0).gap(8.0);
     let mut shown = 0;
     for section in Section::ALL {
         let threads = s.conversation_section(section);

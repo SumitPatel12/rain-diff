@@ -43,6 +43,11 @@ const FOLDED_BY_DEFAULT: [u8; 10] = [TESTS, MOVES, FORMATTING, GENERATED, LOCKFI
 /// The triage groups Changes holds, each under its own sub-heading.
 pub const CHANGE_GROUPS: [Group; 3] = [Group::Must, Group::Review, Group::Skim];
 
+/// The settings bit of a change group's own fold, after the sections' bits.
+fn sub_bit(g: Group) -> u8 {
+    12 + CHANGE_GROUPS.iter().position(|&x| x == g).unwrap_or(0) as u8
+}
+
 /// A change group's name, in the filter chips' words.
 pub fn change_title(g: Group) -> &'static str {
     match g {
@@ -217,6 +222,17 @@ impl App {
         self.settings.section_collapsed(section) != FOLDED_BY_DEFAULT.contains(&section)
     }
 
+    /// Whether a change group (Must review, Review, Skim) is folded under its sub-heading.
+    pub fn sub_folded(&self, g: Group) -> bool {
+        self.settings.section_collapsed(sub_bit(g))
+    }
+
+    /// Folds or unfolds a change group and remembers it.
+    pub fn toggle_sub(&mut self, g: Group) {
+        self.settings.toggle_section(sub_bit(g));
+        self.save_settings();
+    }
+
     /// Folds or unfolds a list section and remembers it.
     pub fn toggle_list_section(&mut self, section: u8) {
         self.settings.toggle_section(section);
@@ -352,6 +368,9 @@ impl App {
                         if sec == CHANGES && last != Some(group) {
                             l.rows.push(Row::Sub(group));
                             last = Some(group);
+                        }
+                        if sec == CHANGES && self.sub_folded(group) {
+                            continue;
                         }
                         l.rows.push(Row::File(g));
                     }

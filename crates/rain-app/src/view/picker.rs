@@ -5,7 +5,7 @@ use rune::{El, Key, KeyEvent, ScrollSpec, Tx, col, el, row, text};
 use rune_kit::{Kit, TextInput};
 
 use super::icons;
-use super::ui::{kbd, must_tag, sr};
+use super::ui::{group_tag, kbd, sr};
 use crate::app::App;
 use crate::app::picker::Target;
 use crate::theme::{TYPE, radius};
@@ -71,9 +71,7 @@ pub(super) fn picker(s: &App, k: &Kit) -> Option<El> {
         if let Target::File(g) = e.target {
             let f = &s.diff.files()[g];
             let viewed = s.is_viewed(g);
-            if s.group_of(g) == rain_triage::Group::Must {
-                line = line.child(must_tag(k));
-            }
+            line = line.child(group_tag(s.group_of(g), k));
             line = line
                 .child(text(format!("+{}", f.additions)).font(TYPE.micro_mono).color(k.c.success.fg))
                 .child(text(format!("−{}", f.deletions)).font(TYPE.micro_mono).color(k.c.danger.fg))

@@ -25,6 +25,7 @@ mod tabs;
 mod toolbar;
 mod tour;
 pub(crate) mod ui;
+mod weather;
 mod wholefile;
 
 use rune::{Color, Cursor, Cx, Drag, El, Phase as DragPhase, col, el, row, text};
@@ -88,6 +89,9 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
     if s.phase == Phase::Ready {
         filter::chips_popover(s, k, &mut layer);
         diff::file_menu(s, k, &mut layer);
+    }
+    if let Some(f) = weather::flood(s, &look) {
+        layer.push(f.absolute(0.0, 0.0));
     }
     root.children(layer)
 }
@@ -281,21 +285,7 @@ fn reader_pane(s: &App, look: &Look, cx: &mut Cx<App>) -> El {
         .fill(look.s.reader)
         .on_layout(|s: &mut App, r: [f32; 4]| s.set_diff_width(r[2]));
     match &s.phase {
-        Phase::Loading(msg) => pane.child(state_box(
-            col()
-                .key("loading")
-                .gap(4.0)
-                .child(
-                    row()
-                        .w_full()
-                        .h(3.0)
-                        .radius(2.0)
-                        .fill(look.s.well)
-                        .child(el().w(208.0).h(3.0).ml(104.0).radius(2.0).fill(look.r.accent)),
-                )
-                .child(text("Loading").font(theme::TYPE.h2).color(k.c.text_base).pt(10.0))
-                .child(muted(msg.clone(), k)),
-        )),
+        Phase::Loading(msg) => pane.child(state_box(weather::loader(s, msg, look))),
         Phase::Error(msg) => pane.child(state_box(
             col()
                 .key("error")

@@ -133,6 +133,7 @@ pub struct DiffView<S> {
     annotation: Option<Rc<dyn Fn(&S, &Annotation) -> El>>,
     gutter_mark: Option<Rc<dyn Fn(&S, &[&Annotation]) -> Option<El>>>,
     header: Option<Rc<dyn Fn(&S, usize) -> El>>,
+    header_lead: Option<Rc<dyn Fn(&S, usize) -> Option<El>>>,
     header_annotation: Option<Rc<dyn Fn(&S, usize) -> Option<El>>>,
     on_select: Option<Rc<dyn Fn(&mut S, Option<LineRange>, &mut Tx)>>,
     on_comment: Option<LinesFn<S>>,
@@ -157,6 +158,7 @@ impl<S: 'static> DiffView<S> {
             annotation: None,
             gutter_mark: None,
             header: None,
+            header_lead: None,
             header_annotation: None,
             on_select: None,
             on_comment: None,
@@ -240,6 +242,12 @@ impl<S: 'static> DiffView<S> {
     /// Extra controls at the end of each file's header (a "viewed" toggle, a menu), by file.
     pub fn header_actions(mut self, f: impl Fn(&S, usize) -> El + 'static) -> Self {
         self.header = Some(Rc::new(f));
+        self
+    }
+
+    /// Controls right after a file's name (a copy-path button, its group's tag), by file.
+    pub fn header_lead(mut self, f: impl Fn(&S, usize) -> Option<El> + 'static) -> Self {
+        self.header_lead = Some(Rc::new(f));
         self
     }
 
@@ -1484,14 +1492,17 @@ impl<S: 'static> View<S> {
             .gap(8.0)
             .items_center()
             .child(toggle)
-            .child(name)
-            .child(
-                row()
-                    .key("stat")
-                    .gap(4.0)
-                    .child(text(format!("+{adds}")).font(l.small).color(l.add.count).key("adds"))
-                    .child(text(format!("−{dels}")).font(l.small).color(l.del.count).key("dels")),
-            );
+            .child(name);
+        if let Some(lead) = self.d.header_lead.as_ref().and_then(|b| b(s, f)) {
+            inner = inner.child(lead.key("lead"));
+        }
+        inner = inner.child(
+            row()
+                .key("stat")
+                .gap(4.0)
+                .child(text(format!("+{adds}")).font(l.small).color(l.add.count).key("adds"))
+                .child(text(format!("−{dels}")).font(l.small).color(l.del.count).key("dels")),
+        );
         if let Some((word, color)) = status {
             inner = inner.child(text(word).font(l.small_sans).color(color).key("status"));
         }

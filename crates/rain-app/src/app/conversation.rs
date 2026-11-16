@@ -1097,6 +1097,11 @@ mod tests {
 
                 let mut a = app(story(), true);
                 scene("presence")(&mut a);
+                // Held as if hovered, so a slow run can't time them out: this checks that the
+                // scene's load keeps them, not their five-second life.
+                for t in &mut a.conversation.toasts {
+                    t.hovered = true;
+                }
                 let mut rt = rune::Runtime::new(a, crate::view, size, rune::Env::new(dark, 1.0));
                 rt.poll = Some(|s: &mut App, _, tx| s.poll(tx));
                 rt.frame(0.0);

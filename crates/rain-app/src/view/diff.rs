@@ -2,13 +2,13 @@
 //! drafts, inline notes and the gutter marks of what is folded.
 
 use rain_comments::{CardLook, ThreadCard, anchor_label, ops};
-use rain_core::{AnchorState, FileTag, Thread, ThreadKind};
+use rain_core::{AnchorState, Thread, ThreadKind};
 use rain_diffview::{Annotation, DiffColors, DiffView};
 use rune::{Cursor, El, Tx, col, el, row, text};
 use rune_kit::{Kit, Placement, popover};
 
 use super::icons;
-use super::ui::{Ghost, must_tag, sr};
+use super::ui::{Ghost, group_tag, sr};
 use super::{composer, notes, ruler, wholefile};
 use crate::app::{App, ME};
 use crate::theme::{TYPE, radius};
@@ -41,11 +41,13 @@ pub(super) fn diff_view(s: &App, k: &Kit) -> El {
     let kh = k.clone();
     let kw = k.clone();
     let km = k.clone();
+    let kl = k.clone();
     let v = DiffView::new(|s: &App| s.active(), |s: &mut App| s.active_mut())
         .calm_added_files(true)
         .colors(colors(k))
         .annotation(move |s: &App, a: &Annotation| annotation(s, a, &ka))
         .gutter_mark(move |s: &App, here: &[&Annotation]| gutter_mark(s, here, &km))
+        .header_lead(move |s: &App, local: usize| header_lead(s, local, &kl))
         .header_actions(move |s: &App, local: usize| header_actions(s, local, &kh))
         .header_annotation(move |s: &App, local: usize| why_line(s, local, &kw))
         .on_comment(|s: &mut App, lines, tx: &mut Tx| s.comment_on(lines, tx))
@@ -80,6 +82,7 @@ fn viewed_toggle(g: usize, on: bool, k: &Kit) -> El {
         .radius(radius::BUTTON)
         .cursor(Cursor::Pointer)
         .focusable(true);
+    // The same parts either way, so the button never changes width: the box, the word, `v`.
     if on {
         b = b
             .fill(k.c.success.bg)
@@ -90,9 +93,9 @@ fn viewed_toggle(g: usize, on: bool, k: &Kit) -> El {
         b = b
             .border(1.0, s.strong_line)
             .child(el().size(14.0, 14.0).radius(radius::KEY).border(1.5, k.c.text_muted).a11y_hidden())
-            .child(text("Viewed").font(TYPE.small).color(k.c.text_base).a11y_hidden())
-            .child(super::ui::kbd("v", k));
+            .child(text("Viewed").font(TYPE.small).color(k.c.text_base).a11y_hidden());
     }
+    b = b.child(super::ui::kbd("v", k));
     k.interactive(b).press_scale(0.97).on_press(move |s: &mut App| {
         if g < s.keys.len() {
             let on = !s.is_viewed(g);
@@ -101,37 +104,36 @@ fn viewed_toggle(g: usize, on: bool, k: &Kit) -> El {
     })
 }
 
-/// After the path: `Must`, the changed-since chip, then at the end `Whole file e` · Copy path ·
-/// Viewed `v` · `⋯` (Open in editor, Copy location).
+/// Right after the name: the copy-path button, then the file's group as its letter tag.
+fn header_lead(s: &App, local: usize, k: &Kit) -> Option<El> {
+    let g = s.global(local);
+    let path = s.keys.get(g)?.clone();
+    let copy = Ghost::new(format!("copy-path-{g}"))
+        .icon(&icons::COPY)
+        .help(format!("Copy path  {path}"))
+        .height(22.0)
+        .build(k)
+        .label("Copy path")
+        .on_press_tx(move |s: &mut App, tx: &mut Tx| {
+            tx.copy(path.clone());
+            s.status = format!("Copied {path}");
+        });
+    Some(row().gap(6.0).items_center().child(copy).child(group_tag(s.group_of(g), k)))
+}
+
+/// After the stats: the changed-since chip, then at the end `Whole file e` · Viewed `v` · `⋯`
+/// (Open in editor, Copy location).
 fn header_actions(s: &App, local: usize, k: &Kit) -> El {
     let (surf, _) = sr(k);
     let g = s.global(local);
     let viewed = g < s.keys.len() && s.is_viewed(g);
-    let tag = s.keys.get(g).and_then(|key| s.tags.get(key)).copied();
     let mut r = row().gap(8.0).items_center();
-    if tag == Some(FileTag::MustReview) {
-        r = r.child(must_tag(k));
-    }
     if let Some(c) = super::finish::changed_chip(s, g, k) {
         r = r.child(c);
     }
     r = r.child(row().grow(1.0).a11y_hidden());
     if let Some(w) = wholefile::header_button(s, g, k) {
         r = r.child(w);
-    }
-    if let Some(path) = s.keys.get(g).cloned() {
-        r = r.child(
-            Ghost::new(format!("copy-path-{g}"))
-                .icon(&icons::COPY)
-                .label("Copy path")
-                .help(format!("Copy {path}"))
-                .height(26.0)
-                .build(k)
-                .on_press_tx(move |s: &mut App, tx: &mut Tx| {
-                    tx.copy(path.clone());
-                    s.status = format!("Copied {path}");
-                }),
-        );
     }
     r.child(el().w(1.0).h(16.0).fill(surf.hairline).a11y_hidden())
         .child(viewed_toggle(g, viewed, k))

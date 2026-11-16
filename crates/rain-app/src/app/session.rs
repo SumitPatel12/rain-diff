@@ -145,6 +145,13 @@ impl App {
         let hash = self.hashes[file].clone();
         let hunks = if on { self.hunk_marks(file) } else { Vec::new() };
         self.reloader.changed.remove(&file);
+        // A viewed file folds to its header in the diff; unmarking opens it again.
+        if let Some(l) = self.local(file) {
+            self.active_mut().set_collapsed(l, on);
+        }
+        if self.subset().is_some() {
+            self.diff.set_collapsed(file, on);
+        }
         self.mutate(|s| {
             if on {
                 ops::set_viewed(s, &repo, &path, &hash) | set_hunks(s, &repo, &path, hunks)

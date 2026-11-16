@@ -33,6 +33,15 @@ pub fn command_of(ev: &KeyEvent) -> Option<Command> {
 }
 
 pub fn on_key(s: &mut App, ev: &KeyEvent, tx: &mut Tx) -> bool {
+    // The rain holds every key: Enter took the break, Esc snoozes it.
+    if s.raining() {
+        match ev.key {
+            Key::Enter => s.rest_taken(),
+            Key::Escape => s.rest_snooze(),
+            _ => {}
+        }
+        return true;
+    }
     if matches!(ev.key, Key::Modifier { .. }) {
         return s.active_mut().key(ev, tx);
     }

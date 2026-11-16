@@ -20,6 +20,7 @@ pub(crate) mod picker;
 mod place;
 mod reload;
 mod remote;
+pub(crate) mod rest;
 mod review;
 mod ruler;
 mod session;
@@ -149,6 +150,8 @@ pub struct App {
     pub folded: BTreeSet<String>,
     /// The note open in the Intent window.
     pub popped_note: Option<String>,
+    /// Active time toward the break reminder, and its rain.
+    pub rest: rest::Rest,
     pub focused_thread: Option<String>,
     pub palette: PaletteState,
     pub find: Find,
@@ -278,6 +281,7 @@ impl App {
             expanded: BTreeSet::new(),
             folded: BTreeSet::new(),
             popped_note: None,
+            rest: rest::Rest::default(),
             focused_thread: None,
             palette: PaletteState::default(),
             find: Find::default(),
@@ -309,6 +313,17 @@ impl App {
         self.wake = Some(wake.clone());
         self.phase = Phase::Loading("Starting".into());
         load::spawn(self.launch.clone(), self.shared.clone(), tx, wake);
+    }
+
+    /// A load is under way (or held), so setup starts none.
+    pub fn loading_started(&self) -> bool {
+        self.rx.is_some()
+    }
+
+    /// Shows the loader with `msg` over a load that never answers (the loading scene).
+    pub fn hold_loading(&mut self, msg: &str) {
+        self.rx = Some(channel().1);
+        self.phase = Phase::Loading(msg.into());
     }
 
     /// Loads on this thread (scenes, tests).
@@ -495,6 +510,7 @@ impl App {
             changed |= self.rounds_poll(tx);
             changed |= self.ask_poll(tx);
         }
+        changed |= self.rest_poll(tx);
         self.save_pane_state();
         changed
     }

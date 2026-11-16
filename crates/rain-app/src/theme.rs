@@ -201,6 +201,45 @@ fn hex(s: &str) -> Color {
     rune::color::hex(s).unwrap_or(Color::BLACK)
 }
 
+/// The app icon's own colours (`assets/icon/rain.svg`), for the weather that echoes it; the same
+/// in every scheme, as the icon is.
+pub mod brand {
+    use super::hex;
+    use rune::Color;
+
+    pub fn cloud_front() -> Color {
+        hex("#7E88A6")
+    }
+    pub fn cloud_back() -> Color {
+        hex("#4B5473")
+    }
+    pub fn red() -> Color {
+        hex("#E5605A")
+    }
+    pub fn green() -> Color {
+        hex("#3FBF7F")
+    }
+    pub fn sky_top() -> Color {
+        hex("#2E3556")
+    }
+    pub fn sky_bottom() -> Color {
+        hex("#121729")
+    }
+    /// The lightning: a bright core and a glow, purple and green.
+    pub fn purple_core() -> Color {
+        hex("#D2B2FF")
+    }
+    pub fn purple_glow() -> Color {
+        hex("#B07CFF")
+    }
+    pub fn green_core() -> Color {
+        hex("#A8F8D0")
+    }
+    pub fn green_glow() -> Color {
+        hex("#6FF0B0")
+    }
+}
+
 /// The redesign's roles (`round1b/src/kit.css`), Everforest-derived.
 mod d1 {
     pub const GROUND: &str = "#13171a";
@@ -342,7 +381,8 @@ fn roles(scheme: Scheme, k: &Kit, s: &Surfaces) -> Roles {
     let (add, del) = (c.success.icon, c.danger.icon);
     let note = scheme.note_purples().0;
     Roles {
-        raised: if dark { c.layer_02 } else { s.reader },
+        // Opaque: the kit's raised layers are see-through overlays, which leave dialogs glassy.
+        raised: if dark { tint(s.reader, c.text_base, 0.07) } else { s.reader },
         focus: c.border_focus,
         must: c.danger.icon,
         accent: c.bg_accent,

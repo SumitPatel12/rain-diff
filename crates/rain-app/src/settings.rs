@@ -118,6 +118,8 @@ pub struct Settings {
     pub editor: Option<String>,
     /// Who answers Question-mode threads, and how.
     pub ask: AskSettings,
+    /// After this much active use the window rains until you take a break.
+    pub break_reminder: BreakSettings,
     /// Set when the file held round-2 keys, so the caller rewrites it once without them.
     #[serde(skip)]
     pub migrated: bool,
@@ -141,7 +143,28 @@ impl Default for Settings {
             sidebar_sections: 0,
             editor: None,
             ask: AskSettings::default(),
+            break_reminder: BreakSettings::default(),
             migrated: false,
+        }
+    }
+}
+
+/// The break reminder: minutes of active use (input within the last few minutes), then a flood.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct BreakSettings {
+    pub enabled: bool,
+    /// Active minutes before the rain; fractions work (`0.5` to try it).
+    pub minutes: f64,
+    pub snooze_minutes: f64,
+}
+
+impl Default for BreakSettings {
+    fn default() -> BreakSettings {
+        BreakSettings {
+            enabled: true,
+            minutes: 90.0,
+            snooze_minutes: 10.0,
         }
     }
 }

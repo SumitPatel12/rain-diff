@@ -243,7 +243,16 @@ fn more_menu(s: &App, k: &Kit, layer: &mut Vec<El>) -> El {
         .separator()
         .item(sub("Appearance", MoreSub::Appearance, open, appearance))
         .item(command_item("Keyboard shortcuts", &icons::KBD, Command::KeySheet))
-        .item(command_item("Reload", &icons::RELOAD, Command::Reload));
+        .item(command_item("Reload", &icons::RELOAD, Command::Reload))
+        .separator()
+        .item(
+            MenuItem::new("Make it rain (break preview)")
+                .icon(&icons::RAIN)
+                .on_select(|s: &mut App| {
+                    s.menus.close();
+                    s.rest_preview();
+                }),
+        );
     let trigger = Ghost::new("more-menu")
         .icon(&icons::MORE)
         .help("Views and settings")

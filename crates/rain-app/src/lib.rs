@@ -153,12 +153,14 @@ fn init() -> App {
 fn setup(s: &mut App, waker: rune::Waker) {
     let w = waker.clone();
     s.shared.set_wake(move || w());
-    if s.phase != Phase::Ready {
+    // A load already under way (the loading scene's) is left to finish.
+    if s.phase != Phase::Ready && !s.loading_started() {
         s.start_loading(waker);
     }
 }
 
-fn poll(s: &mut App, _t: f64, tx: &mut Tx) -> bool {
+fn poll(s: &mut App, t: f64, tx: &mut Tx) -> bool {
+    s.rest.clock = t as f32;
     s.poll(tx)
 }
 
@@ -417,6 +419,17 @@ fn spec() -> AppSpec<App> {
                 scene_base(s);
                 s.open_palette();
             }),
+            ("loading", |s| {
+                scene_base(s);
+                s.hold_loading("Running git diff in 3 repos");
+            }),
+            ("break", |s| {
+                scene_reader(s);
+                let since = std::time::Instant::now().checked_sub(std::time::Duration::from_secs(14));
+                if let Some(at) = since {
+                    s.rest.weather = app::rest::Weather::Flood(at);
+                }
+            }),
             ("ruler", |s| {
                 scene_base(s);
                 seed_threads(s);
@@ -568,6 +581,10 @@ fn spec() -> AppSpec<App> {
             ("context-menu", |s| {
                 scene_base(s);
                 s.selection_scene(Some(app::composer::Later::Menu));
+            }),
+            ("more-menu", |s| {
+                scene_reader(s);
+                s.menus.more = true;
             }),
             ("session", scene_session),
         ],

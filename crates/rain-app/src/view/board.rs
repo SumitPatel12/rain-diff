@@ -14,7 +14,7 @@ use rune::{Color, Cursor, El, GrowthSpec, ScrollSpec, Tx, col, el, row, text};
 use rune_kit::{Button, ButtonVariant, ControlSize, Kit};
 
 use super::icons;
-use super::ui::{Ghost, kbd, outline, sr};
+use super::ui::{Ghost, group_tag, kbd, outline, sr};
 use super::{messages, muted};
 use crate::app::board::{CHANGE_GROUPS, CHANGES, Listing, Pick, Row, WAITING, change_title, section_group, section_of, section_title};
 use crate::app::{App, ME};
@@ -161,8 +161,9 @@ fn build_row(s: &App, i: usize, look: &RowLook) -> El {
     }
 }
 
-/// `Must review  1 of 4 viewed` over the change group's files: a label, not a fold.
+/// `▾ M Must review  1 of 4 viewed` over the change group's files; a press folds the group.
 fn sub_header(s: &App, g: Group, l: &Listing, key: String, k: &Kit) -> El {
+    let folded = s.sub_folded(g);
     let n = CHANGE_GROUPS.iter().position(|&x| x == g).map_or(0, |i| l.changes[i]);
     let files: Vec<usize> = (0..s.keys.len()).filter(|&f| s.group_of(f) == g).collect();
     let viewed = files.iter().filter(|&&f| s.is_viewed(f)).count();
@@ -173,24 +174,33 @@ fn sub_header(s: &App, g: Group, l: &Listing, key: String, k: &Kit) -> El {
     } else {
         format!("{viewed} of {} viewed", files.len())
     };
-    row()
-        .key(key)
-        .role("heading")
+    let r = row()
+        .key("sub")
+        .role("button")
         .label(format!("{name}, {n} files, {count}"))
+        .expanded(!folded)
         .w_full()
-        .h(28.0)
-        .pl(16.0)
+        .h(26.0)
+        .pl(10.0)
         .pr(12.0)
-        .pt(4.0)
         .gap(6.0)
         .items_center()
+        .radius(radius::BUTTON)
+        .cursor(Cursor::Pointer)
+        .on_press(move |s: &mut App| s.toggle_sub(g))
+        .child(icons::draw(
+            if folded { &icons::CHEV_R } else { &icons::CHEV_D },
+            14.0,
+            k.c.text_faint,
+        ))
         .child(text(name).font(TYPE.small).color(color).a11y_hidden())
         .child(
             text(count)
                 .font(TYPE.small.features("'tnum' 1"))
                 .color(k.c.text_faint)
                 .a11y_hidden(),
-        )
+        );
+    row().key(key).w_full().px(6.0).pt(4.0).child(k.interactive(r))
 }
 
 /// A section's head: `▾ Name count` (a press folds it), and its action: a group's Accept, or
@@ -258,7 +268,7 @@ fn accept_button(g: Group, n: usize, k: &Kit) -> El {
         .on_press_tx(move |s: &mut App, tx: &mut Tx| s.accept(g, tx))
 }
 
-/// Must marker · name · dim folder · `+n −m` · thread count · ✓ once viewed.
+/// Group tag · name · dim folder · `+n −m` · thread count · ✓ once viewed.
 fn file_row(s: &App, g: usize, key: String, look: &RowLook) -> El {
     let k = &look.kit;
     let path = &s.keys[g];
@@ -299,6 +309,7 @@ fn file_row(s: &App, g: usize, key: String, look: &RowLook) -> El {
         .radius(radius::BUTTON)
         .cursor(Cursor::Pointer)
         .on_press_tx(move |s: &mut App, tx: &mut Tx| s.goto_file(g, tx))
+        .child(group_tag(group, k))
         .child(
             text(name.to_owned())
                 .font(if current { TYPE.strong } else { TYPE.ui })
@@ -336,20 +347,12 @@ fn file_row(s: &App, g: usize, key: String, look: &RowLook) -> El {
                 .child(text(threads.to_string()).font(TYPE.micro).color(k.c.text_muted)),
         );
     }
-    if viewed {
-        r = r.child(icons::draw(&icons::CHECK, 16.0, look.r.accent).key("viewed"));
-    }
-    if group == Group::Must {
-        r = r.child(
-            el().key("must")
-                .absolute(3.0, 7.0)
-                .w(2.0)
-                .h(h - 14.0)
-                .radius(1.0)
-                .fill(look.r.must)
-                .a11y_hidden(),
-        );
-    }
+    // The check's slot is always there, so marking a file viewed moves nothing beside it.
+    r = r.child(if viewed {
+        icons::draw(&icons::CHECK, 16.0, look.r.accent).key("viewed")
+    } else {
+        el().key("viewed-slot").size(16.0, 16.0).a11y_hidden()
+    });
     let r = if current {
         r.fill(look.s.selected_row)
             .checked(true)

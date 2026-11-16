@@ -177,22 +177,45 @@ pub(crate) fn primary(key: impl Into<String>, label: impl Into<String>, k: &Kit)
     .press_scale(0.97)
 }
 
-/// The `Must` tag: a danger chip with its ring, 600.
-pub(crate) fn must_tag(k: &Kit) -> El {
+/// A triage group's one letter and its colour: M Must review, R Review, S Skim, T Tests,
+/// V Moves, F Formatting-only, G Generated, L Lockfile, H Huge, B Binary, I Ignored.
+pub(crate) fn group_mark(g: rain_triage::Group, k: &Kit) -> (&'static str, rune::Color) {
+    use rain_triage::Group::*;
+    let r = roles_of(k);
+    match g {
+        Must => ("M", k.c.danger.fg),
+        Review => ("R", k.c.info.fg),
+        Skim => ("S", k.c.text_muted),
+        Tests => ("T", k.c.success.fg),
+        Moves => ("V", r.note),
+        FormattingOnly => ("F", k.c.warning.fg),
+        Generated => ("G", k.c.text_faint),
+        Lockfile => ("L", k.c.text_faint),
+        Huge => ("H", k.c.warning.fg),
+        Binary => ("B", k.c.text_faint),
+        Ignored => ("I", k.c.text_faint),
+    }
+}
+
+/// A triage group as a one-letter tag, 16 points square, its full name on hover.
+pub(crate) fn group_tag(g: rain_triage::Group, k: &Kit) -> El {
+    let (letter, ink) = group_mark(g, k);
     row()
-        .key("must")
-        .h(18.0)
-        .px(6.0)
-        .items_center()
-        .radius(radius::CHIP)
-        .fill(k.c.danger.bg)
-        .border(1.0, k.c.danger.border)
+        .key("group-tag")
+        .size(16.0, 16.0)
+        .center()
+        .radius(radius::KEY)
+        .fill(k.alpha(ink, 0.16))
+        .border(1.0, k.alpha(ink, 0.45))
+        .help(g.label().to_owned())
+        .label(g.label().to_owned())
         .child(
-            text("Must")
+            text(letter)
                 .font(rune::tok::TextStyle {
-                    weight: 600.0,
+                    weight: 700.0,
                     ..TYPE.micro
                 })
-                .color(k.c.danger.fg),
+                .color(ink)
+                .a11y_hidden(),
         )
 }

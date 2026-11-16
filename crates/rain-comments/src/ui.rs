@@ -777,9 +777,17 @@ impl<'t, S: 'static> ThreadCard<'t, S> {
         };
         actions = actions.child(small_button(k, "ask-btn", "Ask", Some("?"), true).on_press_tx(fire(ask)));
         actions = if t.is_open() {
-            actions.child(small_button(k, "resolve-btn", "Resolve", None, true).on_press_tx(fire(CardAction::Resolve)))
+            actions.child(
+                small_button(k, "resolve-btn", "Resolve", None, true)
+                    .min_w(STATE_BUTTON_W)
+                    .on_press_tx(fire(CardAction::Resolve)),
+            )
         } else {
-            actions.child(small_button(k, "reopen-btn", "Reopen", None, true).on_press_tx(fire(CardAction::Reopen)))
+            actions.child(
+                small_button(k, "reopen-btn", "Reopen", None, true)
+                    .min_w(STATE_BUTTON_W)
+                    .on_press_tx(fire(CardAction::Reopen)),
+            )
         };
         if t.messages.iter().all(|m| is_mine(m.author.as_deref())) {
             actions = actions.child(small_button(k, "delete-btn", "Delete", None, true).on_press_tx(fire(CardAction::Delete)));
@@ -1045,6 +1053,9 @@ fn rail(c: Color) -> El {
 }
 
 /// A 24 point button: outlined (thread actions) or quiet, with its key after the name.
+/// Resolve and Reopen take each other's place; both are this wide so nothing beside them moves.
+const STATE_BUTTON_W: f32 = 68.0;
+
 fn small_button(k: &Kit, key: &str, name: &str, chord: Option<&str>, outlined: bool) -> El {
     let mut b = row()
         .key(key.to_owned())

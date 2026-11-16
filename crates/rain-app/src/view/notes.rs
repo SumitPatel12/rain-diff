@@ -173,6 +173,7 @@ pub(super) fn note_view(s: &App, n: &Note, k: &Kit) -> El {
                     if open { "Show less" } else { "Show all" },
                     k,
                 )
+                .min_w(96.0)
                 .on_press(move |s: &mut App| s.toggle_note_expanded(&more)),
             ),
         );
