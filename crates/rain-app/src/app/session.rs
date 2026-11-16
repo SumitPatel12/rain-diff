@@ -1,10 +1,9 @@
 //! The session mirror: changes from other threads, mutations, viewed marks and the queue.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 
 use rain_comments::ops;
-use rain_core::{FileTag, HunkViewed, RepoInfo, Session, Thread};
-use rain_diffview::DiffState;
+use rain_core::{FileTag, HunkViewed, Session, Thread};
 
 use super::{App, ME};
 
@@ -24,6 +23,10 @@ impl App {
         let notes_before = self.mirror.notes.len();
         self.mirror = fresh;
         self.seen_version = version;
+        self.recompute_viewed();
+        if threads_changed {
+            self.threads_rev += 1;
+        }
         let overview_changed = overview_version != self.seen_overview_version;
         if overview_changed {
             self.seen_overview_version = overview_version;
@@ -94,17 +97,11 @@ impl App {
     fn after_session_change(&mut self, annotations_changed: bool) {
         if annotations_changed {
             let counts = comment_counts(&self.mirror, self);
-            for k in self.keys.clone() {
-                self.tree.set_comment_count(&k, counts.get(&k).copied().unwrap_or(0));
-            }
+            self.tree
+                .set_comment_counts(self.keys.iter().map(|k| (k.as_str(), counts.get(k).copied().unwrap_or(0))));
         }
-        for i in 0..self.keys.len() {
-            let v = is_viewed(&self.mirror, &self.repos, &self.diff, &self.hashes, i);
-            let key = self.keys[i].clone();
-            if self.tree.file(&key).is_some_and(|e| e.viewed != v) {
-                self.tree.set_viewed(&key, v);
-            }
-        }
+        self.tree
+            .set_viewed_many(self.keys.iter().map(String::as_str).zip(self.viewed_files.iter().copied()));
         if let Some(t) = &self.focused_thread
             && ops::thread(&self.mirror, t).is_none()
         {
@@ -126,8 +123,22 @@ impl App {
         r
     }
 
+    /// Viewed, and the diff hasn't changed since (a changed file reads as unviewed, as on GitHub).
     pub fn is_viewed(&self, file: usize) -> bool {
-        is_viewed(&self.mirror, &self.repos, &self.diff, &self.hashes, file)
+        self.viewed_files.get(file).copied().unwrap_or(false)
+    }
+
+    /// Rebuilds the per-file viewed marks from the mirror; run whenever the mirror or the diff is replaced.
+    pub(crate) fn recompute_viewed(&mut self) {
+        let marks: HashSet<(&str, &str, &str)> = self
+            .mirror
+            .viewed
+            .iter()
+            .map(|v| (v.repo.as_str(), v.file_path.as_str(), v.diff_content_hash.as_str()))
+            .collect();
+        self.viewed_files = (0..self.diff.files().len())
+            .map(|i| marks.contains(&(self.repo_tag(i), self.diff.files()[i].path.as_str(), self.hashes[i].as_str())))
+            .collect();
     }
 
     /// Marks a file viewed or not in the tree and the session.
@@ -223,16 +234,6 @@ pub(crate) fn file_of_thread(app: &App, t: &Thread) -> Option<usize> {
         return app.index_of(&rain_core::paths::join(id, &t.file_path));
     }
     app.diff.files().iter().position(|f| f.path == t.file_path)
-}
-
-pub(crate) fn is_viewed(s: &Session, repos: &[RepoInfo], diff: &DiffState, hashes: &[String], i: usize) -> bool {
-    let Some(f) = diff.files().get(i) else { return false };
-    let repo = if repos.len() <= 1 {
-        ""
-    } else {
-        repos.get(f.repo as usize).map_or("", |r| r.id.as_str())
-    };
-    ops::is_viewed(s, repo, &f.path, &hashes[i])
 }
 
 pub(crate) fn comment_counts(s: &Session, app: &App) -> BTreeMap<String, u32> {

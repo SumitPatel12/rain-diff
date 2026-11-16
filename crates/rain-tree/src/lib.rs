@@ -3,6 +3,7 @@
 //! glyphs with labels, chips that filter by repo and by tag, and a text filter. Built on rune-kit's
 //! [`TreeModel`](rune_kit::TreeModel) (virtualised rows, keyboard, reveal).
 
+mod file_icons;
 mod model;
 pub mod sample;
 mod view;

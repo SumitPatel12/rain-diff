@@ -14,8 +14,9 @@ use crate::{Ctx, Reply, Req, value};
 pub(crate) fn route(ctx: &Ctx, r: &Req) -> Option<Reply> {
     Some(match (r.method, r.path) {
         (Method::Get, "/api/overview") => {
-            let diff = ctx.shared.diff_files();
-            value(200, &overview_state(&ctx.shared.lock(), diff.as_deref()))
+            // Session, then file lists: the order the brief route takes them in.
+            let s = ctx.shared.lock();
+            ctx.shared.with_diff_files(|diff| value(200, &overview_state(&s, diff)))
         }
         (Method::Put, "/api/overview") => put_overview(ctx, r.body),
         _ => return None,
@@ -160,13 +161,14 @@ fn put_overview(ctx: &Ctx, body: &str) -> Reply {
     let mut s = ctx.shared.lock();
     set_overview(&mut s, doc, self_repo, links);
     rain_comments::ops::reanchor_targets(&mut s);
-    ctx.save(&s);
+    let saved = ctx.save(&s);
     let version = s.overview_version;
     let reply = value(
         200,
         &json!({ "success": true, "version": version, "selfRepo": s.self_repo, "warnings": loaded.warnings }),
     );
     drop(s);
+    ctx.write(saved);
     push(
         ctx,
         rain_core::EventKind::Overview,

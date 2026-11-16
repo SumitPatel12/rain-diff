@@ -6,7 +6,7 @@ use rune::{El, Key, KeyEvent, ScrollSpec, Tx, col, el, row, text};
 use rune_kit::{Kit, TextInput};
 
 use super::icons;
-use super::ui::{kbd, sr};
+use super::ui::sr;
 use crate::app::App;
 use crate::palette;
 use crate::theme::{TYPE, radius};
@@ -136,8 +136,7 @@ pub(super) fn palette_overlay(s: &App, k: &Kit) -> El {
                     .on_key(palette_key)
                     .build(k),
             ),
-        )
-        .child(kbd("Ctrl+K", k));
+        );
     let foot = row()
         .key("palette-foot")
         .w_full()

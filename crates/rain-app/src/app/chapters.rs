@@ -1,6 +1,7 @@
 //! Subsets (a filter reads as its own diff over some of the files, sharing their text with the
 //! full diff) and chapters, which are a grouping of files now, not a reading mode.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use rain_diffview::DiffState;
@@ -28,8 +29,12 @@ impl Subset {
         }
         diff.set_mode(app.diff.mode());
         diff.set_collapsed_where(true, |f| f.lines.len() > LARGE_FILE_LINES);
+        let mut in_prev: HashMap<usize, usize> = HashMap::new();
+        for (pl, &g) in prev.map_or(&[][..], |p| &p.files).iter().enumerate() {
+            in_prev.entry(g).or_insert(pl);
+        }
         diff.set_opened(files.iter().enumerate().filter_map(|(l, &g)| {
-            let from_prev = prev.and_then(|p| p.files.iter().position(|&x| x == g).and_then(|pl| p.diff.opened(pl)));
+            let from_prev = prev.and_then(|p| in_prev.get(&g).and_then(|&pl| p.diff.opened(pl)));
             Some((l, from_prev.or_else(|| app.diff.opened(g))?))
         }));
         Subset { diff, files }

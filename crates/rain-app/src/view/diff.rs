@@ -95,7 +95,6 @@ fn viewed_toggle(g: usize, on: bool, k: &Kit) -> El {
             .child(el().size(14.0, 14.0).radius(radius::KEY).border(1.5, k.c.text_muted).a11y_hidden())
             .child(text("Viewed").font(TYPE.small).color(k.c.text_base).a11y_hidden());
     }
-    b = b.child(super::ui::kbd("v", k));
     k.interactive(b).press_scale(0.97).on_press(move |s: &mut App| {
         if g < s.keys.len() {
             let on = !s.is_viewed(g);

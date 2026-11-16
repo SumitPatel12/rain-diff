@@ -127,8 +127,7 @@ pub(super) fn finish(s: &App, k: &Kit) -> Option<El> {
         .radius(radius::BUTTON)
         .fill(r.accent)
         .focusable(true)
-        .child(text("Submit review").font(TYPE.strong).color(r.on_accent).a11y_hidden())
-        .child(text("Ctrl+Enter").font(TYPE.micro_mono).color(r.on_accent).a11y_hidden());
+        .child(text("Submit review").font(TYPE.strong).color(r.on_accent).a11y_hidden());
     submit = if ready {
         k.interactive_with(submit.cursor(Cursor::Pointer), k.c.contrast_hover, k.c.contrast_pressed)
             .press_scale(0.97)
@@ -156,8 +155,8 @@ pub(super) fn finish(s: &App, k: &Kit) -> Option<El> {
                         .items_center()
                         .radius(radius::BUTTON)
                         .cursor(Cursor::Pointer)
-                        .child(text("Cancel").font(TYPE.ui).color(k.c.text_base).a11y_hidden())
-                        .child(text("Esc").font(TYPE.micro).color(k.c.text_faint).a11y_hidden()),
+                        .help("Cancel  Esc")
+                        .child(text("Cancel").font(TYPE.ui).color(k.c.text_base).a11y_hidden()),
                 )
                 .on_press(|s: &mut App| s.close_finish()),
             )

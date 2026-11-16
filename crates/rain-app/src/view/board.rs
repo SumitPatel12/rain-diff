@@ -14,7 +14,7 @@ use rune::{Color, Cursor, El, GrowthSpec, ScrollSpec, Tx, col, el, row, text};
 use rune_kit::{Button, ButtonVariant, ControlSize, Kit};
 
 use super::icons;
-use super::ui::{Ghost, group_tag, kbd, outline, sr};
+use super::ui::{Ghost, outline, sr};
 use super::{messages, muted};
 use crate::app::board::{CHANGE_GROUPS, CHANGES, Listing, Pick, Row, WAITING, change_title, section_group, section_of, section_title};
 use crate::app::{App, ME};
@@ -309,10 +309,10 @@ fn file_row(s: &App, g: usize, key: String, look: &RowLook) -> El {
         .radius(radius::BUTTON)
         .cursor(Cursor::Pointer)
         .on_press_tx(move |s: &mut App, tx: &mut Tx| s.goto_file(g, tx))
-        .child(group_tag(group, k))
         .child(
             text(name.to_owned())
-                .font(if current { TYPE.strong } else { TYPE.ui })
+                // One weight whether current or not, so selecting a row moves nothing in it.
+                .font(TYPE.ui)
                 .color(name_color)
                 .truncate()
                 .shrink()
@@ -347,6 +347,16 @@ fn file_row(s: &App, g: usize, key: String, look: &RowLook) -> El {
                 .child(text(threads.to_string()).font(TYPE.micro).color(k.c.text_muted)),
         );
     }
+    // The group's colour as a thin bar at the row's left; the heading above names it.
+    r = r.child(
+        el().key("group-bar")
+            .absolute(3.0, 7.0)
+            .w(2.0)
+            .h(h - 14.0)
+            .radius(1.0)
+            .fill(super::ui::group_mark(group, k).1)
+            .a11y_hidden(),
+    );
     // The check's slot is always there, so marking a file viewed moves nothing beside it.
     r = r.child(if viewed {
         icons::draw(&icons::CHECK, 16.0, look.r.accent).key("viewed")
@@ -386,7 +396,7 @@ fn accepted_row(s: &App, a: usize, key: String, k: &Kit) -> El {
     )
     .child(icons::draw(&icons::CHECK, 14.0, r.accent))
     .child(text(label).font(TYPE.small).color(k.c.text_muted).truncate().grow(1.0).shrink())
-    .child(kbd("u", k).help("Undo accept  u"))
+    .help("Undo accept  u")
 }
 
 /// Whether the list's filter shows thread `t`'s file (a thread on no file shows unfiltered).

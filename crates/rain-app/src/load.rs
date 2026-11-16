@@ -2,7 +2,7 @@
 //! the overview with its tags and reading order, the session's outdated flags and comment
 //! imports. Runs on a loader thread; the UI thread only installs the result.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
@@ -316,10 +316,11 @@ pub fn load(launch: &Launch, shared: &Shared, progress: &dyn Fn(String)) -> Resu
             ignored.extend(cov.ignored.iter().map(|p| rain_core::paths::join(repo, p)));
         }
     }
+    let formatting_sets: Vec<HashSet<&str>> = formatting.iter().map(|v| v.iter().map(String::as_str).collect()).collect();
     let formatting_keys: BTreeSet<String> = keys
         .iter()
         .zip(&files)
-        .filter(|(_, f)| formatting.get(f.repo as usize).is_some_and(|v| v.contains(&f.path)))
+        .filter(|(_, f)| formatting_sets.get(f.repo as usize).is_some_and(|v| v.contains(f.path.as_str())))
         .map(|(k, _)| k.clone())
         .collect();
     let rated = overview.as_ref().map(|l| rain_overview::rated(&l.document));

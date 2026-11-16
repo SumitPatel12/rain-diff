@@ -2810,6 +2810,7 @@ dependencies = [
  "rain-syntax",
  "rain-tree",
  "rain-triage",
+ "regex",
  "rune",
  "rune-kit",
  "serde",

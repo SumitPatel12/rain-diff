@@ -3,7 +3,7 @@ use std::rc::Rc;
 
 use rain_core::{FileStatus, FileTag};
 use rune::{Color, El, GrowthSpec, Icon, Key, KeyEvent, ScrollSpec, Tx, col, el, icon, row, text};
-use rune_kit::{Checkbox, Kit, TextInput, TreeItem, TreeKey, TreeStyle, file_icon, glyphs};
+use rune_kit::{Checkbox, Kit, TextInput, TreeItem, TreeKey, TreeStyle, glyphs};
 
 use crate::model::{FileEntry, NodeKind, TREE_KEY, TreeFilter, TreeState};
 
@@ -378,7 +378,7 @@ fn header<S: 'static>(st: &TreeState, k: &Kit, hooks: &Rc<Hooks<S>>, with_progre
     let get_mut = hooks.get_mut;
     let input = TextInput::new(&st.filter_edit)
         .label("Filter files")
-        .placeholder("Filter files    f")
+        .placeholder("Filter files")
         .leading_icon(&glyphs::SEARCH)
         .width(None)
         .clear_button()
@@ -610,7 +610,7 @@ fn group_bar<S: 'static>(st: &TreeState, tag: FileTag, k: &Kit, hooks: &Rc<Hooks
 
 fn file_item(e: &FileEntry, highlight: &str, k: &Kit) -> (TreeItem, String) {
     let c = &k.c;
-    let (letter, status) = status_letter(e.status);
+    let (_, status) = status_letter(e.status);
     let mut said = vec![status.to_owned()];
     if let Some(old) = &e.old_path {
         said.push(format!("from {old}"));
@@ -629,8 +629,10 @@ fn file_item(e: &FileEntry, highlight: &str, k: &Kit) -> (TreeItem, String) {
         said.push("viewed".into());
     }
     let dim = e.generated || e.viewed || matches!(e.tag, FileTag::Ignored | FileTag::Generated);
+    let (glyph, ink) = crate::file_icons::file_glyph(&e.name);
     let mut item = TreeItem::new(e.name.clone())
-        .icon(file_icon(&e.name))
+        .icon(glyph)
+        .icon_color(ink)
         .highlight(highlight)
         .changes(e.additions, e.deletions);
     if dim {
@@ -647,26 +649,52 @@ fn file_item(e: &FileEntry, highlight: &str, k: &Kit) -> (TreeItem, String) {
                 .child(text(e.comments.to_string()).font(k.ty.text_xsmall_medium).color(c.text_accent)),
         );
     }
-    item = item
-        .trailing(
+    (item, said.join(", "))
+}
+
+/// One letter in a small tinted box, its meaning on hover.
+fn letter_tag(key: &'static str, letter: &'static str, ink: Color, help: &str, k: &Kit) -> El {
+    row()
+        .key(key)
+        .size(16.0, 16.0)
+        .center()
+        .radius(3.0)
+        .fill(k.alpha(ink, 0.16))
+        .border(1.0, k.alpha(ink, 0.45))
+        .help(help.to_owned())
+        .child(
             text(letter)
-                .key("status")
-                .font(k.ty.text_xsmall_medium.mono())
-                .color(status_color(e.status, k))
-                .w(10.0)
+                .font(rune::tok::TextStyle::new(10.0, 700.0).lh(14.0))
+                .color(ink)
                 .a11y_hidden(),
         )
-        .trailing(
-            row()
-                .key("tag")
-                .w(64.0)
-                .gap(4.0)
-                .center_y()
-                .a11y_hidden()
-                .child(text(e.tag.glyph()).font(k.ty.text_xsmall_medium.mono()).color(tag_color(e.tag, k)))
-                .child(text(tag_short(e.tag)).font(k.ty.text_xsmall).color(c.text_muted).truncate()),
-        );
-    (item, said.join(", "))
+}
+
+/// The review tag's letter and colour, as the grouped list marks the same files.
+fn review_letter(t: FileTag, k: &Kit) -> (&'static str, Color) {
+    match t {
+        FileTag::MustReview => ("M", k.c.danger.fg),
+        FileTag::Review => ("R", k.c.info.fg),
+        FileTag::Skim => ("S", k.c.text_muted),
+        FileTag::Uncovered => ("U", k.c.warning.fg),
+        FileTag::FormattingOnly => ("F", k.c.warning.fg),
+        FileTag::Generated => ("G", k.c.text_faint),
+        FileTag::Ignored => ("I", k.c.text_faint),
+    }
+}
+
+/// A file row's two tags at its far left: how to review it, then what git did to it. A folder
+/// row gets the same width empty, so every name starts in one column.
+fn lead_tags(e: Option<&FileEntry>, k: &Kit) -> El {
+    let mut r = row().key("tags").w(36.0).gap(4.0).center_y().a11y_hidden();
+    if let Some(e) = e {
+        let (letter, ink) = review_letter(e.tag, k);
+        let (sl, status) = status_letter(e.status);
+        r = r
+            .child(letter_tag("tag", letter, ink, e.tag.label(), k))
+            .child(letter_tag("status", sl, status_color(e.status, k), status, k));
+    }
+    r
 }
 
 fn rows<S: 'static>(st: &TreeState, k: &Kit, hooks: &Rc<Hooks<S>>) -> El {
@@ -691,11 +719,13 @@ fn rows<S: 'static>(st: &TreeState, k: &Kit, hooks: &Rc<Hooks<S>>) -> El {
             }
             NodeKind::Dir | NodeKind::Repo(_) => {
                 let (v, t) = st.folder_counts(&id);
-                let mut item = TreeItem::new(node.name.clone()).icon(if r.expanded == Some(true) {
-                    &glyphs::FOLDER_OPEN
-                } else {
-                    &glyphs::FOLDER
-                });
+                let mut item = TreeItem::new(node.name.clone())
+                    .icon(if r.expanded == Some(true) {
+                        &crate::file_icons::FOLDER_OPEN
+                    } else {
+                        &crate::file_icons::FOLDER
+                    })
+                    .icon_color(crate::file_icons::folder_color());
                 if let NodeKind::Repo(ri) = node.kind {
                     item = item.icon_color(repo_color(ri, &kit));
                 }
@@ -752,6 +782,10 @@ fn rows<S: 'static>(st: &TreeState, k: &Kit, hooks: &Rc<Hooks<S>>) -> El {
                     h2.open(s, &press_id, tx);
                 }
             });
+        let entry = match node.kind {
+            NodeKind::File(fi) => st.files.get(fi as usize),
+            _ => None,
+        };
         row()
             .w_full()
             .h(style.row_height)
@@ -759,6 +793,7 @@ fn rows<S: 'static>(st: &TreeState, k: &Kit, hooks: &Rc<Hooks<S>>) -> El {
             .gap(4.0)
             .center_y()
             .child(checkbox)
+            .child(lead_tags(entry, &kit))
             .child(item)
     };
     let count = st.model.visible_len();

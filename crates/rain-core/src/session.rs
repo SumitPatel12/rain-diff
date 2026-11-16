@@ -207,6 +207,9 @@ pub struct Session {
     /// The agent's presence as last seen; persisted so a reopened window can say when.
     #[serde(skip_serializing_if = "is_default")]
     pub presence: Presence,
+    /// Verify by hand items the reviewer ticked, by their text.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub verified: Vec<String>,
 }
 
 impl Session {
@@ -401,6 +404,17 @@ impl Shared {
     /// The files of the loaded diff per repo; `None` until the window has loaded one.
     pub fn diff_files(&self) -> Option<Vec<RepoFiles>> {
         self.diff.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    /// Whether a load has published its file lists, without copying them.
+    pub fn has_diff_files(&self) -> bool {
+        self.diff.lock().unwrap_or_else(|e| e.into_inner()).is_some()
+    }
+
+    /// Runs `f` on the published file lists without copying them. Never take the session lock
+    /// inside `f`: callers take that one first.
+    pub fn with_diff_files<R>(&self, f: impl FnOnce(Option<&[RepoFiles]>) -> R) -> R {
+        f(self.diff.lock().unwrap_or_else(|e| e.into_inner()).as_deref())
     }
 
     pub fn set_wake(&self, f: impl Fn() + Send + Sync + 'static) {

@@ -154,7 +154,10 @@ pub(super) fn note_view(s: &App, n: &Note, k: &Kit) -> El {
         );
         return shell(format!("note-{}", n.id), &label, k, content);
     }
-    let md = Markdown::new(n.body.clone()).selectable(true).build(k);
+    let md = Markdown::new(n.body.clone())
+        .style(super::ui::md_style(k))
+        .selectable(true)
+        .build(k);
     if long(&n.body) {
         let open = s.note_expanded(&n.id);
         let body = col().key("note-body").w_full().max_w(1000.0).child(md);

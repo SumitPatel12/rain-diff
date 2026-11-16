@@ -14,7 +14,7 @@ use crate::app::{App, ComposeMode};
 /// Between the selection and what floats beside it.
 const GAP: f32 = 6.0;
 /// The toolbar's size before it has been laid out.
-const BAR: [f32; 2] = [309.0, 28.0];
+const BAR: [f32; 2] = [239.0, 28.0];
 /// A diff row's line, without the widgets under it.
 const LINE_H: f32 = 20.0;
 /// The top of the diff column a file header (sticky or not) may cover.
@@ -118,10 +118,10 @@ fn bar(s: &App, k: &Kit, cx: &Cx<App>) -> Option<El> {
         .sel
         .seen
         .set(Some([card_at.0, card_at.1, last[0] + last[2] / 2.0, last[1] + last[3] / 2.0]));
-    let faint = k.c.text_faint;
     let button = |label: &'static str, hint: String| {
         let glyph = glyph_of(label);
         Button::new(label)
+            .help(format!("{label}  {hint}"))
             .variant(ButtonVariant::Ghost)
             .control_size(ControlSize::Small)
             .label_with(move |font, ink| {
@@ -130,7 +130,6 @@ fn bar(s: &App, k: &Kit, cx: &Cx<App>) -> Option<El> {
                     .items_center()
                     .child(super::icons::draw(glyph, 14.0, ink))
                     .child(text(label).font(font).color(ink))
-                    .child(text(hint).font(font).color(faint))
             })
     };
     let comment = button("Comment", chord(Command::Comment))
@@ -174,10 +173,10 @@ fn overview_bar(s: &App, k: &Kit, cx: &Cx<App>) -> Option<El> {
         lines: false,
     };
     let (x, y) = place_bar(&boxes, size);
-    let faint = k.c.text_faint;
     let button = |label: &'static str, hint: &'static str| {
         let glyph = glyph_of(label);
         Button::new(label)
+            .help(format!("{label}  {hint}"))
             .variant(ButtonVariant::Ghost)
             .control_size(ControlSize::Small)
             .label_with(move |font, ink| {
@@ -186,7 +185,6 @@ fn overview_bar(s: &App, k: &Kit, cx: &Cx<App>) -> Option<El> {
                     .items_center()
                     .child(super::icons::draw(glyph, 14.0, ink))
                     .child(text(label).font(font).color(ink))
-                    .child(text(hint).font(font).color(faint))
             })
     };
     let (c_id, a_id, y_id) = (id.clone(), id.clone(), id);

@@ -1,7 +1,7 @@
 //! Reload keeping the reading place, what a reload changed (anchors, hunks since viewed), and
 //! the HEAD watch with its banner.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::mpsc::channel;
 use std::sync::{Arc, Mutex};
@@ -97,11 +97,22 @@ pub struct ReloadState {
     pub counts: Option<ReloadCounts>,
     pub(crate) pending_place: Option<Captured>,
     pub(crate) saved_place: Option<(String, Option<u32>, Side, i64)>,
+    /// The file, line and side the place last scheduled a save for.
+    pub(crate) touched_place: Option<(String, Option<u32>, Side)>,
+    /// The place moved by a scroll alone since then, unsaved.
+    pub(crate) place_unsaved: bool,
     installs: u32,
     /// Each thread's anchor state and `addressed?` as of the last install.
     anchors: BTreeMap<String, (AnchorState, bool)>,
     /// Per file, the hunks whose text changed since the file was viewed.
     pub changed: BTreeMap<usize, Vec<usize>>,
+}
+
+impl ReloadState {
+    /// Installs so far: a new one means new keys even when their count is the same.
+    pub(crate) fn installs(&self) -> u32 {
+        self.installs
+    }
 }
 
 impl App {
@@ -188,9 +199,15 @@ impl App {
     /// Per file, the hunks not among those recorded when it was viewed (files viewed whole
     /// before hunks were recorded, or unchanged, have none).
     fn changed_since_viewed(&self) -> BTreeMap<usize, Vec<usize>> {
+        let mut records: HashMap<(&str, &str), &ViewedRecord> = HashMap::new();
+        for v in &self.mirror.viewed {
+            records.entry((v.repo.as_str(), v.file_path.as_str())).or_insert(v);
+        }
         let mut out = BTreeMap::new();
         for g in 0..self.keys.len() {
-            let Some(rec) = self.viewed_record(g) else { continue };
+            let Some(&rec) = records.get(&(self.repo_tag(g), self.diff.files()[g].path.as_str())) else {
+                continue;
+            };
             if rec.diff_content_hash == self.hashes[g] || rec.hunks.is_empty() {
                 continue;
             }
@@ -203,12 +220,6 @@ impl App {
             }
         }
         out
-    }
-
-    pub(crate) fn viewed_record(&self, g: usize) -> Option<&ViewedRecord> {
-        let repo = self.repo_tag(g);
-        let path = &self.diff.files().get(g)?.path;
-        self.mirror.viewed.iter().find(|v| v.repo == repo && v.file_path == *path)
     }
 
     /// Every hunk of full-list file `g` by id and text hash, for a viewed mark.

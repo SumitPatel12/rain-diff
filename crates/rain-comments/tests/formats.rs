@@ -226,6 +226,22 @@ fn store_round_trips_every_kind_of_state() {
 }
 
 #[test]
+fn an_older_snapshot_never_lands_after_a_newer_one() {
+    let dir = scratch("snapshots");
+    let path = dir.join("s.json");
+    let mut s = Session::default();
+    let older = SessionFile::snapshot(&path, &s).unwrap();
+    s.version = 7;
+    let newer = SessionFile::snapshot(&path, &s).unwrap();
+    newer.write().unwrap();
+    older.write().unwrap();
+    assert_eq!(SessionFile::load(&path).unwrap().version, 7, "the older snapshot is dropped");
+    s.version = 8;
+    SessionFile::snapshot(&path, &s).unwrap().write().unwrap();
+    assert_eq!(SessionFile::load(&path).unwrap().version, 8, "a later one still writes");
+}
+
+#[test]
 fn autosave_writes_after_the_debounce_and_on_drop() {
     let dir = scratch("autosave");
     let path = dir.join("s.json");

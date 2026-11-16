@@ -351,7 +351,7 @@ fn thread_row(s: &App, t: &Thread, section: Section, k: &Kit) -> El {
         let (a, b) = (t.id.clone(), t.id.clone());
         let mut r = row().gap(6.0).pt(2.0).child(small_button(
             format!("conv-confirm-{}", t.id),
-            "Confirm  a",
+            "Confirm",
             ButtonVariant::Neutral,
             move |s: &mut App, _| s.confirm_addressed(&a),
             k,

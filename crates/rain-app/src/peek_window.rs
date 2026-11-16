@@ -107,8 +107,8 @@ pub fn view(w: &PeekWindow, cx: &mut Cx<PeekWindow>) -> El {
             .w_full()
             .grow(1.0)
             .min_h(0.0)
-            .scroll(rune::ScrollSpec { stick_bottom: false })
-            .child(crate::view::peek_code(c, &look)),
+            .scroll_xy()
+            .child(crate::view::peek_code(c, &look).min_w(640.0)),
     )
     .child(rune::el().w_full().h(1.0).fill(look.s.hairline))
     .child(

@@ -54,19 +54,25 @@ impl App {
             self.mark_find();
             return;
         }
-        let fold = q.is_ascii();
-        let needle = if fold { q.to_ascii_lowercase() } else { q.clone() };
+        // ASCII queries match ASCII-case-insensitively, in place rather than over a lowered copy.
+        let fold = q
+            .is_ascii()
+            .then(|| {
+                regex::bytes::RegexBuilder::new(&regex::escape(&q))
+                    .case_insensitive(true)
+                    .unicode(false)
+                    .build()
+                    .ok()
+            })
+            .flatten();
         let mut hits = Vec::new();
         'files: for (fi, f) in self.active().files().iter().enumerate() {
-            let hay;
-            let text: &str = if fold {
-                hay = f.text.to_ascii_lowercase();
-                &hay
-            } else {
-                &f.text
+            let matches: Box<dyn Iterator<Item = usize>> = match &fold {
+                Some(re) => Box::new(re.find_iter(f.text.as_bytes()).map(|m| m.start())),
+                None => Box::new(f.text.match_indices(q.as_str()).map(|(at, _)| at)),
             };
             let mut last_line = u32::MAX;
-            for (at, _) in text.match_indices(needle.as_str()) {
+            for at in matches {
                 let i = f.lines.partition_point(|r| (r.end as usize) < at) as u32;
                 if (i as usize) < f.lines.len() && i != last_line && f.lines[i as usize].start as usize <= at {
                     last_line = i;

@@ -18,6 +18,11 @@ const MAX_STEP: Duration = Duration::from_secs(60);
 pub(crate) const FLOOD_IN: Duration = Duration::from_secs(9);
 /// The water drains away over this long.
 pub(crate) const DRAIN: Duration = Duration::from_millis(1400);
+/// The rain and the loader's clouds redraw about 30 times a second, the rate their streaks are
+/// drawn for.
+const FRAME: Duration = Duration::from_millis(33);
+/// Raining this long with no input, the rain holds its last frame until the next input.
+pub(crate) const UNWATCHED: Duration = Duration::from_secs(60);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Weather {
@@ -74,20 +79,31 @@ impl App {
         // The loader's clouds rain from the clock too.
         let loading = matches!(self.phase, super::Phase::Loading(_));
         if loading {
-            tx.wake_after(Duration::ZERO);
+            tx.wake_after(FRAME);
         }
-        let changed = self.rest_tick_at(Instant::now(), rune::last_input());
+        let (now, input) = (Instant::now(), rune::last_input());
+        let changed = self.rest_tick_at(now, input);
+        let still = self.rain_unwatched(now, input);
         match self.rest.weather {
             Weather::Clear if self.settings.break_reminder.enabled => tx.wake_after(CHECK_EVERY),
             Weather::Clear => {}
+            Weather::Flood(_) if still => tx.wake_after(CHECK_EVERY),
             // The rain is drawn from the clock: one frame after another until it is clear.
-            _ => tx.wake_after(Duration::ZERO),
+            _ => tx.wake_after(FRAME),
         }
         // Redraw only when the clock has moved since the last drawing.
-        let animating = loading || self.rest.weather != Weather::Clear;
+        let animating = loading || (self.rest.weather != Weather::Clear && !still);
         let moved = animating && self.rest.clock != self.rest.drawn;
         self.rest.drawn = self.rest.clock;
         changed || moved
+    }
+
+    /// It has rained `UNWATCHED` since the rain began or the last input, whichever is later:
+    /// nobody is watching, so the rain stops redrawing.
+    pub(crate) fn rain_unwatched(&self, now: Instant, last_input: Option<Instant>) -> bool {
+        let Weather::Flood(at) = self.rest.weather else { return false };
+        let since = last_input.map_or(at, |i| i.max(at));
+        now.saturating_duration_since(since) >= UNWATCHED
     }
 
     /// Steps the count to `now`; true when the weather changed.

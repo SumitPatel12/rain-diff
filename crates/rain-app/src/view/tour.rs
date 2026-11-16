@@ -118,13 +118,13 @@ fn start(s: &App, k: &Kit) -> El {
         .child(muted("Findings on each step stay hidden until you have read it; Space shows them.", k).wrap());
     let mut actions = row().w_full().gap(8.0).items_center();
     let go = if resume {
-        format!("Resume at {}/{n} (Enter)", s.tour.step + 1)
+        format!("Resume at {}/{n}", s.tour.step + 1)
     } else {
-        "Start (Enter)".to_owned()
+        "Start".to_owned()
     };
     actions = actions
         .child(button(&go, "tour-begin", ButtonVariant::Contrast, k, |s, tx| s.begin_tour(tx)))
-        .child(button("Skip to the reader (Esc)", "tour-skip", ButtonVariant::Ghost, k, |s, _| {
+        .child(button("Skip to the reader", "tour-skip", ButtonVariant::Ghost, k, |s, _| {
             s.leave_tour();
         }));
     c = c.child(actions);
@@ -196,11 +196,11 @@ fn step(s: &App, k: &Kit) -> Option<El> {
         .child(button("‹ p", "tour-prev", ButtonVariant::Ghost, k, |s, tx| s.tour_prev(tx)))
         .child(el().grow(1.0));
     let primary = if !v.live && s.tour_findings_hidden(i) && !s.tour_findings(i).is_empty() {
-        "Show findings (Space)"
+        "Show findings"
     } else if i + 1 >= n {
-        "Understood · finish (Space)"
+        "Understood · finish"
     } else {
-        "Understood · next (Space)"
+        "Understood · next"
     };
     nav = nav
         .child(button(primary, "tour-space", ButtonVariant::Contrast, k, |s, tx| s.tour_space(tx)))
@@ -312,7 +312,7 @@ fn end(s: &App, k: &Kit) -> El {
                 s.tour_prev(tx)
             }))
             .child(el().grow(1.0))
-            .child(button("Close (Esc)", "tour-close", ButtonVariant::Contrast, k, |s, _| {
+            .child(button("Close", "tour-close", ButtonVariant::Contrast, k, |s, _| {
                 s.leave_tour();
             })),
     )

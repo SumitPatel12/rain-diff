@@ -1,11 +1,12 @@
 //! The data folder and the session file on disk: `%LOCALAPPDATA%\Rain\sessions\<id>.json`,
 //! written atomically, plus a debounced background saver for the shell.
 
+use std::collections::HashMap;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -89,6 +90,44 @@ impl SessionFile {
         let bytes = serde_json::to_vec_pretty(session).map_err(io::Error::other)?;
         write_atomic(path, &bytes)
     }
+
+    /// Serialises `session` for [`Snapshot::write`] after its lock is let go. Take it under the
+    /// session's lock: snapshots of one path land in the order they were taken.
+    pub fn snapshot(path: &Path, session: &Session) -> io::Result<Snapshot> {
+        static TAKEN: AtomicU64 = AtomicU64::new(1);
+        Ok(Snapshot {
+            path: path.to_owned(),
+            seq: TAKEN.fetch_add(1, Ordering::SeqCst),
+            bytes: serde_json::to_vec_pretty(session).map_err(io::Error::other)?,
+        })
+    }
+}
+
+/// A session serialised under its lock, written without holding it.
+#[must_use = "a snapshot saves nothing until written"]
+pub struct Snapshot {
+    path: PathBuf,
+    seq: u64,
+    bytes: Vec<u8>,
+}
+
+impl Snapshot {
+    /// Writes the snapshot unless a newer one of the same path already landed (it holds
+    /// everything this one does).
+    pub fn write(self) -> io::Result<()> {
+        static WRITTEN: OnceLock<Mutex<HashMap<PathBuf, Arc<Mutex<u64>>>>> = OnceLock::new();
+        let slot = {
+            let mut paths = WRITTEN.get_or_init(Mutex::default).lock().unwrap_or_else(|e| e.into_inner());
+            paths.entry(self.path.clone()).or_default().clone()
+        };
+        let mut last = slot.lock().unwrap_or_else(|e| e.into_inner());
+        if self.seq < *last {
+            return Ok(());
+        }
+        write_atomic(&self.path, &self.bytes)?;
+        *last = self.seq;
+        Ok(())
+    }
 }
 
 fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
@@ -161,13 +200,11 @@ pub fn autosave(shared: Arc<Shared>, path: PathBuf, debounce: Duration) -> Autos
     let worker = std::thread::Builder::new()
         .name("rain-autosave".into())
         .spawn(move || {
-            // Held through the rename: the HTTP routes save under the same lock, so an older
-            // snapshot can never land on disk after a newer one.
+            // Serialised under the lock and written after it, so the window never waits on the
+            // disk; snapshot order keeps an older one from landing after a newer one.
             let save = || {
-                let s = shared.lock();
-                if let Ok(bytes) = serde_json::to_vec_pretty(&*s)
-                    && let Err(e) = write_atomic(&path, &bytes)
-                {
+                let snap = SessionFile::snapshot(&path, &shared.lock());
+                if let Err(e) = snap.and_then(Snapshot::write) {
                     eprintln!("Rain: saving {} failed: {e}", path.display());
                 }
             };

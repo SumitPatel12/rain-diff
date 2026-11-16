@@ -27,20 +27,8 @@ type PlaceKey = (String, Option<u32>, Side, i64);
 impl App {
     /// Where the reader is: the cursor's line, else the first line of the hunk at the top.
     pub fn capture_place(&self) -> Option<Captured> {
-        let g = self.current()?;
+        let (g, l, at) = self.place_line()?;
         let a = self.active();
-        let l = self.local(g)?;
-        let at = match a.cursor().filter(|(cl, _)| *cl == l) {
-            Some((_, at)) => Some(at),
-            None => a.visible_hunk().filter(|(f, _)| *f == l).and_then(|(f, h)| {
-                let hunk = a.files()[f].hunks.get(h)?;
-                Some(if hunk.new_count == 0 {
-                    LineRef::new(Side::Old, hunk.old_start)
-                } else {
-                    LineRef::new(Side::New, hunk.new_start)
-                })
-            }),
-        };
         let scroll = a.scroll_offset();
         let dy = at.and_then(|at| a.row_of_line(l, at)).map(|r| a.row_y(r as usize) - scroll);
         Some(Captured {
@@ -56,6 +44,25 @@ impl App {
             text: at.and_then(|at| a.side_line(l, at.side, at.line)).map(str::to_owned),
             dy,
         })
+    }
+
+    /// The current file (full-list and active index) and the place's line in it.
+    fn place_line(&self) -> Option<(usize, usize, Option<LineRef>)> {
+        let g = self.current()?;
+        let a = self.active();
+        let l = self.local(g)?;
+        let at = match a.cursor().filter(|(cl, _)| *cl == l) {
+            Some((_, at)) => Some(at),
+            None => a.visible_hunk().filter(|(f, _)| *f == l).and_then(|(f, h)| {
+                let hunk = a.files()[f].hunks.get(h)?;
+                Some(if hunk.new_count == 0 {
+                    LineRef::new(Side::Old, hunk.old_start)
+                } else {
+                    LineRef::new(Side::New, hunk.new_start)
+                })
+            }),
+        };
+        Some((g, l, at))
     }
 
     /// Puts the reader back at `c`: the same file, the line holding the same text nearest the old
@@ -93,20 +100,47 @@ impl App {
     /// Writes the place into the session when it moved (no version bump: nothing waits on it)
     /// and publishes the reader's state.
     pub(crate) fn save_place(&mut self) {
-        let Some(c) = self.capture_place() else { return };
-        let key: PlaceKey = (c.place.file.clone(), c.place.line, c.place.side, c.place.scroll as i64);
-        if self.reloader.saved_place.as_ref() == Some(&key) {
+        // Compared before capturing, which clones the key, the filter and the line's text.
+        let Some((g, _, at)) = self.place_line() else { return };
+        let (line, side) = (at.map(|at| at.line), at.map_or(Side::New, |at| at.side));
+        let scroll = self.active().scroll_offset() as i64;
+        if self
+            .reloader
+            .saved_place
+            .as_ref()
+            .is_some_and(|k| k.0 == self.keys[g] && (k.1, k.2, k.3) == (line, side, scroll))
+        {
             return;
         }
+        let Some(c) = self.capture_place() else { return };
+        let key: PlaceKey = (c.place.file.clone(), c.place.line, c.place.side, c.place.scroll as i64);
         self.reloader.saved_place = Some(key);
         self.shared.set_ui_state(self.ui_state(&c));
         if self.reloader.pending_place.is_some() {
             return;
         }
+        let line_key = (c.place.file.clone(), c.place.line, c.place.side);
         self.shared.lock().place = Some(c.place.clone());
         self.mirror.place = Some(c.place);
+        // A scroll alone rides along with the next save instead of rewriting the file per pixel.
+        if self.reloader.touched_place.as_ref() == Some(&line_key) {
+            self.reloader.place_unsaved = true;
+            return;
+        }
+        self.reloader.touched_place = Some(line_key);
+        self.reloader.place_unsaved = false;
         if let Some(a) = &self.autosave {
             a.touch();
+        }
+    }
+
+    /// Saves a scroll offset [`App::save_place`] left for the next save, before the window closes.
+    pub(crate) fn flush_place(&mut self) {
+        if std::mem::take(&mut self.reloader.place_unsaved)
+            && let Some(a) = &self.autosave
+        {
+            a.touch();
+            a.flush();
         }
     }
 

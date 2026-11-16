@@ -91,8 +91,9 @@ fn post(ctx: &Ctx, body: &str) -> Reply {
     let n = round.n;
     s.rounds.push(round);
     s.version += 1;
-    ctx.save(&s);
+    let saved = ctx.save(&s);
     drop(s);
+    ctx.write(saved);
     push(ctx, EventKind::Submitted, None, None, json!({ "round": n, "verdict": verdict }));
     ctx.shared.notify();
     value(200, &json!({ "success": true, "round": n }))

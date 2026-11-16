@@ -283,7 +283,9 @@ fn open_window(o: &OpenArgs, rune: &RuneArgs) -> Result<(), String> {
         let port = handle.port;
         drop(handle);
         exit_log::record(&format!("comment server on port {port} stopped"));
-        if let Err(e) = SessionFile::save(&file, &shared.lock()) {
+        // A snapshot, so an autosave still writing an older one can't land after it.
+        let snap = SessionFile::snapshot(&file, &shared.lock());
+        if let Err(e) = snap.and_then(rain_comments::Snapshot::write) {
             eprintln!("Rain: saving {} failed: {e}", file.display());
         }
         exit_log::record("exit 0: normal exit");

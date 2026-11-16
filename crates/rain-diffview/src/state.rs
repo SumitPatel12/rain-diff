@@ -408,6 +408,8 @@ pub struct DiffState {
     pub(crate) rev: u64,
     /// Changes with the rows' keys, unique across states so a swapped-in state never matches.
     pub(crate) keys_rev: u64,
+    /// Files were replaced since the last rebuild: the keys change even if the rows don't.
+    new_files: bool,
     visible_rows: Range<usize>,
     view_w: std::cell::Cell<f32>,
     visible: usize,
@@ -484,6 +486,7 @@ impl DiffState {
             hunk_rows: Vec::new(),
             rev: 0,
             keys_rev: 0,
+            new_files: false,
             visible_rows: 0..0,
             view_w: std::cell::Cell::new(0.0),
             visible: 0,
@@ -555,6 +558,7 @@ impl DiffState {
         self.visible_rows = 0..0;
         self.pending_expand = None;
         self.index_annotations();
+        self.new_files = true;
         self.rebuild();
     }
 
@@ -1825,10 +1829,15 @@ impl DiffState {
         let top = (!self.visible_rows.is_empty())
             .then(|| self.rows.get(self.visible_rows.start).map(|&r| self.place(r)))
             .flatten();
-        let mut rows = std::mem::take(&mut self.rows);
-        rows.clear();
+        // Written over the old rows, so a layout that comes out the same keeps the row keys.
+        let mut rows = RowsOut {
+            rows: std::mem::take(&mut self.rows),
+            n: 0,
+            same: true,
+        };
+        let old_len = rows.rows.len();
         let estimate: usize = self.files.iter().map(|f| f.lines.len() + 2 * f.hunks.len() + 2).sum();
-        rows.reserve(estimate);
+        rows.rows.reserve(estimate.saturating_sub(old_len));
         self.file_rows.clear();
         self.hunk_rows.clear();
         self.gap_rows.clear();
@@ -1838,14 +1847,14 @@ impl DiffState {
         let m = self.m;
         let mut extra = 0.0f32;
         let tall_rows = &mut self.tall_rows;
-        let mut tall = |rows: &[Row], h: f32| {
+        let mut tall = |rows: &RowsOut, h: f32| {
             extra += h - m.line;
-            tall_rows.push((rows.len() as u32 - 1, extra));
+            tall_rows.push((rows.n as u32 - 1, extra));
         };
         for (f, file) in self.files.iter().enumerate() {
             let fu = f as u32;
             let ix = &self.idx[f];
-            self.file_rows.push(rows.len() as u32);
+            self.file_rows.push(rows.n as u32);
             rows.push(Row::File(fu));
             tall(&rows, m.header);
             if self.ui[f].collapsed {
@@ -1863,25 +1872,25 @@ impl DiffState {
             for gap in 0..=file.hunks.len() {
                 let g = ix.gaps[gap];
                 let (top, bottom) = self.ui[f].revealed[gap];
-                self.gap_rows.push(rows.len() as u32);
+                self.gap_rows.push(rows.n as u32);
                 let ctx = |k: u32| Row::Ctx {
                     f: fu,
                     old: g.old + k,
                     new: g.new + k,
                 };
-                rows.extend((0..top).map(ctx));
+                (0..top).for_each(|k| rows.push(ctx(k)));
                 let hidden = g.len.map(|n| n.saturating_sub(top + bottom));
-                let first_row = rows.len() as u32;
+                let first_row = rows.n as u32;
                 if hidden.is_some_and(|n| n > 0) {
                     rows.push(Row::Gap { f: fu, gap: gap as u32 });
                     tall(&rows, m.gap);
                 }
                 if let Some(n) = g.len {
-                    rows.extend((n - bottom.min(n)..n).map(ctx));
+                    (n - bottom.min(n)..n).for_each(|k| rows.push(ctx(k)));
                 }
                 let Some(h) = file.hunks.get(gap) else { break };
                 self.hunk_rows.push(first_row);
-                self.hunk_line_rows.push(rows.len() as u32);
+                self.hunk_line_rows.push(rows.n as u32);
                 let mut i = h.lines.start;
                 while i < h.lines.end {
                     if pairs && file.lines[i as usize].kind != LineKind::Context {
@@ -1908,9 +1917,14 @@ impl DiffState {
                 }
             }
         }
-        self.rows = rows;
-        static KEYS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
-        self.keys_rev = KEYS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        rows.rows.truncate(rows.n);
+        let same = rows.same && rows.n == old_len;
+        self.rows = rows.rows;
+        // Keys come from the rows and the files' line numbers, which change only with new files.
+        if std::mem::take(&mut self.new_files) || !same {
+            static KEYS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+            self.keys_rev = KEYS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
         if !self.visible_rows.is_empty() {
             let len = self.visible_rows.len();
             self.visible_rows = match top.and_then(|p| self.row_at(p)) {
@@ -2142,6 +2156,30 @@ fn one_sided(f: &FileDiff) -> Option<Side> {
     }
 }
 
+/// Rows written over the last layout's, noting whether any came out different.
+struct RowsOut {
+    rows: Vec<Row>,
+    n: usize,
+    same: bool,
+}
+
+impl RowsOut {
+    fn push(&mut self, r: Row) {
+        match self.rows.get_mut(self.n) {
+            Some(old) if *old == r => {}
+            Some(old) => {
+                *old = r;
+                self.same = false;
+            }
+            None => {
+                self.rows.push(r);
+                self.same = false;
+            }
+        }
+        self.n += 1;
+    }
+}
+
 fn first_u64(h: blake3::Hash) -> u64 {
     let b = h.as_bytes();
     u64::from_le_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]])
@@ -2152,6 +2190,9 @@ fn first_u64(h: blake3::Hash) -> u64 {
 fn own_ids(f: &FileDiff) -> Vec<u64> {
     let mut out: Vec<u64> = Vec::with_capacity(f.hunks.len());
     let mut seen = std::collections::HashSet::with_capacity(f.hunks.len());
+    // Per full hash, the last repeat count taken: every count below it is already used, so the
+    // next equal hunk starts after it and gets the id counting from 0 would.
+    let mut repeats: HashMap<[u8; 32], u32> = HashMap::new();
     for h in &f.hunks {
         let changed = |i: &u32| f.lines[*i as usize].kind != LineKind::Context;
         let first = h
@@ -2171,13 +2212,19 @@ fn own_ids(f: &FileDiff) -> Vec<u64> {
             hasher.update(&[0, f.lines[i as usize].kind as u8]);
             hasher.update(f.line_text(i).as_bytes());
         }
-        let mut id = first_u64(hasher.finalize());
-        let mut n = 0u32;
-        while !seen.insert(id) {
-            n += 1;
-            let mut again = hasher.clone();
-            again.update(&n.to_le_bytes());
-            id = first_u64(again.finalize());
+        let full = hasher.finalize();
+        let mut id = first_u64(full);
+        if !seen.insert(id) {
+            let n = repeats.entry(*full.as_bytes()).or_insert(0);
+            loop {
+                *n += 1;
+                let mut again = hasher.clone();
+                again.update(&n.to_le_bytes());
+                id = first_u64(again.finalize());
+                if seen.insert(id) {
+                    break;
+                }
+            }
         }
         out.push(id);
     }
@@ -2213,25 +2260,32 @@ fn reconcile_ids(prev: &[Arc<FileDiff>], prev_idx: &[FileIdx], prev_ids: &[u64],
             };
             let mut taken = vec![false; old_ids.len()];
             let mut settled = vec![false; ids.len()];
+            // Each id's first position, as a scan from the front would find it.
+            let mut first_of: HashMap<u64, usize> = HashMap::with_capacity(old_ids.len());
+            for (o, &id) in old_ids.iter().enumerate() {
+                first_of.entry(id).or_insert(o);
+            }
             for (j, id) in ids.iter().enumerate() {
-                if let Some(o) = old_ids.iter().position(|o| o == id).filter(|&o| !taken[o]) {
+                if let Some(&o) = first_of.get(id).filter(|&&o| !taken[o]) {
                     taken[o] = true;
                     settled[j] = true;
                 }
             }
             let mut order: Vec<usize> = (0..ids.len()).filter(|&j| !settled[j]).collect();
             order.sort_by_key(|&j| std::cmp::Reverse(f.hunks[j].lines.len()));
+            let ranges: Vec<(u32, u32)> = of.hunks.iter().map(old_range).collect();
+            // Hunks in diff order have both ends ascending; then only a window can overlap.
+            let sorted = ranges.windows(2).all(|w| w[0].0 <= w[1].0 && w[0].1 <= w[1].1);
             for j in order {
                 let (a, b) = old_range(&f.hunks[j]);
-                let best = of
-                    .hunks
+                let from = if sorted { ranges.partition_point(|&(_, d)| d < a) } else { 0 };
+                let best = ranges[from..]
                     .iter()
                     .enumerate()
-                    .filter(|&(o, h)| {
-                        let (c, d) = old_range(h);
-                        !taken[o] && a <= d && c <= b
-                    })
-                    .max_by_key(|&(o, h)| (h.lines.len(), std::cmp::Reverse(o)))
+                    .map(|(k, &r)| (from + k, r))
+                    .take_while(|&(_, (c, _))| !sorted || c <= b)
+                    .filter(|&(o, (c, d))| !taken[o] && a <= d && c <= b)
+                    .max_by_key(|&(o, _)| (of.hunks[o].lines.len(), std::cmp::Reverse(o)))
                     .map(|(o, _)| o);
                 if let Some(o) = best {
                     taken[o] = true;
@@ -2704,5 +2758,141 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// `own_ids` as first written: each repeat counts up from 0 until its id is unused.
+    fn own_ids_counting(f: &FileDiff) -> Vec<u64> {
+        let mut out = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        for h in &f.hunks {
+            let changed = |i: &u32| f.lines[*i as usize].kind != LineKind::Context;
+            let first = h
+                .lines
+                .clone()
+                .find(changed)
+                .or(Some(h.lines.start).filter(|_| !h.lines.is_empty()));
+            let last = h
+                .lines
+                .clone()
+                .rev()
+                .find(changed)
+                .or(h.lines.end.checked_sub(1).filter(|_| !h.lines.is_empty()));
+            let mut hasher = blake3::Hasher::new();
+            hasher.update(f.path.as_bytes());
+            for i in [first, last].into_iter().flatten() {
+                hasher.update(&[0, f.lines[i as usize].kind as u8]);
+                hasher.update(f.line_text(i).as_bytes());
+            }
+            let mut id = first_u64(hasher.finalize());
+            let mut n = 0u32;
+            while !seen.insert(id) {
+                n += 1;
+                let mut again = hasher.clone();
+                again.update(&n.to_le_bytes());
+                id = first_u64(again.finalize());
+            }
+            out.push(id);
+        }
+        out
+    }
+
+    /// `reconcile_ids` as first written: linear scans for the exact and the overlap passes.
+    fn reconcile_scanning(prev: &[Arc<FileDiff>], prev_idx: &[FileIdx], prev_ids: &[u64], files: &[Arc<FileDiff>]) -> Vec<u64> {
+        let by_path: HashMap<&str, usize> = prev.iter().enumerate().map(|(i, f)| (f.path.as_str(), i)).collect();
+        let mut out = Vec::new();
+        for f in files {
+            let mut ids = own_ids_counting(f);
+            if let Some(&k) = by_path.get(f.path.as_str()) {
+                let of = &prev[k];
+                let base = prev_idx[k].hunk_base as usize;
+                let old_ids = &prev_ids[base..base + of.hunks.len()];
+                let mut taken = vec![false; old_ids.len()];
+                let mut settled = vec![false; ids.len()];
+                for (j, id) in ids.iter().enumerate() {
+                    if let Some(o) = old_ids.iter().position(|o| o == id).filter(|&o| !taken[o]) {
+                        taken[o] = true;
+                        settled[j] = true;
+                    }
+                }
+                let mut order: Vec<usize> = (0..ids.len()).filter(|&j| !settled[j]).collect();
+                order.sort_by_key(|&j| std::cmp::Reverse(f.hunks[j].lines.len()));
+                for j in order {
+                    let (a, b) = old_range(&f.hunks[j]);
+                    let best = of
+                        .hunks
+                        .iter()
+                        .enumerate()
+                        .filter(|&(o, h)| {
+                            let (c, d) = old_range(h);
+                            !taken[o] && a <= d && c <= b
+                        })
+                        .max_by_key(|&(o, h)| (h.lines.len(), std::cmp::Reverse(o)))
+                        .map(|(o, _)| o);
+                    if let Some(o) = best {
+                        taken[o] = true;
+                        ids[j] = old_ids[o];
+                    }
+                }
+            }
+            out.extend(ids);
+        }
+        out
+    }
+
+    /// 1,000 hunks, most with the same first and last changed lines (an EF snapshot's), some
+    /// with another pair, so repeats of two ids interleave.
+    fn snapshot_texts(value: impl Fn(usize) -> &'static str) -> (String, String) {
+        let block = |k: usize, v: &str| -> String {
+            let ctx: String = (0..8).map(|j| format!("ctx {k} {j}\n")).collect();
+            format!("{ctx}HasMaxLength({v});\n")
+        };
+        let old = (0..1000).map(|k| block(k, if k % 7 == 0 { "100" } else { "200" })).collect();
+        let new = (0..1000).map(|k| block(k, value(k))).collect();
+        (old, new)
+    }
+
+    #[test]
+    fn row_keys_change_only_with_the_rows_or_the_files() {
+        let mut s = sample();
+        let rev = s.keys_rev;
+        s.set_metrics(Metrics {
+            line: s.metrics().line + 4.0,
+            ..s.metrics()
+        });
+        assert_eq!(s.keys_rev, rev, "a density change keeps every row");
+        s.set_collapsed(0, true);
+        assert_ne!(s.keys_rev, rev, "collapsing drops rows");
+        let rev = s.keys_rev;
+        s.set_files(s.files().to_vec());
+        assert_ne!(s.keys_rev, rev, "new files always re-key");
+    }
+
+    #[test]
+    fn repeated_hunk_ids_are_the_ones_counting_from_zero_gives() {
+        let (old, new) = snapshot_texts(|k| if k % 7 == 0 { "128" } else { "256" });
+        let f = from_texts("Model.Designer.cs", &old, &new);
+        assert_eq!(f.hunks.len(), 1000);
+        let ids = own_ids(&f);
+        assert_eq!(ids, own_ids_counting(&f), "persisted viewed hunks keep their ids");
+        assert_eq!(ids.iter().collect::<std::collections::HashSet<_>>().len(), 1000);
+    }
+
+    #[test]
+    fn carried_hunk_ids_are_the_ones_the_scans_give() {
+        let (old, new) = snapshot_texts(|k| if k % 7 == 0 { "128" } else { "256" });
+        let before = DiffState::new(vec![from_texts("Model.Designer.cs", &old, &new)]);
+        // Some hunks change, some go, and an insertion shifts the rest.
+        let (_, edited) = snapshot_texts(|k| match k % 11 {
+            0 => "300",
+            5 => "200",
+            _ if k % 7 == 0 => "128",
+            _ => "256",
+        });
+        let edited = edited.replacen("ctx 500 0\n", "ctx 500 0\nnew line\nanother\n", 1);
+        let after = vec![Arc::new(from_texts("Model.Designer.cs", &old, &edited))];
+        assert_eq!(
+            reconcile_ids(&before.files, &before.idx, &before.hunk_ids, &after),
+            reconcile_scanning(&before.files, &before.idx, &before.hunk_ids, &after)
+        );
     }
 }

@@ -109,6 +109,8 @@ pub struct TreeState {
     /// Per folder or repo node: (viewed, total) over the files the filter shows under it.
     folder_counts: HashMap<String, (u32, u32)>,
     progress: Progress,
+    /// Bumped each time the filter is applied, so a cache of what it shows can tell.
+    filtered: u64,
     /// Points of the tree's viewport, for Page Up and Page Down.
     pub(crate) viewport: f32,
 }
@@ -180,6 +182,7 @@ impl TreeState {
             tag_progress: BTreeMap::new(),
             folder_counts: HashMap::new(),
             progress: Progress::default(),
+            filtered: 0,
             viewport: 0.0,
         };
         s.model.expand_all();
@@ -225,6 +228,7 @@ impl TreeState {
         }
         self.tag_counts = counts;
         self.repo_counts = repo_counts;
+        self.filtered += 1;
         if self.filter.is_empty() {
             self.model.clear_filter();
         } else {
@@ -238,7 +242,9 @@ impl TreeState {
     fn recount(&mut self) {
         let mut p = Progress::default();
         let mut tags: BTreeMap<FileTag, (u32, u32)> = FileTag::ALL.iter().map(|&t| (t, (0, 0))).collect();
-        let mut folders: HashMap<String, (u32, u32)> = HashMap::new();
+        // Reused across recounts so a folder's id is allocated once; a zero reads as absent.
+        let mut folders = std::mem::take(&mut self.folder_counts);
+        folders.values_mut().for_each(|c| *c = (0, 0));
         for (i, e) in self.files.iter().enumerate() {
             let v = u32::from(e.viewed);
             p.total += 1;
@@ -297,6 +303,11 @@ impl TreeState {
         self.folder_counts.get(id).copied().unwrap_or((0, 0))
     }
 
+    /// Changes whenever the filter is applied again (which files it shows may have changed).
+    pub fn filter_revision(&self) -> u64 {
+        self.filtered
+    }
+
     /// Whether the filter shows the file `key`.
     pub fn is_shown(&self, key: &str) -> bool {
         self.by_key.get(key).is_some_and(|&i| self.matches[i as usize])
@@ -324,6 +335,22 @@ impl TreeState {
         e.viewed = on;
         self.recount();
         true
+    }
+
+    /// [`TreeState::set_viewed`] for many files with one recount; returns whether any changed.
+    pub fn set_viewed_many<'a>(&mut self, marks: impl IntoIterator<Item = (&'a str, bool)>) -> bool {
+        let mut changed = false;
+        for (key, on) in marks {
+            if let Some(&i) = self.by_key.get(key) {
+                let e = &mut self.files[i as usize];
+                changed |= e.viewed != on;
+                e.viewed = on;
+            }
+        }
+        if changed {
+            self.recount();
+        }
+        changed
     }
 
     /// Sets the viewed mark of every shown file under `id` (a folder or repo) to `on`, or of
@@ -369,6 +396,20 @@ impl TreeState {
             if self.filter.commented_only {
                 self.refilter();
             }
+        }
+    }
+
+    /// [`TreeState::set_comment_count`] for many files, filtering again once.
+    pub fn set_comment_counts<'a>(&mut self, counts: impl IntoIterator<Item = (&'a str, u32)>) {
+        let mut any = false;
+        for (key, n) in counts {
+            if let Some(&i) = self.by_key.get(key) {
+                self.files[i as usize].comments = n;
+                any = true;
+            }
+        }
+        if any && self.filter.commented_only {
+            self.refilter();
         }
     }
 

@@ -14,20 +14,39 @@ pub(crate) fn sr(k: &Kit) -> (Surfaces, Roles) {
 /// A key cap: `Space`, `]`, `w` (11/16 faint on the well, hairline ring).
 pub(crate) fn kbd(t: impl Into<String>, k: &Kit) -> El {
     let s = surfaces_of(k);
+    let t = t.into();
+    // Letters with no ascender (`v`, `w`, `a`) fill only the lower part of the line; lift them a
+    // point so they read as centred in the cap.
+    let low = !t.is_empty() && t.chars().all(|c| "acemnorsuvwxz".contains(c));
     row()
         .h(16.0)
         .px(4.0)
+        .pb(if low { 2.0 } else { 0.0 })
         .items_center()
         .radius(radius::KEY)
         .fill(s.well)
         .border(1.0, s.hairline)
         .a11y_hidden()
-        .child(text(t.into()).font(TYPE.micro).color(k.c.text_faint))
+        // A 14 point line inside the 1 point ring, so the label sits in the cap's middle.
+        .child(text(t).font(TYPE.micro.lh(14.0)).color(k.c.text_faint))
 }
 
 /// A key without its cap, for inside buttons and menu rows.
 pub(crate) fn kbd_bare(t: impl Into<String>, k: &Kit) -> El {
-    text(t.into()).font(TYPE.micro).color(k.c.text_faint).a11y_hidden()
+    // On the label's 18 point line, so `c` and `?` sit on the same baseline as `Comment`.
+    text(t.into())
+        .font(TYPE.micro.lh(TYPE.small.line_height))
+        .color(k.c.text_faint)
+        .a11y_hidden()
+}
+
+/// Markdown in Rain's type: headings 18 / 16 / 16 semibold over 14 point body text.
+pub(crate) fn md_style(k: &Kit) -> rune_kit::MarkdownStyle {
+    use rune::tok::TextStyle;
+    rune_kit::MarkdownStyle::from_kit(k)
+        .heading_font(1, TextStyle::new(18.0, 600.0).lh(26.0))
+        .heading_font(2, TextStyle::new(16.0, 600.0).lh(24.0))
+        .heading_font(3, TextStyle::new(16.0, 600.0).lh(24.0))
 }
 
 /// A 1 × 16 point divider between toolbar groups.
@@ -115,17 +134,21 @@ impl Ghost {
         if self.on {
             b = b.fill(k.c.pressed).checked(true);
         }
-        if let Some(h) = self.help {
+        // Keys live in the tooltip only, never on the button's face.
+        let help = match (self.help, &self.hint) {
+            (Some(h), Some(key)) if !h.contains(key.as_str()) => Some(format!("{h}  {key}")),
+            (Some(h), _) => Some(h),
+            (None, Some(key)) => self.label.as_ref().map(|l| format!("{l}  {key}")),
+            (None, None) => None,
+        };
+        if let Some(h) = help {
             b = b.help(h);
         }
         if let Some(i) = self.icon {
-            b = b.child(icons::draw(i, 16.0, ink));
+            b = b.child(icons::draw(i, 16.0, k.c.text_base));
         }
         if let Some(l) = self.label {
             b = b.child(text(l).font(TYPE.small).color(ink).a11y_hidden());
-        }
-        if let Some(h) = self.hint {
-            b = b.child(kbd_bare(h, k));
         }
         k.interactive(b.children(self.extra)).press_scale(0.97)
     }
@@ -147,9 +170,9 @@ pub(crate) fn outline(key: impl Into<String>, label: impl Into<String>, hint: Op
         .border(1.0, s.card_border)
         .cursor(Cursor::Pointer)
         .focusable(true)
-        .child(text(label).font(TYPE.small).color(k.c.text_base).a11y_hidden());
+        .child(text(label.clone()).font(TYPE.small).color(k.c.text_base).a11y_hidden());
     if let Some(h) = hint {
-        b = b.child(kbd_bare(h, k));
+        b = b.help(format!("{label}  {h}"));
     }
     k.interactive(b).press_scale(0.97)
 }
@@ -211,10 +234,7 @@ pub(crate) fn group_tag(g: rain_triage::Group, k: &Kit) -> El {
         .label(g.label().to_owned())
         .child(
             text(letter)
-                .font(rune::tok::TextStyle {
-                    weight: 700.0,
-                    ..TYPE.micro
-                })
+                .font(rune::tok::TextStyle::new(10.0, 700.0).lh(14.0))
                 .color(ink)
                 .a11y_hidden(),
         )

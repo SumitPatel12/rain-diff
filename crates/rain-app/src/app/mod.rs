@@ -25,6 +25,7 @@ mod review;
 mod ruler;
 mod session;
 mod tour;
+mod verify;
 mod wholefile;
 
 use std::cell::Cell;
@@ -67,7 +68,7 @@ pub use reload::{ReloadCounts, ReloadState, Stale};
 pub(crate) use remote::APPLY_CALLS;
 pub use review::{ReviewState, VERDICTS, verdict_label};
 pub use ruler::RulerState;
-pub(crate) use session::{comment_counts, file_of_thread, is_viewed};
+pub(crate) use session::{comment_counts, file_of_thread};
 pub use tour::{FoundBy, TourStage, TourState};
 
 /// Thread authors whose messages don't count as "someone else's": the user writes without one.
@@ -134,6 +135,10 @@ pub struct App {
     pub chapters: Chapters,
     /// The session as last seen, and its version.
     pub mirror: Session,
+    /// Per file, whether the mirror has it viewed at its current hash (see [`App::is_viewed`]).
+    viewed_files: Vec<bool>,
+    /// Bumped whenever the mirror's threads or drafts change.
+    pub(crate) threads_rev: u64,
     pub seen_version: u64,
     pub seen_overview_version: u64,
     /// The chapter `J`/`K` last moved to.
@@ -269,6 +274,8 @@ impl App {
             unplaced: BTreeMap::new(),
             chapters: Chapters::default(),
             mirror: Session::default(),
+            viewed_files: Vec::new(),
+            threads_rev: 0,
             seen_version: u64::MAX,
             seen_overview_version: 0,
             chapter: 0,
@@ -367,16 +374,13 @@ impl App {
         self.mirror = self.shared.lock().clone();
         self.seen_version = self.mirror.version;
         self.seen_overview_version = self.mirror.overview_version;
+        self.recompute_viewed();
+        self.threads_rev += 1;
         self.rebuild_overview_views();
         self.install_brief_facts(&d.triage);
         self.settle_reader_tab();
-        let session = &self.mirror;
-        let viewed = |k: &str| {
-            self.by_key
-                .get(k)
-                .is_some_and(|&i| is_viewed(session, &self.repos, &self.diff, &self.hashes, i))
-        };
-        let counts = comment_counts(session, self);
+        let viewed = |k: &str| self.by_key.get(k).is_some_and(|&i| self.is_viewed(i));
+        let counts = comment_counts(&self.mirror, self);
         self.tree = TreeState::build(self.diff.files(), &self.repos, &self.tags, viewed, &counts);
         self.install_triage(d.triage);
         self.phase = Phase::Ready;
@@ -817,6 +821,11 @@ impl App {
     /// Escape: one layer at a time, then the file filter, then the diff takes it.
     pub fn escape(&mut self, tx: &mut Tx) -> bool {
         if self.close_layer() || self.clear_filter() {
+            return true;
+        }
+        // Then a focused Brief section lets go of its ring.
+        if self.brief.focus.take().is_some() {
+            self.status.clear();
             return true;
         }
         self.active_mut().key(

@@ -36,7 +36,7 @@ fn author(body: &str) -> Option<String> {
 }
 
 fn health(ctx: &Ctx) -> Reply {
-    let diff_loaded = ctx.shared.diff_files().is_some();
+    let diff_loaded = ctx.shared.has_diff_files();
     let agent = presence::view(ctx);
     let asks = ctx.shared.asks();
     let s = ctx.shared.lock();

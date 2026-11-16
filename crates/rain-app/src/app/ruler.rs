@@ -121,12 +121,11 @@ impl Mark {
         false
     }
 
-    /// Hunks green or red by what they mostly do, file starts the strong line, threads info,
-    /// waiting ones warning, notes the note colour, find hits the current hit's.
+    /// Hunks a quiet neutral (where the changes are, not what they do), file starts the strong
+    /// line, threads info, waiting ones warning, notes the note colour, find hits the current hit's.
     pub fn color(&self, k: &Kit, note: Color) -> Color {
         match self.kind {
-            MarkKind::Hunk { added } if added >= 0.5 => k.c.success.fg,
-            MarkKind::Hunk { .. } => k.c.danger.fg,
+            MarkKind::Hunk { .. } => k.c.text_faint,
             MarkKind::File => k.c.border_strong,
             MarkKind::Comment { waiting: true } => k.c.warning.fg,
             MarkKind::Comment { waiting: false } => k.c.info.fg,
@@ -180,7 +179,8 @@ impl App {
         )
             .hash(&mut h);
         d.annotations().hash(&mut h);
-        (self.seen_version, &self.find.query, self.find.hits.len(), track.round() as i32).hash(&mut h);
+        // Of the session, marks read only the threads (who each waits on); notes come in as annotations.
+        (self.threads_rev, &self.find.query, self.find.hits.len(), track.round() as i32).hash(&mut h);
         h.finish()
     }
 

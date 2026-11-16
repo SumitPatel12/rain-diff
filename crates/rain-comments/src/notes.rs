@@ -262,6 +262,15 @@ struct NotesJson<'a> {
 /// overview's, narrowed to a repo (story notes of every repo kept) and to a `<repo>/<path>` key
 /// (file and line notes only) when given.
 pub fn notes_json_string(s: &Session, repo: Option<&str>, file_key: Option<&str>) -> String {
+    with_notes_json(s, repo, file_key, |j| serde_json::to_string(j).unwrap_or_default())
+}
+
+/// [`notes_json_string`] as a `Value`, which sorts its keys.
+pub fn notes_json(s: &Session, repo: Option<&str>, file_key: Option<&str>) -> serde_json::Value {
+    with_notes_json(s, repo, file_key, |j| serde_json::to_value(j).unwrap_or_default())
+}
+
+fn with_notes_json<T>(s: &Session, repo: Option<&str>, file_key: Option<&str>, f: impl FnOnce(&NotesJson) -> T) -> T {
     let overview = s.overview.as_ref().map(from_overview).unwrap_or_default();
     let notes = s
         .notes
@@ -274,9 +283,8 @@ pub fn notes_json_string(s: &Session, repo: Option<&str>, file_key: Option<&str>
         })
         .filter(|n| file_key.is_none_or(|k| n.kind != NoteKind::Story && n.key() == k))
         .collect();
-    serde_json::to_string(&NotesJson {
+    f(&NotesJson {
         notes_version: s.notes_version,
         notes,
     })
-    .unwrap_or_default()
 }

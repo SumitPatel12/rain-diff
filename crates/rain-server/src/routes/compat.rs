@@ -108,10 +108,9 @@ fn comment_imports(ctx: &Ctx, repo: Option<&str>, body: &str) -> Reply {
         rain_comments::ops::stamp_commit(&mut s, id);
     }
     let events = if r.changed { import_events(&before, &s) } else { Vec::new() };
-    if r.changed {
-        ctx.save(&s);
-    }
+    let saved = if r.changed { ctx.save(&s) } else { None };
     drop(s);
+    ctx.write(saved);
     for (kind, author, thread, data) in events {
         push(ctx, kind, author, Some(thread), data);
     }
@@ -159,9 +158,7 @@ fn post_comments(ctx: &Ctx, body: &str) -> Reply {
     let merged = import::post_threads(&mut s, threads, base);
     let changed = s.comments_version != before;
     let events = if changed { import_events(&counts, &s) } else { Vec::new() };
-    if changed {
-        ctx.save(&s);
-    }
+    let saved = if changed { ctx.save(&s) } else { None };
     let reply = value(
         200,
         &PostReply {
@@ -172,6 +169,7 @@ fn post_comments(ctx: &Ctx, body: &str) -> Reply {
         },
     );
     drop(s);
+    ctx.write(saved);
     for (kind, author, thread, data) in events {
         push(ctx, kind, author, Some(thread), data);
     }
@@ -199,11 +197,13 @@ fn set_state(s: &mut Session, id: &str, state: ThreadState, sha: Option<String>,
     Some(true)
 }
 
-fn state_changed(ctx: &Ctx, s: &Session, id: &str, by: Option<String>) {
-    ctx.save(s);
+/// Records the state event; returns the save to write once the lock is let go.
+fn state_changed(ctx: &Ctx, s: &Session, id: &str, by: Option<String>) -> Option<rain_comments::Snapshot> {
+    let saved = ctx.save(s);
     let state = s.threads.iter().find(|t| t.id == id).map(|t| (t.state, t.state_sha.clone()));
     let data = state.map_or(Value::Null, |(st, sha)| json!({ "state": st, "sha": sha }));
     push(ctx, EventKind::State, by, Some(id.to_owned()), data);
+    saved
 }
 
 /// `DELETE /api/comments/:id`: difit deletes; Rain resolves (same reply), keeping the history.
@@ -213,11 +213,10 @@ fn resolve(ctx: &Ctx, id: &str) -> Reply {
     let Some(changed) = set_state(&mut s, id, ThreadState::Resolved, None, None) else {
         return error(404, &format!("Thread not found: {id}"));
     };
-    if changed {
-        state_changed(ctx, &s, id, None);
-    }
+    let saved = if changed { state_changed(ctx, &s, id, None) } else { None };
     let version = s.comments_version;
     drop(s);
+    ctx.write(saved);
     if changed {
         ctx.shared.notify();
     }
@@ -253,11 +252,14 @@ fn post_state(ctx: &Ctx, id: &str, body: &str) -> Reply {
     let Some(changed) = set_state(&mut s, id, state, text("sha"), reason) else {
         return error(404, &format!("Thread not found: {id}"));
     };
-    if changed {
-        state_changed(ctx, &s, id, text("author"));
-    }
+    let saved = if changed {
+        state_changed(ctx, &s, id, text("author"))
+    } else {
+        None
+    };
     let version = s.comments_version;
     drop(s);
+    ctx.write(saved);
     if changed {
         ctx.shared.notify();
     }

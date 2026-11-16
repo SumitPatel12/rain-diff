@@ -58,9 +58,9 @@ fn place(s: &App) -> Option<String> {
         });
     }
     let g = s.current()?;
-    let order = s.walk_order();
-    let i = order.iter().position(|&x| x == g)?;
-    Some(format!("File {} of {}", i + 1, order.len()))
+    let l = s.listing();
+    let i = l.order.iter().position(|&x| x == g)?;
+    Some(format!("File {} of {}", i + 1, l.order.len()))
 }
 
 fn chord(c: Command) -> String {

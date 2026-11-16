@@ -48,7 +48,8 @@ impl Drop for GitWatch {
         if let Some(d) = self.debouncer.take() {
             d.stop_nonblocking();
         }
-        // The thread sees `stop` within a tick; nothing waits for it.
+        // Stopping the debouncer drops its sender, which wakes the thread to see `stop` (at the
+        // latest at its next wake); nothing waits for it.
         drop(self.thread.take());
     }
 }
@@ -94,7 +95,10 @@ pub fn watch_git(repo: &Path, on_change: impl Fn() + Send + 'static) -> Result<G
         let mut pending = false;
         let mut last = Instant::now();
         loop {
-            let hit = match rx.recv_timeout(TICK) {
+            // Idle, it sleeps until the cap; a change held by a pause is retried every tick so
+            // `resume` takes effect promptly.
+            let wait = if pending { TICK } else { CAP.saturating_sub(last.elapsed()) };
+            let hit = match rx.recv_timeout(wait) {
                 Ok(()) => true,
                 Err(RecvTimeoutError::Timeout) => false,
                 Err(RecvTimeoutError::Disconnected) => return,

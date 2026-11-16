@@ -142,6 +142,8 @@ pub struct Listing {
     pub changes: [usize; 3],
     /// Folded group sections, drawn under the scrolling rows so they and their Accept always show.
     pub footer: Vec<u8>,
+    /// [`App::list_order`] as of this listing.
+    pub order: Vec<usize>,
     pub version: u64,
 }
 
@@ -277,6 +279,8 @@ impl App {
             self.board.items.len(),
             self.keys.len(),
             self.has_map(),
+            self.reloader.installs(),
+            self.tree.filter_revision(),
         )
             .hash(&mut h);
         (&f.tags, &f.repos, f.unviewed_only, f.commented_only, &f.text).hash(&mut h);
@@ -377,6 +381,7 @@ impl App {
                 }
             }
         }
+        l.order = self.list_order();
         l
     }
 
@@ -441,9 +446,7 @@ impl App {
             group.label().to_lowercase(),
             why.map(|w| format!(" ({w})")).unwrap_or_default()
         );
-        for k in &keys {
-            self.tree.set_viewed(k, true);
-        }
+        self.tree.set_viewed_many(keys.iter().map(|k| (k.as_str(), true)));
         self.persist_viewed_keys(&keys);
         let record = AcceptedGroup {
             group: core_group(group),
@@ -471,6 +474,7 @@ impl App {
         };
         let a = self.mirror.accepted[i].clone();
         let mut items: Vec<(String, String)> = Vec::new();
+        let mut unmarked: Vec<&str> = Vec::new();
         for k in &a.files {
             let Some(g) = self.index_of(k) else { continue };
             let (repo, path) = (self.repo_tag(g).to_owned(), self.diff.files()[g].path.clone());
@@ -481,10 +485,11 @@ impl App {
                 .iter()
                 .any(|v| v.repo == repo && v.file_path == path && v.viewed_at > a.at);
             if !read_since {
-                self.tree.set_viewed(k, false);
+                unmarked.push(k);
                 items.push((repo, path));
             }
         }
+        self.tree.set_viewed_many(unmarked.into_iter().map(|k| (k, false)));
         self.mutate(|s| {
             for (repo, path) in &items {
                 ops::clear_viewed(s, repo, path);

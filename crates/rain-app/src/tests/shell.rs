@@ -241,6 +241,31 @@ fn shift_j_moves_to_the_next_list_sections_first_file() {
     assert_eq!(rt.state.current(), Some(order[0]));
 }
 #[test]
+fn find_hits_are_those_of_a_search_over_lowered_text() {
+    let mut rt = runtime(app(story(), true));
+    for q in ["VoUcHeR", "e", "(", "s.c", "ee", "voucher service"] {
+        rt.update(|s, _| {
+            s.find.edit.text = q.into();
+            s.run_find();
+        });
+        let mut want = Vec::new();
+        for (fi, f) in rt.state.active().files().iter().enumerate() {
+            let text = f.text.to_ascii_lowercase();
+            let mut last = u32::MAX;
+            for (at, _) in text.match_indices(q.to_ascii_lowercase().as_str()) {
+                let i = f.lines.partition_point(|r| (r.end as usize) < at) as u32;
+                if (i as usize) < f.lines.len() && i != last && f.lines[i as usize].start as usize <= at {
+                    last = i;
+                    want.push((fi, i));
+                }
+            }
+        }
+        want.truncate(10_000);
+        assert_eq!(rt.state.find.hits, want, "{q}");
+    }
+}
+
+#[test]
 fn find_hits_follow_the_diff_on_screen() {
     let mut rt = runtime(app(story(), true));
     typed(&mut rt, "/");

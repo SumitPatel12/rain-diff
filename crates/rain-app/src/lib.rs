@@ -14,6 +14,7 @@ mod peek_window;
 mod render;
 mod settings;
 pub mod theme;
+mod title_bar;
 mod view;
 
 #[cfg(test)]
@@ -582,6 +583,10 @@ fn spec() -> AppSpec<App> {
                 scene_base(s);
                 s.selection_scene(Some(app::composer::Later::Menu));
             }),
+            ("tree", |s| {
+                scene_reader(s);
+                s.board.folders = true;
+            }),
             ("more-menu", |s| {
                 scene_reader(s);
                 s.menus.more = true;
@@ -609,7 +614,10 @@ pub fn run(launch: Launch, shared: Arc<Shared>) -> bool {
         launch
     };
     let _ = START.set((launch, shared, Instant::now()));
-    let mut app = rune::App::new(spec()).modifier_keys().on_close(on_close).on_window(icon::apply);
+    let mut app = rune::App::new(spec()).modifier_keys().on_close(on_close).on_window(|w| {
+        icon::apply(w);
+        title_bar::remember(w);
+    });
     peek_window::register(&mut app);
     let main = app.handle();
     note_window::register(&mut app, main);
@@ -621,6 +629,7 @@ static CLOSE_REQUESTED: AtomicBool = AtomicBool::new(false);
 
 /// The close button, Alt+F4, or a `WM_CLOSE` from another process.
 pub(crate) fn on_close(s: &mut App, _: &mut Tx) {
+    s.flush_place();
     s.ask_shutdown();
     CLOSE_REQUESTED.store(true, Ordering::SeqCst);
 }

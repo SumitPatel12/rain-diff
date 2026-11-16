@@ -169,9 +169,18 @@ pub(crate) struct Ctx {
 }
 
 impl Ctx {
-    pub(crate) fn save(&self, s: &Session) {
-        if let Some(path) = &self.session_file
-            && let Err(e) = rain_comments::SessionFile::save(path, s)
+    /// Serialises the session for saving; call it under the session's lock and pass the result
+    /// to [`Ctx::write`] once the lock is let go, so the window never waits on the disk.
+    pub(crate) fn save(&self, s: &Session) -> Option<rain_comments::Snapshot> {
+        let path = self.session_file.as_ref()?;
+        rain_comments::SessionFile::snapshot(path, s)
+            .map_err(|e| eprintln!("Rain: saving {} failed: {e}", path.display()))
+            .ok()
+    }
+
+    pub(crate) fn write(&self, saved: Option<rain_comments::Snapshot>) {
+        if let (Some(snap), Some(path)) = (saved, &self.session_file)
+            && let Err(e) = snap.write()
         {
             eprintln!("Rain: saving {} failed: {e}", path.display());
         }

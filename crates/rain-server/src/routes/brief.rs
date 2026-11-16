@@ -128,10 +128,11 @@ fn store(ctx: &Ctx, mut doc: BriefDoc) -> Reply {
     s.brief = Some(doc);
     s.bump_brief();
     let moved = rain_comments::ops::reanchor_targets(&mut s);
-    ctx.save(&s);
+    let saved = ctx.save(&s);
     let version = s.brief_version;
     let stale = s.brief.as_ref().is_some_and(|b| stale(&s, b));
     drop(s);
+    ctx.write(saved);
     push(
         ctx,
         EventKind::Brief,

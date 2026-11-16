@@ -4,7 +4,7 @@
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
-use rain_comments::comments_json_string;
+use rain_comments::comments_json;
 use rain_core::{Event, EventKind};
 use serde_json::{Value, json};
 use tiny_http::Method;
@@ -62,14 +62,10 @@ fn legacy(ctx: &Ctx, query: &BTreeMap<String, String>) -> Reply {
         Err(r) => return r,
     };
     let (s, changed) = ctx.shared.wait_change(since, Duration::from_secs(timeout));
-    let threads = serde_json::from_str::<Value>(&comments_json_string(&s, None))
-        .ok()
-        .and_then(|mut v| v.get_mut("threads").map(Value::take))
-        .unwrap_or_else(|| json!([]));
-    let notes = serde_json::from_str::<Value>(&rain_comments::notes_json_string(&s, None, None))
-        .ok()
-        .and_then(|mut v| v.get_mut("notes").map(Value::take))
-        .unwrap_or_else(|| json!([]));
+    // Built as values under the lock (no string round trip); the reply is written after it.
+    let field = |mut v: Value, k: &str| v.get_mut(k).map(Value::take).unwrap_or_else(|| json!([]));
+    let threads = field(comments_json(&s, None), "threads");
+    let notes = field(rain_comments::notes_json(&s, None, None), "notes");
     let version = s.version;
     drop(s);
     value(

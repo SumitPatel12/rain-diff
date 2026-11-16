@@ -2,6 +2,7 @@
 //! check against the loaded diff, and comments or questions on its sections, on Map nodes and on
 //! notes (artifact threads).
 
+use std::cell::RefCell;
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
@@ -40,6 +41,8 @@ pub struct BriefState {
     /// were when it was focused.
     pub focus: Option<String>,
     focus_at: Option<ReaderSpot>,
+    /// The floating Verify checklist folded to its pill.
+    pub verify_shut: bool,
     pub show_not_covered: bool,
     pub composer: Option<ArtifactDraft>,
     pub edit: TextEdit,
@@ -58,6 +61,10 @@ pub struct BriefState {
     pub hover_section: Option<String>,
     /// The next pending jump puts the reader back after a reload: it keeps the tab.
     pub(crate) restore_tab: bool,
+    /// Lines each file shows, from the last load.
+    shown: Arc<Shown>,
+    /// [`App::brief_check`] as of a mirror version; dropped by each load.
+    check: RefCell<Option<(u64, Option<BriefCheck>)>>,
 }
 
 /// The reader's cursor, line selection and text selection, to tell whether the user moved on.
@@ -94,6 +101,8 @@ impl App {
             .map(|i| i.key.clone())
             .collect();
         let shown: Arc<Shown> = Arc::new(self.shown_lines());
+        self.brief.shown = shown.clone();
+        self.brief.check.replace(None);
         let keys = Arc::new(self.keys.clone());
         let noise = Arc::new(self.brief.noise.clone());
         let targets: Arc<Vec<(String, String)>> = Arc::new(self.brief_targets());
@@ -120,8 +129,12 @@ impl App {
             .map(|(f, k)| {
                 let mut old: Vec<u32> = f.lines.iter().map(|l| l.old).filter(|&n| n > 0).collect();
                 let mut new: Vec<u32> = f.lines.iter().map(|l| l.new).filter(|&n| n > 0).collect();
-                old.sort_unstable();
-                new.sort_unstable();
+                // A parsed diff's numbers already ascend per side; sort only what doesn't.
+                for v in [&mut old, &mut new] {
+                    if !v.is_sorted() {
+                        v.sort_unstable();
+                    }
+                }
                 (k.clone(), old, new)
             })
             .collect()
@@ -132,11 +145,23 @@ impl App {
         self.mirror.repos.iter().map(|r| (r.id.clone(), r.target.clone())).collect()
     }
 
-    /// The brief against the diff on screen; `None` without a brief.
+    /// The brief against the diff on screen; `None` without a brief. Computed again only when
+    /// the session or the load changed: the Overview draws it on every commit.
     pub fn brief_check(&self) -> Option<BriefCheck> {
+        if let Some((v, c)) = &*self.brief.check.borrow()
+            && *v == self.mirror.version
+        {
+            return c.clone();
+        }
+        let c = self.compute_brief_check();
+        self.brief.check.replace(Some((self.mirror.version, c.clone())));
+        c
+    }
+
+    fn compute_brief_check(&self) -> Option<BriefCheck> {
         let doc = self.brief_doc()?;
-        let shown = self.shown_lines();
-        let shown_fn = |k: &str, side: Side, l: (u32, u32)| shows(&shown, k, side, l);
+        let shown = &self.brief.shown;
+        let shown_fn = |k: &str, side: Side, l: (u32, u32)| shows(shown, k, side, l);
         let targets = self.brief_targets();
         Some(rain_overview::brief::check(
             doc,

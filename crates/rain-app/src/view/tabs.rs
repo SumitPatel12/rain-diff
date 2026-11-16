@@ -85,7 +85,8 @@ pub(super) fn strip(s: &App, look: &Look) -> El {
         .key("reader-tool")
         .w_full()
         .h(space::READER_TOOL)
-        .pl(10.0)
+        // The 30 point tab strip leaves 5 above and below; the same on its left.
+        .pl((space::READER_TOOL - 30.0) / 2.0)
         .pr(8.0)
         .gap(4.0)
         .items_center()

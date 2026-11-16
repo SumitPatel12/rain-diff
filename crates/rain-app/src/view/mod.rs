@@ -25,6 +25,7 @@ mod tabs;
 mod toolbar;
 mod tour;
 pub(crate) mod ui;
+mod verify;
 mod weather;
 mod wholefile;
 
@@ -61,6 +62,7 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
     s.seen_scheme.set(scheme);
     let look = theme::look(scheme);
     let k = &look.kit;
+    crate::title_bar::paint(scheme.is_dark(), look.s.bar, k.c.text_base);
     let mut layer: Vec<El> = Vec::new();
     let top = toolbar::top_bar(s, &look, &mut layer);
     let mut root = col()
@@ -258,7 +260,14 @@ fn muted(t: impl Into<String>, k: &Kit) -> El {
 
 /// The reader: the tab strip, banners, then the Overview or the find bar, filter and diff.
 fn reader(s: &App, look: &Look, cx: &mut Cx<App>) -> El {
-    let pane = reader_pane(s, look, cx);
+    let mut pane = reader_pane(s, look, cx);
+    if s.phase == Phase::Ready
+        && s.reader_tab() == crate::app::ReaderTab::Changes
+        && !s.layout.is_open(Overlay::Map)
+        && let Some(v) = verify::card(s, &look.kit)
+    {
+        pane = pane.child(v.pin(Some(14.0), None, None, Some(14.0)));
+    }
     match conversation::toasts(s, &look.kit) {
         // Toasts stack inside the reader, over its bottom right, clear of the status line and
         // of the Map's node pane.
@@ -310,9 +319,8 @@ fn reader_pane(s: &App, look: &Look, cx: &mut Cx<App>) -> El {
                     row()
                         .gap(4.0)
                         .items_center()
-                        .child(muted("Fix the repo or refs, then press", k))
-                        .child(ui::kbd("Shift+R", k))
-                        .child(muted("to reload.", k)),
+                        .child(muted("Fix the repo or refs, then reload.", k))
+                        .help("Reload  Shift+R"),
                 ),
         )),
         Phase::Ready if s.layout.is_zoomed() => ready(s, k, pane, cx),

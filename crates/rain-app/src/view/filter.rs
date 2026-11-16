@@ -6,7 +6,7 @@ use rune::{Cursor, El, Tx, col, el, row, text};
 use rune_kit::{Kit, Placement, popover};
 
 use super::icons;
-use super::ui::{Ghost, kbd_bare, outline, sr};
+use super::ui::{Ghost, outline, sr};
 use crate::app::App;
 use crate::theme::{TYPE, radius};
 
@@ -82,8 +82,8 @@ pub(super) fn chips_popover(s: &App, k: &Kit, layer: &mut Vec<El>) {
                 .items_center()
                 .radius(radius::SMALL)
                 .cursor(Cursor::Pointer)
-                .child(text("Clear all").font(TYPE.small).color(k.c.text_muted).grow(1.0).a11y_hidden())
-                .child(kbd_bare("Ctrl+Shift+L", k)),
+                .help("Clear all  Ctrl+Shift+L")
+                .child(text("Clear all").font(TYPE.small).color(k.c.text_muted).grow(1.0).a11y_hidden()),
         )
         .on_press(|s: &mut App| {
             s.clear_filter();

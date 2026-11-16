@@ -4,7 +4,7 @@
 use std::time::{Duration, Instant};
 
 use super::*;
-use crate::app::rest::{ATTENTIVE, IDLE_RESET, Weather};
+use crate::app::rest::{ATTENTIVE, IDLE_RESET, UNWATCHED, Weather};
 
 const STEP: Duration = Duration::from_secs(15);
 
@@ -23,6 +23,22 @@ fn reminder(minutes: f64) -> App {
     let mut a = app(story(), false);
     a.settings.break_reminder.minutes = minutes;
     a
+}
+
+#[test]
+fn the_rain_holds_still_while_nobody_watches() {
+    let mut a = reminder(90.0);
+    let t = Instant::now();
+    a.rest.weather = Weather::Flood(t);
+    assert!(!a.rain_unwatched(t + UNWATCHED - STEP, None));
+    assert!(a.rain_unwatched(t + UNWATCHED, None), "a minute with no input");
+    assert!(
+        a.rain_unwatched(t + UNWATCHED, Some(t - STEP)),
+        "input before the rain doesn't count"
+    );
+    assert!(!a.rain_unwatched(t + UNWATCHED, Some(t + STEP)), "input starts the wait over");
+    a.rest.weather = Weather::Drain(t, 0);
+    assert!(!a.rain_unwatched(t + UNWATCHED * 2, None), "the drain always plays");
 }
 
 #[test]

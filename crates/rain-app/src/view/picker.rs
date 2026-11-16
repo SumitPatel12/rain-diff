@@ -5,13 +5,15 @@ use rune::{El, Key, KeyEvent, ScrollSpec, Tx, col, el, row, text};
 use rune_kit::{Kit, TextInput};
 
 use super::icons;
-use super::ui::{group_tag, kbd, sr};
+use super::ui::{group_tag, sr};
 use crate::app::App;
 use crate::app::picker::Target;
 use crate::theme::{TYPE, radius};
 
-/// Lines of the first hunk the preview shows.
-const PREVIEW_LINES: usize = 14;
+/// Lines the preview holds from the first change on; it scrolls through them both ways.
+const PREVIEW_LINES: usize = 120;
+/// The preview pane's width (the panel less the list and its rule).
+const PREVIEW_W: f32 = 539.0;
 
 fn picker_key(s: &mut App, ev: &KeyEvent, tx: &mut Tx) -> bool {
     match ev.key {
@@ -123,8 +125,7 @@ pub(super) fn picker(s: &App, k: &Kit) -> Option<El> {
                     .build(k)
                     .key("picker-input"),
             ),
-        )
-        .child(kbd("Ctrl+P", k));
+        );
     let foot = row()
         .w_full()
         .h(34.0)
@@ -199,7 +200,7 @@ fn preview(s: &App, t: &Target, k: &Kit) -> El {
         .or(f.hunks.first())
         .map(|h| rain_diffview::hunk_header(f, h))
         .unwrap_or_default();
-    let mut pane = pane.child(
+    let pane = pane.child(
         row()
             .w_full()
             .h(34.0)
@@ -218,6 +219,7 @@ fn preview(s: &App, t: &Target, k: &Kit) -> El {
             ),
     );
     let num = rune::tok::TextStyle::new(12.0, 400.0).mono().lh(20.0);
+    let mut body = col().key("picker-preview-lines").min_w(PREVIEW_W).pb(6.0);
     for i in start..(start + PREVIEW_LINES).min(f.lines.len()) {
         let l = &f.lines[i];
         let (sign, ink, fill) = match l.kind {
@@ -232,10 +234,10 @@ fn preview(s: &App, t: &Target, k: &Kit) -> El {
                     .color(k.c.text_faint),
             )
         };
-        pane = pane.child(
+        body = body.child(
             row()
-                .w_full()
                 .h(20.0)
+                .pr(16.0)
                 .fill(fill)
                 .child(n(l.old))
                 .child(n(l.new))
@@ -244,10 +246,17 @@ fn preview(s: &App, t: &Target, k: &Kit) -> El {
                     text(f.line_text(i as u32).replace('\t', "    "))
                         .font(crate::CODE)
                         .color(k.c.text_base)
-                        .truncate()
-                        .shrink(),
+                        .single_line(),
                 ),
         );
     }
-    pane
+    pane.child(
+        col()
+            .key("picker-preview-scroll")
+            .w_full()
+            .grow(1.0)
+            .min_h(0.0)
+            .scroll_xy()
+            .child(body),
+    )
 }

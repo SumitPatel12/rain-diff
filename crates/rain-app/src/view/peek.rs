@@ -11,7 +11,6 @@ use super::ui::{Ghost, outline, sr};
 use crate::app::{App, PeekContent};
 use crate::theme::{Look, TYPE, radius};
 
-const WIDTH: f32 = 660.0;
 const MAX_HEIGHT: f32 = 420.0;
 const ROW_H: f32 = 20.0;
 
@@ -59,7 +58,9 @@ pub(crate) fn code(c: &PeekContent, look: &Look) -> El {
     let palette = look.scheme.syntax();
     let highlights = rain_syntax::highlight(palette, c.lang.as_deref(), &joined);
     let theme = look.scheme.code_kinds(k);
-    let mut out = col().key("peek-code").w_full().py(4.0);
+    // Rows take their natural width (the longest line) and stretch to the widest, so the code
+    // scrolls sideways instead of being cut.
+    let mut out = col().key("peek-code").py(4.0);
     if c.rows.is_empty() {
         return out.child(
             text("No lines of this file are in the diff")
@@ -75,7 +76,6 @@ pub(crate) fn code(c: &PeekContent, look: &Look) -> El {
             out = out.child(
                 row()
                     .h(16.0)
-                    .w_full()
                     .pl(12.0)
                     .items_center()
                     .fill(look.s.well)
@@ -123,8 +123,8 @@ pub(crate) fn code(c: &PeekContent, look: &Look) -> El {
         out = out.child(
             row()
                 .key(format!("peek-row-{i}"))
-                .w_full()
                 .h(ROW_H)
+                .pr(16.0)
                 .fill(t.as_ref().map_or(k.c.bg_base, |t| t.line))
                 .child(gutter)
                 .child(text(sign).font(font).color(sign_color).w(18.0).pl(4.0))
@@ -133,9 +133,7 @@ pub(crate) fn code(c: &PeekContent, look: &Look) -> El {
                         .font(font)
                         .color(k.c.text_base)
                         .spans(if r.text.contains('\t') { Vec::new() } else { spans })
-                        .grow(1.0)
-                        .shrink()
-                        .min_w(0.0),
+                        .single_line(),
                 ),
         );
         start = end + 1;
@@ -217,8 +215,8 @@ fn foot(k: &Kit) -> El {
                     .radius(radius::SMALL)
                     .fill(r.accent)
                     .cursor(rune::Cursor::Pointer)
-                    .child(text("Open in reader").font(TYPE.small).color(r.on_accent).a11y_hidden())
-                    .child(text("↵").font(TYPE.micro).color(r.on_accent).a11y_hidden()),
+                    .help("Open in reader  Enter")
+                    .child(text("Open in reader").font(TYPE.small).color(r.on_accent).a11y_hidden()),
                 k.c.contrast_hover,
                 k.c.contrast_pressed,
             )
@@ -238,7 +236,8 @@ pub(super) fn layer(s: &App, look: &Look) -> Option<El> {
     let k = &look.kit;
     let t = s.brief.peek.open.as_ref()?;
     let c = s.peek_content(t);
-    let width = WIDTH.min((s.diff_width - 32.0).max(320.0));
+    // The reader's width, so long lines get room; anything longer scrolls sideways.
+    let width = (s.diff_width - 32.0).max(320.0);
     let card = col()
         .key("peek")
         .role("dialog")
@@ -251,7 +250,15 @@ pub(super) fn layer(s: &App, look: &Look) -> Option<El> {
         .on_hover_change(|s: &mut App, inside, tx: &mut Tx| s.peek_card_hover(inside, tx))
         .child(head(&c, k))
         .child(el().w_full().h(1.0).fill(k.c.border_weak))
-        .child(col().w_full().min_h(0.0).shrink().child(popover::fit_scroll(code(&c, look))))
+        .child(
+            col()
+                .key("peek-scroll")
+                .w_full()
+                .min_h(0.0)
+                .shrink()
+                .scroll_xy()
+                .child(code(&c, look).min_w(width)),
+        )
         .child(el().w_full().h(1.0).fill(k.c.border_weak))
         .child(foot(k));
     let surface = popover::raised(k, card, radius::CARD);

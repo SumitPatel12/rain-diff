@@ -19,6 +19,7 @@ mod selection;
 mod shell;
 mod theme;
 mod tour;
+mod verify;
 mod wholefile;
 
 use std::path::PathBuf;

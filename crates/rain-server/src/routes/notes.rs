@@ -35,15 +35,17 @@ fn post_notes(ctx: &Ctx, repo: Option<&str>, replace: bool, body: &str) -> Reply
     let author = incoming.first().and_then(|n| n.author.clone());
     let mut s = ctx.shared.lock();
     let r = add_notes(&mut s, incoming, repo.unwrap_or(""), replace);
+    let mut saved = None;
     if r.changed {
         if ctx.shared.has_excerpt_source() {
             rain_comments::snapshot_notes(&mut s, &|r, p, a| ctx.shared.excerpt(r, p, a));
         }
         rain_comments::ops::reanchor_targets(&mut s);
-        ctx.save(&s);
+        saved = ctx.save(&s);
     }
     let version = s.notes_version;
     drop(s);
+    ctx.write(saved);
     if r.changed {
         push(
             ctx,
@@ -69,9 +71,10 @@ fn delete_note(ctx: &Ctx, id: &str) -> Reply {
         return error(404, &format!("Note not found: {id}"));
     }
     rain_comments::ops::reanchor_targets(&mut s);
-    ctx.save(&s);
+    let saved = ctx.save(&s);
     let version = s.notes_version;
     drop(s);
+    ctx.write(saved);
     push(
         ctx,
         rain_core::EventKind::Notes,

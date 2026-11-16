@@ -130,11 +130,10 @@ fn title_row(s: &App, doc: Option<&BriefDoc>, k: &Kit) -> El {
     {
         let steps = s.tour_steps().len();
         let label = match steps {
-            0 => "Start tour".to_owned(),
-            1 => "Start tour · 1 step".to_owned(),
-            n => format!("Start tour · {n} steps"),
+            1 => "Start tour, 1 step".to_owned(),
+            n => format!("Start tour, {n} steps"),
         };
-        let (_, r) = sr(k);
+        let (surf, r) = sr(k);
         let b = k
             .interactive_with(
                 row()
@@ -151,17 +150,30 @@ fn title_row(s: &App, doc: Option<&BriefDoc>, k: &Kit) -> El {
                     .cursor(rune::Cursor::Pointer)
                     .focusable(true)
                     .child(icons::draw(&icons::PLAY, 14.0, r.on_accent))
-                    .child(text(label).font(TYPE.strong).color(r.on_accent).a11y_hidden())
-                    .child(text("Shift+T").font(TYPE.micro_mono).color(r.on_accent).a11y_hidden()),
+                    .child(text("Start tour").font(TYPE.strong).color(r.on_accent).a11y_hidden()),
                 k.c.contrast_hover,
                 k.c.contrast_pressed,
             )
             .press_scale(0.97);
-        c = c.child(if steps == 0 {
+        let b = if steps == 0 {
             b.opacity(0.45).disabled(true)
         } else {
-            b.on_press_tx(|s: &mut App, tx: &mut Tx| s.start_tour(tx))
-        });
+            b.on_press_tx(|s: &mut App, tx: &mut Tx| s.start_tour(tx)).child(
+                row()
+                    .key("brief-tour-count")
+                    .min_w(18.0)
+                    .h(18.0)
+                    .px(5.0)
+                    .center()
+                    .radius(9.0)
+                    .fill(surf.card_head)
+                    .border(1.5, r.accent)
+                    .pin(None, Some(-8.0), Some(-8.0), None)
+                    .a11y_hidden()
+                    .child(text(steps.to_string()).font(TYPE.micro.features("'tnum' 1")).color(k.c.text_base)),
+            )
+        };
+        c = c.child(b);
     }
     c
 }
@@ -548,7 +560,8 @@ fn invariant(s: &App, k: &Kit, n: usize, id: &str, body: &str, extra: El) -> El 
         .mx(-12.0)
         .radius(radius::CARD)
         .items_start()
-        .child(text(format!("{n}.")).font(TYPE.body).color(k.c.text_muted).w(20.0).pt(24.0))
+        // The head row is 24 points, then a 4 point gap: the number sits on the body's first line.
+        .child(text(format!("{n}.")).font(TYPE.body).color(k.c.text_muted).w(20.0).pt(28.0))
         .child(item);
     if s.brief.hover_section.as_deref() == Some(id) {
         c = c.fill(k.c.hover);
@@ -759,7 +772,7 @@ pub(super) fn md_body(s: &App, id: &str, body: &str, k: &Kit) -> El {
     let (link_anchor, sel_id) = (anchor.clone(), id.to_owned());
     let md = Markdown::new(src)
         .style(
-            rune_kit::MarkdownStyle::from_kit(k)
+            super::ui::md_style(k)
                 .inline_code_bg(rune::Color::TRANSPARENT)
                 .inline_code_pad(1.0)
                 .syntax_theme(s.seen_scheme.get().code_kinds(k)),
@@ -901,7 +914,7 @@ fn labelled_chips(s: &App, k: &Kit, key: &str, label: &str, cites: &[Cite]) -> E
         .key(key.to_owned())
         .gap(6.0)
         .items_center()
-        .child(muted(label, k))
+        .child(muted(label, k).w(64.0))
         .child(chips(s, k, key, cites))
 }
 

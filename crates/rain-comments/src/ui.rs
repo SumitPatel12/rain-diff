@@ -895,8 +895,7 @@ impl<'t, S: 'static> ThreadCard<'t, S> {
                                 .font(k.ty.small)
                                 .color(if on { k.c.text_base } else { k.c.text_muted })
                                 .a11y_hidden(),
-                        )
-                        .child(text(key).font(MICRO).color(k.c.text_faint).a11y_hidden());
+                        );
                     let action = if d == Disposition::Dismiss && !on {
                         CardAction::OpenDismiss
                     } else {
@@ -1075,8 +1074,9 @@ fn small_button(k: &Kit, key: &str, name: &str, chord: Option<&str>, outlined: b
     if outlined {
         b = b.border(1.0, k.c.border_base);
     }
+    // The key lives in the tooltip, never on the face.
     if let Some(c) = chord {
-        b = b.child(text(c.to_owned()).font(MICRO).color(k.c.text_faint).a11y_hidden());
+        b = b.help(format!("{name}  {c}"));
     }
     k.interactive(b).focusable(true).press_scale(0.97)
 }
@@ -1462,8 +1462,8 @@ impl<S: 'static> Composer<S> {
                         .radius(5.0)
                         .fill(k.c.bg_accent)
                         .focusable(true)
-                        .child(text(label).font(STRONG_SMALL).color(k.c.submit_fg).a11y_hidden())
-                        .child(text("Ctrl+Enter").font(MONO_MICRO).color(k.c.submit_fg).a11y_hidden()),
+                        .help(format!("{label}  Ctrl+Enter"))
+                        .child(text(label).font(STRONG_SMALL).color(k.c.submit_fg).a11y_hidden()),
                     k.c.contrast_hover,
                     k.c.contrast_pressed,
                 )
@@ -1507,13 +1507,13 @@ fn mode_switch<S: 'static>(k: &Kit, m: ComposerMode, on_mode: Option<ModeFn<S>>)
             .gap(6.0)
             .center_y()
             .radius(4.0)
+            .help(format!("{name}  {chord}"))
             .child(
                 text(name)
                     .font(k.ty.small)
                     .color(if on { k.c.text_base } else { k.c.text_muted })
                     .a11y_hidden(),
-            )
-            .child(text(chord).font(MONO_MICRO).color(k.c.text_faint).a11y_hidden());
+            );
         t = if on {
             t.fill(k.c.layer_01).border(1.0, k.c.border_base)
         } else {
