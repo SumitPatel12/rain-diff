@@ -23,7 +23,7 @@ mod testing;
 
 pub use model::{hunk_header, language};
 pub use state::{
-    Align, Annotation, DiffMode, DiffState, EXPAND_STEP, Expand, Layout, LineRange, LineRef, Metrics, Opened, SpanSelection, Spot, Vim,
-    VimKey, Visual,
+    Align, Annotation, Caret, DiffMode, DiffState, EXPAND_STEP, Expand, Layout, LineRange, LineRef, Metrics, Opened, SpanSelection, Spot,
+    Vim, VimKey, Visual,
 };
-pub use view::{DiffColors, DiffView, SCROLL_KEY, line_builds};
+pub use view::{DiffColors, DiffView, SCROLL_KEY, fold_builds, line_builds};

@@ -35,6 +35,35 @@ impl App {
         }
     }
 
+    /// Folds the current file back to its changes when it shows whole.
+    pub fn changes_only(&mut self, tx: &mut Tx) {
+        match self.current() {
+            Some(g) if self.is_whole(g) => self.toggle_whole(g, tx),
+            _ => self.status = "Already only the changes".into(),
+        }
+    }
+
+    /// The way back from `E`: every file of every diff folds to its changes, opened context too,
+    /// with one rebuild each. The texts read stay, so opening a file again is instant.
+    pub fn collapse_all_context(&mut self, tx: &mut Tx) {
+        let a = self.active();
+        let n = (0..a.files().len())
+            .filter(|&l| a.whole(l) || a.opened(l).is_some_and(|o| o.revealed.iter().any(|&r| r != (0, 0))))
+            .count();
+        if n == 0 {
+            self.status = "Already only the changes".into();
+            return;
+        }
+        self.diff.set_whole_where(false, |_| true);
+        for v in self.subsets_mut() {
+            v.diff.set_whole_where(false, |_| true);
+        }
+        if let Some(l) = self.active().cursor().map(|(f, _)| f) {
+            self.keep_cursor(l, tx);
+        }
+        self.status = format!("Changes only: {n} file{} folded", if n == 1 { "" } else { "s" });
+    }
+
     /// Whether full-list file `g` shows whole in the diff on screen, or will once its texts arrive.
     pub fn is_whole(&self, g: usize) -> bool {
         self.local(g).is_some_and(|l| self.active().whole(l))

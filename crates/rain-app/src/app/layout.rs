@@ -4,7 +4,14 @@
 use rain_diffview::DiffMode;
 use rune_kit::PaneState;
 
+use rain_core::command::Command;
+
 use super::App;
+
+/// ` (Ctrl+B)`: a command's key in brackets, empty when it has none.
+fn paren(c: Command) -> String {
+    c.chord().map(|k| format!(" ({})", k.display())).unwrap_or_default()
+}
 use crate::settings::ViewLayout;
 
 /// Below this window width the Conversation and Map are always overlays.
@@ -162,7 +169,7 @@ impl App {
                 self.layout.zoomed = Some(self.layout_snapshot());
                 self.sidebar.set_open(false);
                 self.layout.overlays.clear();
-                self.status = ZOOMED.into();
+                self.status = zoomed_status();
             }
         }
         self.apply_split();
@@ -222,7 +229,9 @@ impl App {
             ViewLayout::Split => (
                 DiffMode::Unified,
                 Some(format!(
-                    "Each side would get {cols} columns; split needs {SPLIT_MIN_COLUMNS}. Widen the window, hide the list (Ctrl+B) or zoom (Shift+Esc)"
+                    "Each side would get {cols} columns; split needs {SPLIT_MIN_COLUMNS}. Widen the window, hide the list{} or zoom{}",
+                    paren(Command::ToggleList),
+                    paren(Command::Zoom)
                 )),
             ),
         }
@@ -234,7 +243,24 @@ impl App {
     }
 }
 
-pub const ZOOMED: &str = "Zoomed · Ctrl+L files · C conversation · m map · o overview · Shift+Esc restore";
+/// The status zoom leaves, with the keys out of it.
+pub fn zoomed_status() -> String {
+    crate::keys::with_hints(
+        "Zoomed",
+        &[
+            (Command::FilterFiles, "files"),
+            (Command::Conversation, "conversation"),
+            (Command::Map, "map"),
+            (Command::Brief, "overview"),
+            (Command::Zoom, "restore"),
+        ],
+    )
+}
+
+/// Whether `status` is the one [`zoomed_status`] makes, without building it.
+pub fn is_zoomed_status(status: &str) -> bool {
+    status == "Zoomed" || status.starts_with("Zoomed · ")
+}
 
 /// The list pane as the settings describe it.
 pub(crate) fn list_pane(width: f32, open: bool) -> PaneState {

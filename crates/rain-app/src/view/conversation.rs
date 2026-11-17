@@ -3,6 +3,7 @@
 
 use rain_comments::anchor_label;
 use rain_comments::label::first_sentence;
+use rain_core::command::Command;
 use rain_core::{AnchorState, AnswerStatus, PresenceState, TargetKind, Thread, ThreadKind, ThreadState, Verdict};
 use rune::{Color, El, ScrollSpec, Tx, col, el, row, text};
 use rune_kit::{ButtonVariant, Kit};
@@ -49,7 +50,10 @@ pub(super) fn presence_dot(s: &App, k: &Kit) -> El {
             .key("presence")
             .role("button")
             .label(full.clone())
-            .description(format!("{full} · Conversation (C)"))
+            .description(match Command::Conversation.chord() {
+                Some(c) => format!("{full} · Conversation ({})", c.display()),
+                None => format!("{full} · Conversation"),
+            })
             .px(8.0)
             .py(4.0)
             .gap(6.0)

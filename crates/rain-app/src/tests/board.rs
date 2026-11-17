@@ -1,6 +1,7 @@
 use std::sync::Arc;
 use std::time::Instant;
 
+use rain_core::keymap::Profile;
 use rain_core::{Launch, Shared};
 use rain_tree::TreeFilter;
 use rain_triage::Group;
@@ -119,6 +120,98 @@ fn accept_marks_the_group_logs_why_spares_the_real_line_and_undoes() {
 }
 
 #[test]
+fn an_accepted_group_in_done_lists_its_files_and_undoes_on_its_own() {
+    let mut rt = sized_runtime(groups_app(), (1920.0, 1400.0));
+    let l = rt.state.listing();
+    let groups: Vec<Group> = crate::app::board::GROUP_SECTIONS
+        .iter()
+        .filter(|(sec, _)| l.acceptable[*sec as usize] > 0)
+        .map(|(_, g)| *g)
+        .take(2)
+        .collect();
+    assert_eq!(groups.len(), 2, "two groups to accept");
+    for g in &groups {
+        let g = *g;
+        rt.update(|s, tx| s.accept(g, tx));
+    }
+    rt.update(|s, _| s.unfold_section(crate::app::board::DONE));
+    settle(&mut rt);
+    let first: Vec<usize> = rt.state.shared.lock().accepted[0]
+        .files
+        .iter()
+        .filter_map(|k| rt.state.index_of(k))
+        .collect();
+    assert!(first.iter().all(|g| !rt.state.list_order().contains(g)));
+    let file = |rt: &Runtime<App>, g: usize| format!("done-file-{}", rt.state.keys[g]);
+    assert!(rt.find(&file(&rt, first[0])).is_none(), "folded until pressed");
+
+    tap(&mut rt, "done-0");
+    for &g in &first {
+        assert!(rt.find(&file(&rt, g)).is_some(), "the accepted file {g} is listed");
+    }
+    let key = file(&rt, first[0]);
+    tap(&mut rt, &key);
+    let a = rt.state.active();
+    let l = rt.state.local(first[0]).unwrap();
+    assert!(!a.collapsed(l), "a listed file opens");
+    let head = a.file_rows()[l] as usize;
+    assert!(a.visible_rows().contains(&head), "and scrolls into view");
+
+    tap(&mut rt, "undo-accept-0");
+    let log = rt.state.shared.lock().accepted.clone();
+    assert!(log[0].undone && !log[1].undone, "the pressed group only, not the newest");
+    let s = &rt.state;
+    assert!(
+        first.iter().all(|&g| !s.is_viewed(g) && s.list_order().contains(&g)),
+        "back in its section"
+    );
+    assert!(rt.find("done-0").is_none() && rt.find("done-1").is_some());
+    typed(&mut rt, "u");
+    assert!(rt.state.shared.lock().accepted[1].undone, "u still undoes the newest left");
+}
+
+#[test]
+fn accept_hints_follow_the_profile() {
+    let help = |rt: &Runtime<App>, key: &str| {
+        rt.elements()
+            .into_iter()
+            .find(|e| !e.exiting && e.key.as_deref() == Some(key))
+            .and_then(|e| e.help)
+    };
+    let mut rt = sized_runtime(groups_app(), (1920.0, 1400.0));
+    let g = crate::app::board::GROUP_SECTIONS
+        .iter()
+        .find(|(sec, _)| rt.state.listing().acceptable[*sec as usize] > 0)
+        .map(|(_, g)| *g)
+        .unwrap();
+    rt.update(|s, tx| s.accept(g, tx));
+    rt.update(|s, _| s.unfold_section(crate::app::board::DONE));
+    settle(&mut rt);
+    for (p, undo, viewed) in [
+        (Profile::Vim, "u", "Space"),
+        (Profile::VsCode, "Ctrl+Z", "Ctrl+Enter"),
+        (Profile::JetBrains, "Ctrl+Z", "Ctrl+Enter"),
+    ] {
+        rt.update(|s, _| {
+            s.set_profile(p);
+            if let Some((_, at)) = &mut s.board.snack {
+                *at = Instant::now();
+            }
+        });
+        settle(&mut rt);
+        assert_eq!(help(&rt, "accept-snack-action"), Some(format!("Undo the accept  {undo}")), "{p:?}");
+        let row = help(&rt, "undo-accept-0").unwrap_or_default();
+        assert!(row.ends_with(&format!("unviewed  {undo} for the latest")), "{p:?}: {row}");
+        rt.update(|s, tx| s.accept_group(tx));
+        assert_eq!(
+            rt.state.status,
+            format!("Real changes are read one by one · {viewed} marks this file viewed"),
+            "{p:?}"
+        );
+    }
+}
+
+#[test]
 fn shift_a_accepts_the_current_files_group_and_refuses_real_changes() {
     let mut rt = runtime(groups_app());
     let first = rt.state.current().unwrap();
@@ -206,6 +299,9 @@ fn the_board_single_scene_shows_its_group_card() {
     assert!(rt.state.single_mode());
     assert!(rt.find("group-card").is_some());
     assert!(rt.find("empty").is_none(), "not \"No changes.\" beside a full list");
+    let accept = rt.elements().into_iter().find(|e| e.key.as_deref() == Some("card-accept")).unwrap();
+    assert!(!accept.label.unwrap_or_default().contains("Space"), "no key on the button");
+    assert_eq!(accept.help.as_deref(), Some("Accept this group's files  Space"));
 }
 
 #[test]

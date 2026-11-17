@@ -22,7 +22,7 @@ fn switch(s: &App, look: &Look) -> El {
     let mut seg = row()
         .key("tab-strip")
         .role("tablist")
-        .label("Overview or Changes  o")
+        .label(crate::keys::tip("Overview or Changes", Command::Brief))
         .padding(2.0)
         .radius(7.0)
         .fill(look.s.well)
@@ -39,7 +39,7 @@ fn switch(s: &App, look: &Look) -> El {
             .key(key)
             .role("tab")
             .label(said)
-            .help(format!("{name}  o"))
+            .help(crate::keys::tip(name, Command::Brief))
             .checked(tab == on)
             .h(24.0)
             .px(10.0)
@@ -97,7 +97,10 @@ pub(super) fn strip(s: &App, look: &Look) -> El {
                     .key("tool-one-at-a-time")
                     .role("button")
                     .label("One at a time")
-                    .help("One file at a time · Shift+S back to the stream")
+                    .help(match Command::ToggleReaderMode.chord() {
+                        Some(c) => format!("One file at a time · {} back to the stream", c.display()),
+                        None => "One file at a time".to_owned(),
+                    })
                     .ml(8.0)
                     .h(20.0)
                     .px(6.0)
@@ -113,7 +116,7 @@ pub(super) fn strip(s: &App, look: &Look) -> El {
         .child(
             Ghost::new("tool-find")
                 .icon(&icons::SEARCH)
-                .help("Find in diff  /")
+                .help(crate::keys::tip("Find in diff", Command::Find))
                 .on(s.find.open)
                 .build(k)
                 .on_press_tx(run(Command::Find)),
@@ -122,7 +125,7 @@ pub(super) fn strip(s: &App, look: &Look) -> El {
             Ghost::new("tool-tour")
                 .icon(&icons::TOUR)
                 .label("Tour")
-                .help("Tour  Shift+T")
+                .help(crate::keys::tip("Tour", Command::Tour))
                 .on(s.layout.is_open(Overlay::Tour))
                 .build(k)
                 .on_press_tx(run(Command::Tour)),
@@ -132,7 +135,7 @@ pub(super) fn strip(s: &App, look: &Look) -> El {
             Ghost::new("tool-map")
                 .icon(&icons::MAP)
                 .label("Map")
-                .help("Map  m")
+                .help(crate::keys::tip("Map", Command::Map))
                 .on(s.layout.is_open(Overlay::Map))
                 .build(k)
                 .on_press_tx(run(Command::Map)),
@@ -142,7 +145,7 @@ pub(super) fn strip(s: &App, look: &Look) -> El {
     let mut conv = Ghost::new("tool-conversation")
         .icon(&icons::CHAT)
         .label("Conversation")
-        .help("Conversation  Shift+C")
+        .help(crate::keys::tip("Conversation", Command::Conversation))
         .on(s.layout.is_open(Overlay::Conversation));
     if waiting > 0 {
         conv = conv.child(

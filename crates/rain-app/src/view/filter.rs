@@ -1,6 +1,7 @@
 //! The filter strip above the diff while a file filter is active, the funnel by the list's
 //! filter field, its popover of toggles, and the list's "N files hidden" foot.
 
+use rain_core::command::Command;
 use rain_tree::{TreeFilter, TreeView};
 use rune::{Cursor, El, Tx, col, el, row, text};
 use rune_kit::{Kit, Placement, popover};
@@ -82,7 +83,7 @@ pub(super) fn chips_popover(s: &App, k: &Kit, layer: &mut Vec<El>) {
                 .items_center()
                 .radius(radius::SMALL)
                 .cursor(Cursor::Pointer)
-                .help("Clear all  Ctrl+Shift+L")
+                .help(crate::keys::tip("Clear all", Command::ClearFilter))
                 .child(text("Clear all").font(TYPE.small).color(k.c.text_muted).grow(1.0).a11y_hidden()),
         )
         .on_press(|s: &mut App| {
@@ -137,8 +138,8 @@ pub(super) fn filter_bar(s: &App, k: &Kit) -> Option<El> {
                     .a11y_hidden(),
             )
             .child(
-                outline("filter-clear", "Clear", Some("Ctrl+Shift+L"), 24.0, k)
-                    .help("Clear the filter  Ctrl+Shift+L · Esc")
+                outline("filter-clear", "Clear", None, 24.0, k)
+                    .help(format!("{} · Esc", crate::keys::tip("Clear the filter", Command::ClearFilter)))
                     .on_press(|s: &mut App| {
                         s.clear_filter();
                     }),

@@ -1,7 +1,9 @@
 //! Window and view preferences kept across runs in `%LOCALAPPDATA%\Rain\settings.json`.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use rain_core::keymap::{Keymap, Profile};
 use serde::{Deserialize, Serialize};
 
 use crate::theme::Scheme;
@@ -120,6 +122,9 @@ pub struct Settings {
     pub ask: AskSettings,
     /// After this much active use the window rains until you take a break.
     pub break_reminder: BreakSettings,
+    /// The shortcut profile and the user's own keys over it.
+    #[serde(deserialize_with = "or_default")]
+    pub keymap: KeymapSettings,
     /// Set when the file held round-2 keys, so the caller rewrites it once without them.
     #[serde(skip)]
     pub migrated: bool,
@@ -144,8 +149,55 @@ impl Default for Settings {
             editor: None,
             ask: AskSettings::default(),
             break_reminder: BreakSettings::default(),
+            keymap: KeymapSettings::default(),
             migrated: false,
         }
+    }
+}
+
+/// `keymap: { profile: "vim" | "vscode" | "jetbrains", overrides: { "<command id>": ["Ctrl+K"] | [] } }`.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct KeymapSettings {
+    #[serde(deserialize_with = "or_default")]
+    pub profile: Profile,
+    /// As written: entries that aren't a list of key names are reported and ignored.
+    #[serde(deserialize_with = "or_default", skip_serializing_if = "BTreeMap::is_empty")]
+    pub overrides: BTreeMap<String, serde_json::Value>,
+}
+
+impl KeymapSettings {
+    /// The overrides that are lists of strings, and a line for each entry that isn't.
+    pub fn overrides(&self) -> (BTreeMap<String, Vec<String>>, Vec<String>) {
+        let mut ok = BTreeMap::new();
+        let mut bad = Vec::new();
+        for (id, v) in &self.overrides {
+            let keys = v
+                .as_array()
+                .and_then(|a| a.iter().map(|k| k.as_str().map(str::to_owned)).collect::<Option<Vec<_>>>());
+            match keys {
+                Some(keys) => {
+                    ok.insert(id.clone(), keys);
+                }
+                None => bad.push(format!("`{id}` needs a list of keys")),
+            }
+        }
+        (ok, bad)
+    }
+
+    pub fn set_overrides(&mut self, overrides: &BTreeMap<String, Vec<String>>) {
+        self.overrides = overrides
+            .iter()
+            .map(|(id, keys)| (id.clone(), serde_json::Value::from(keys.clone())))
+            .collect();
+    }
+
+    /// The keymap these settings make, and what in them was ignored.
+    pub fn build(&self) -> (Keymap, Vec<String>) {
+        let (ok, mut bad) = self.overrides();
+        let (km, more) = Keymap::with_overrides(self.profile, &ok);
+        bad.extend(more);
+        (km, bad)
     }
 }
 
@@ -422,6 +474,52 @@ mod tests {
         assert_eq!(Theme::GruvboxMedium.scheme(false), Scheme::GruvboxMedium);
         assert_eq!(Theme::from_flag("gruvbox-hard"), Some(Theme::GruvboxHard));
         assert_eq!(Theme::from_flag("dark"), None, "Rune's own --theme values stay Rune's");
+    }
+
+    #[test]
+    fn keymap_overrides_round_trip_and_bad_entries_are_reported_not_fatal() {
+        use rain_core::Command;
+        let dir = std::env::temp_dir().join(format!("rain-settings-keymap-{}", std::process::id()));
+        let path = dir.join("settings.json");
+        let mut s = Settings::default();
+        assert_eq!(s.keymap.profile, Profile::Vim, "Vim is the default profile");
+        assert!(!serde_json::to_string(&s).unwrap().contains("overrides"));
+        s.keymap.profile = Profile::JetBrains;
+        let mut o = BTreeMap::new();
+        o.insert("comment".to_owned(), vec!["Ctrl+M".to_owned()]);
+        o.insert("ask".to_owned(), vec![]);
+        s.keymap.set_overrides(&o);
+        s.save(&path).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            text.contains(r#""profile": "jetbrains""#) && text.contains(r#""comment": ["#),
+            "{text}"
+        );
+        let back = Settings::load(&path);
+        assert_eq!(back, s);
+        let (km, problems) = back.keymap.build();
+        assert!(problems.is_empty(), "{problems:?}");
+        assert_eq!(km.hint(Command::Comment), "Ctrl+M");
+        assert!(km.chords(Command::Ask).is_empty());
+        assert_eq!(km.hint(Command::NextHunk), "F7");
+
+        let odd = Settings::parse(
+            br#"{"codeSize": "L", "keymap": {"profile": "emacs", "overrides": {"comment": "Ctrl+M", "find": [3], "no-such": ["Ctrl+J"], "picker": ["Ctrl+Q"], "go-to-file": ["Ctrl+Q", "Hyper+X"], "reply": ["Up"]}}}"#,
+        )
+        .expect("bad keymap entries never fail the file");
+        assert_eq!((odd.code_size, odd.keymap.profile), (CodeSize::L, Profile::Vim));
+        let (km, problems) = odd.keymap.build();
+        assert_eq!(problems.len(), 6, "{problems:?}");
+        assert_eq!(km.hint(Command::Picker), "Ctrl+Q");
+        assert_eq!(km.hint(Command::Comment), "c", "an ignored entry leaves the default");
+        assert_eq!(
+            km.hint(Command::Reply),
+            "",
+            "the universal key is refused, the entry still replaces"
+        );
+        let junk = Settings::parse(br#"{"keymap": 42, "theme": "dark"}"#).unwrap();
+        assert_eq!((junk.keymap, junk.theme), (KeymapSettings::default(), Theme::Dark));
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

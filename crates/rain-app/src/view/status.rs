@@ -73,35 +73,51 @@ fn chord(c: Command) -> String {
 
 /// Up to four (key, what) hints for what the reader is doing, from the keymap.
 pub(crate) fn hint_pairs(s: &App) -> Vec<(String, String)> {
+    let fixed = |v: &[(&str, &str)]| -> Vec<(String, String)> { v.iter().map(|(a, b)| ((*a).to_owned(), (*b).to_owned())).collect() };
     let pairs: Vec<(Command, &str)> = if s.phase != crate::app::Phase::Ready {
-        return vec![("Shift+R".into(), "reload".into()), ("Ctrl+K".into(), "palette".into())];
+        vec![(Command::Reload, "reload"), (Command::Palette, "palette")]
     } else if s.active().visual().is_some() && s.composer.is_none() {
-        return vec![
-            ("y".into(), "yank · c comment · ? ask".into()),
-            ("Esc".into(), "leave visual".into()),
-        ];
+        if s.keymap_profile().vim_motions() {
+            return fixed(&[("y", "yank · c comment · ? ask"), ("Esc", "leave visual")]);
+        }
+        let mut v = fixed(&[("Ctrl+C", "copy")]);
+        v.extend([(Command::Comment, "comment"), (Command::Ask, "ask")].map(|(c, w)| (chord(c), w.to_owned())));
+        v.push(("Esc".into(), "clear".into()));
+        return v.into_iter().filter(|(k, _)| !k.is_empty()).collect();
     } else if s.brief.peek.open.is_some() {
-        return vec![("Enter".into(), "open in reader".into()), ("Esc".into(), "close peek".into())];
+        return fixed(&[("Enter", "open in reader"), ("Esc", "close peek")]);
     } else if s.layout.is_open(crate::app::Overlay::Tour) && s.tour.stage == crate::app::TourStage::Step && s.composer.is_none() {
         return vec![
             ("Space".into(), s.tour_space_does().into()),
             ("Esc".into(), "leave the tour".into()),
         ];
     } else if s.layout.is_open(crate::app::Overlay::Conversation) && s.composer.is_none() && s.reply_to.is_none() {
-        return vec![("i".into(), "next waiting".into()), ("a".into(), "confirm".into())];
+        vec![(Command::NextWaiting, "next waiting"), (Command::Agree, "confirm")]
     } else if s.composer.is_none() && s.active().span_selection().is_some() && s.selection_toolbar_shown() {
-        return vec![("c".into(), "comment on the selection".into()), ("?".into(), "ask about it".into())];
+        vec![(Command::Comment, "comment on the selection"), (Command::Ask, "ask about it")]
     } else if s.layout.is_open(crate::app::Overlay::Map) && s.has_map() && s.composer.is_none() {
-        return vec![("c".into(), "comment on node".into()), ("Esc".into(), "back to changes".into())];
+        let mut v: Vec<(String, String)> = vec![(chord(Command::Comment), "comment on node".into())];
+        v.push(("Esc".into(), "back to changes".into()));
+        return v.into_iter().filter(|(k, _)| !k.is_empty()).collect();
     } else if s.find.open && s.find.edit.focused {
-        return vec![("Enter".into(), "next".into()), ("Shift+Enter".into(), "previous".into())];
+        return fixed(&[("Enter", "next"), ("Shift+Enter", "previous")]);
     } else if s.layout.is_zoomed() && s.composer.is_none() && s.reply_to.is_none() {
-        return vec![
-            ("Ctrl+L".into(), "files · C conversation · m map · o overview".into()),
-            ("Shift+Esc".into(), "restore".into()),
-        ];
+        let rest = crate::keys::hints(&[
+            (Command::Conversation, "conversation"),
+            (Command::Map, "map"),
+            (Command::Brief, "overview"),
+        ]);
+        let files = if rest.is_empty() {
+            "files".to_owned()
+        } else {
+            format!("files · {rest}")
+        };
+        return [(chord(Command::FilterFiles), files), (chord(Command::Zoom), "restore".to_owned())]
+            .into_iter()
+            .filter(|(k, _)| !k.is_empty())
+            .collect();
     } else if s.composer.is_some() || s.reply_to.is_some() {
-        return vec![("Ctrl+Enter".into(), "send".into()), ("Esc".into(), "keeps a draft".into())];
+        return fixed(&[("Ctrl+Enter", "send"), ("Esc", "keeps a draft")]);
     } else if s
         .focused_thread
         .as_deref()
@@ -124,7 +140,11 @@ pub(crate) fn hint_pairs(s: &App) -> Vec<(String, String)> {
             (Command::Palette, "commands"),
         ]
     };
-    pairs.into_iter().map(|(c, what)| (chord(c), what.to_owned())).collect()
+    pairs
+        .into_iter()
+        .map(|(c, what)| (chord(c), what.to_owned()))
+        .filter(|(k, _)| !k.is_empty())
+        .collect()
 }
 
 /// `Split ▾`: Auto, Split and Unified; says `Split · narrow` while too narrow to split.
@@ -136,9 +156,10 @@ fn layout_menu(s: &App, look: &Look, layer: &mut Vec<El>) -> El {
     } else {
         s.settings.layout.label().to_owned()
     };
-    let why = s
-        .layout_reason()
-        .unwrap_or_else(|| "Diff layout: Auto / Split / Unified · s toggles split and unified".into());
+    let why = s.layout_reason().unwrap_or_else(|| match Command::ToggleSplit.chord() {
+        Some(c) => format!("Diff layout: Auto / Split / Unified · {} toggles split and unified", c.display()),
+        None => "Diff layout: Auto / Split / Unified".into(),
+    });
     let mut menu = Menu::new("layout-menu").placement(Placement::TopEnd).min_width(180.0);
     for l in ViewLayout::ALL {
         menu = menu.item(
@@ -185,7 +206,7 @@ fn layout_menu(s: &App, look: &Look, layer: &mut Vec<El>) -> El {
 
 /// The latest message: the status text, else the agent's latest word.
 fn latest(s: &App) -> Option<(bool, String)> {
-    if !s.status.is_empty() && s.status != crate::app::layout::ZOOMED && !s.status.starts_with("Selected ") {
+    if !s.status.is_empty() && !crate::app::layout::is_zoomed_status(&s.status) && !s.status.starts_with("Selected ") {
         return Some((false, s.status.clone()));
     }
     s.latest_agent_message().map(|m| (true, m))
@@ -251,8 +272,11 @@ pub(super) fn status_bar(s: &App, look: &Look, layer: &mut Vec<El>) -> El {
                 row()
                     .key("status-waiting")
                     .role("button")
-                    .label(format!("{waiting} waiting on you: next (i)"))
-                    .help("Next thread waiting on you  i")
+                    .label(match Command::NextWaiting.chord() {
+                        Some(c) => format!("{waiting} waiting on you: next ({})", c.display()),
+                        None => format!("{waiting} waiting on you: next"),
+                    })
+                    .help(crate::keys::tip("Next thread waiting on you", Command::NextWaiting))
                     .h(22.0)
                     .px(6.0)
                     .gap(6.0)

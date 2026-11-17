@@ -19,8 +19,10 @@ use rune_kit::syntax::{Highlight, Highlighter, Paint};
 use crate::model::{self, Block, LineIndex};
 use crate::myers;
 
+mod caret;
 pub(crate) mod vim;
 
+pub use caret::Caret;
 use vim::{Pending, Want};
 pub use vim::{Vim, VimKey, Visual};
 
@@ -393,8 +395,8 @@ pub struct DiffState {
     cursor: Option<(usize, LineRef)>,
     /// The cursor's byte in its line, kept on a grapheme's start as the line is read.
     col: usize,
-    /// The pointer's x over a line's code, for a click to put the cursor under it.
-    pub(crate) pointer_x: f32,
+    /// The pointer over a line's code, for a click to put the cursor under it.
+    pub(crate) pointer: [f32; 2],
     /// The column `j` and `k` aim for (Vim's curswant).
     want: Want,
     /// A count or the first key of `gg`, `yy`, `f{c}`.
@@ -402,6 +404,8 @@ pub struct DiffState {
     /// The last `f` `t` (char, forward, till), for `;` and `,`.
     last_find: Option<(char, bool, bool)>,
     visual: Option<Visual>,
+    /// Visual mode was started by Shift and a cursor key: a plain cursor key ends it.
+    caret_visual: bool,
     /// The scroll viewport's key, as the view last drew it.
     scroll_key: RefCell<String>,
     /// The side text selection copies, which follows the pointer.
@@ -494,11 +498,12 @@ impl DiffState {
             span: None,
             cursor: None,
             col: 0,
-            pointer_x: 0.0,
+            pointer: [0.0; 2],
             want: Want::Here,
             pending: Pending::default(),
             last_find: None,
             visual: None,
+            caret_visual: false,
             scroll_key: RefCell::new(String::new()),
             copy_side: Side::New,
             hovered: Vec::new(),

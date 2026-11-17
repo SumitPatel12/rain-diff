@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use rain_core::keymap::Profile;
 use rain_core::{Shared, Side};
 use rain_diffview::LineRef;
 use rune::{Key, Mods, Runtime};
@@ -126,6 +127,67 @@ fn the_header_button_toggles_the_file_whole() {
     assert_eq!(rows_of(&rt, b), 1 + 120 + 2, "two changes, both removed lines kept");
     for gap in 0..=rt.state.diff.files()[b].hunks.len() {
         assert_eq!(rt.state.diff.hidden(b, gap), Some(0), "gap {gap} open, the trailing one included");
+    }
+    let label = rt
+        .elements()
+        .into_iter()
+        .find(|e| e.key.as_deref() == Some(key.as_str()))
+        .and_then(|e| e.label);
+    assert_eq!(label.as_deref(), Some("Changes only"), "the same button reads as the way back");
+    let (x, y) = rt.find(&key).unwrap();
+    rt.pointer_down(x, y);
+    rt.pointer_up(x, y);
+    settle(&mut rt);
+    assert!(!rt.state.diff.whole(b), "and goes back to the changes");
+}
+
+#[test]
+fn collapse_all_context_undoes_shift_e_and_changes_only_folds_the_current_file() {
+    let dir = whole_repo();
+    let mut rt = unified(&dir);
+    let (a, b) = (file(&rt, "a.cs"), file(&rt, "b.cs"));
+    let ra = rows_of(&rt, a);
+    let folded = |rt: &Runtime<App>, f: usize| {
+        let o = rt.state.diff.opened(f).unwrap();
+        !o.whole && o.revealed.iter().all(|&r| r == (0, 0))
+    };
+    typed(&mut rt, "E");
+    assert!(rt.state.diff.whole(a) && rt.state.diff.whole(b));
+    rt.update(|s, tx| s.collapse_all_context(tx));
+    settle(&mut rt);
+    assert!(folded(&rt, a) && folded(&rt, b), "back to the hunks");
+    assert!(rows_of(&rt, a) <= ra + 1, "the hunks, and a fold to open the file's end");
+    assert_eq!(rt.state.status, "Changes only: 2 files folded");
+    rt.update(|s, tx| s.collapse_all_context(tx));
+    assert_eq!(rt.state.status, "Already only the changes");
+
+    on_file(&mut rt, a, 40);
+    typed(&mut rt, "z");
+    assert!(rt.state.diff.whole(a));
+    rt.update(|s, tx| s.changes_only(tx));
+    settle(&mut rt);
+    assert!(!rt.state.diff.whole(a));
+    assert_eq!(rows_of(&rt, a), ra);
+}
+
+#[test]
+fn shift_z_collapses_all_context_and_the_whole_file_hint_follows_the_profile() {
+    let dir = whole_repo();
+    let mut rt = unified(&dir);
+    let a = file(&rt, "a.cs");
+    typed(&mut rt, "E");
+    assert!(rt.state.diff.whole(a));
+    typed(&mut rt, "Z");
+    assert!(!rt.state.diff.whole(a), "Z collapses all context in Vim");
+    assert_eq!(rt.state.status, "Changes only: 2 files folded");
+    let key = format!("whole-{a}");
+    for (p, want) in [
+        (Profile::VsCode, "Show the whole file with changes inline"),
+        (Profile::JetBrains, "Show the whole file with changes inline"),
+        (Profile::Vim, "Show the whole file with changes inline  z"),
+    ] {
+        rt.update(|s, _| s.set_profile(p));
+        assert_eq!(help_of(&mut rt, &key).as_deref(), Some(want), "{p:?}");
     }
 }
 

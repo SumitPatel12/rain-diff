@@ -1086,6 +1086,30 @@ fn hovering_lines_at_rest_builds_nothing_new() {
     }
 }
 
+#[test]
+fn resizing_while_wrapping_rebuilds_only_the_cursor_row() {
+    let (old, new) = numbered(400, 40);
+    let mut d = DiffState::new(vec![from_texts("a.rs", &old, &new)]);
+    d.set_wrap(true);
+    let mut rt = runtime(d, (900.0, 600.0));
+    rt.update(|s, tx| {
+        s.diff.cursor_step(true, tx);
+    });
+    settle(&mut rt);
+    let (lines, folds) = (rain_diffview::line_builds(), rain_diffview::fold_builds());
+    for i in 1..=20 {
+        rt.set_viewport((900.0 + 9.0 * i as f32, 600.0), 2.0);
+        tick(&mut rt);
+    }
+    settle(&mut rt);
+    let (lines, folds) = (rain_diffview::line_builds() - lines, rain_diffview::fold_builds() - folds);
+    assert_eq!(folds, 0, "gaps and notes don't read the width while wrapping");
+    assert!(
+        lines <= 20,
+        "20 resize frames built {lines} lines: the cursor's row at most once each"
+    );
+}
+
 /// A live-only event that changes nothing, checked at moments a person makes: while hovers fade
 /// across the lines, a scroll glides or a text selection is held. The view built before and
 /// after it must match.

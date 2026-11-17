@@ -1,5 +1,5 @@
-//! The commands the shell dispatches and the round-3 keymap; the palette lists them with their
-//! chords, the status hints and tooltips read the same table.
+//! The commands the shell dispatches; [`crate::keymap`] binds them to chords, and the palette,
+//! status hints and tooltips read the active keymap through [`Command::chord`].
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Command {
@@ -25,6 +25,9 @@ pub enum Command {
     Zoom,
     ToggleWholeFile,
     ExpandAllContext,
+    CollapseAllContext,
+    CollapseAllFiles,
+    ExpandAllFiles,
     FilterFiles,
     ClearFilter,
     Picker,
@@ -65,7 +68,7 @@ pub enum Command {
 }
 
 impl Command {
-    pub const ALL: [Command; 51] = [
+    pub const ALL: [Command; 54] = [
         Command::CursorDown,
         Command::CursorUp,
         Command::NextHunk,
@@ -88,6 +91,9 @@ impl Command {
         Command::Zoom,
         Command::ToggleWholeFile,
         Command::ExpandAllContext,
+        Command::CollapseAllContext,
+        Command::CollapseAllFiles,
+        Command::ExpandAllFiles,
         Command::FilterFiles,
         Command::ClearFilter,
         Command::Picker,
@@ -165,6 +171,9 @@ impl Command {
             Command::Zoom => "Zoom / restore",
             Command::ToggleWholeFile => "Toggle whole file",
             Command::ExpandAllContext => "Expand all context",
+            Command::CollapseAllContext => "Collapse all context",
+            Command::CollapseAllFiles => "Collapse all files",
+            Command::ExpandAllFiles => "Expand all files",
             Command::FilterFiles => "Filter files",
             Command::ClearFilter => "Clear file filter",
             Command::Picker => "Go to file",
@@ -203,134 +212,108 @@ impl Command {
         }
     }
 
-    /// The first chord bound to this command in [`keymap`], if any.
+    /// The first chord bound to this command in the active keymap, if any.
     pub fn chord(&self) -> Option<Chord> {
-        keymap().iter().find(|(_, c)| c == self).map(|(k, _)| *k)
+        crate::keymap::with_active(|k| k.chord(*self))
+    }
+
+    /// Its first chord as hints show it; empty when it has none.
+    pub fn hint(&self) -> String {
+        self.chord().map(|c| c.display()).unwrap_or_default()
+    }
+
+    /// The stable name settings and overrides use: `next-hunk`, `palette`.
+    pub fn id(&self) -> &'static str {
+        match self {
+            Command::CursorDown => "cursor-down",
+            Command::CursorUp => "cursor-up",
+            Command::NextHunk => "next-hunk",
+            Command::PrevHunk => "prev-hunk",
+            Command::NextFile => "next-file",
+            Command::PrevFile => "prev-file",
+            Command::NextSection => "next-section",
+            Command::PrevSection => "prev-section",
+            Command::Back => "back",
+            Command::Forward => "forward",
+            Command::NextWaiting => "next-waiting",
+            Command::ViewedAndNext => "viewed-and-next",
+            Command::ToggleViewed => "toggle-viewed",
+            Command::MarkGroupViewed => "accept-group",
+            Command::UndoAccept => "undo",
+            Command::ToggleSplit => "toggle-split",
+            Command::LayoutAuto => "layout-auto",
+            Command::ToggleReaderMode => "toggle-reader-mode",
+            Command::ToggleList => "toggle-list",
+            Command::Zoom => "zoom",
+            Command::ToggleWholeFile => "toggle-whole-file",
+            Command::ExpandAllContext => "expand-all-context",
+            Command::CollapseAllContext => "collapse-all-context",
+            Command::CollapseAllFiles => "collapse-all-files",
+            Command::ExpandAllFiles => "expand-all-files",
+            Command::FilterFiles => "filter-files",
+            Command::ClearFilter => "clear-filter",
+            Command::Picker => "go-to-file",
+            Command::Palette => "palette",
+            Command::Find => "find",
+            Command::Comment => "comment",
+            Command::Ask => "ask",
+            Command::Reply => "reply",
+            Command::Agree => "agree",
+            Command::Dismiss => "dismiss",
+            Command::Defer => "defer",
+            Command::Conversation => "conversation",
+            Command::Map => "map",
+            Command::NextMapView => "next-map-view",
+            Command::PrevMapView => "prev-map-view",
+            Command::Brief => "toggle-overview",
+            Command::GoOverview => "go-overview",
+            Command::GoChanges => "go-changes",
+            Command::Tour => "tour",
+            Command::ToggleVerify => "toggle-verify",
+            Command::FinishReview => "finish-review",
+            Command::KeySheet => "keyboard-shortcuts",
+            Command::OpenInEditor => "open-in-editor",
+            Command::CopyLocation => "copy-location",
+            Command::CopyAll => "copy-all-comments",
+            Command::Reload => "reload",
+            Command::ToggleTheme => "toggle-theme",
+            Command::ToggleDensity => "toggle-density",
+            Command::Escape => "escape",
+            Command::NextChapter => "next-chapter",
+            Command::PrevChapter => "prev-chapter",
+            Command::ToggleChaptersQueue => "toggle-chapters-queue",
+            Command::ToggleInspector => "toggle-inspector",
+            Command::Overview => "overview",
+            Command::FocusTree => "focus-tree",
+        }
+    }
+
+    /// The command [`Command::id`] names, among the ones a key can run.
+    pub fn from_id(id: &str) -> Option<Command> {
+        Command::ALL.into_iter().find(|c| c.id() == id)
     }
 }
 
-/// `key` is a lowercase letter, a punctuation character as typed (`]`, `?`, `/`), or one of the
-/// named keys `Space`, `Tab`, `Escape`, `Left`, `Right`, `F1`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct Chord {
-    pub key: &'static str,
-    pub ctrl: bool,
-    pub shift: bool,
-    pub alt: bool,
-}
+pub use crate::keymap::Chord;
 
-impl Chord {
-    const fn new(key: &'static str, ctrl: bool, shift: bool, alt: bool) -> Chord {
-        Chord { key, ctrl, shift, alt }
-    }
-
-    const fn key(key: &'static str) -> Chord {
-        Chord::new(key, false, false, false)
-    }
-
-    const fn shift(key: &'static str) -> Chord {
-        Chord::new(key, false, true, false)
-    }
-
-    const fn ctrl(key: &'static str) -> Chord {
-        Chord::new(key, true, false, false)
-    }
-
-    const fn ctrl_shift(key: &'static str) -> Chord {
-        Chord::new(key, true, true, false)
-    }
-
-    const fn alt(key: &'static str) -> Chord {
-        Chord::new(key, false, false, true)
-    }
-
-    /// As shown in the palette: `J`, `Ctrl+K`, `Ctrl+Shift+L`, `Space`, `Alt+Left`.
-    pub fn display(&self) -> String {
-        let letter = self.key.len() == 1;
-        let key = if letter && (self.shift || self.ctrl) {
-            self.key.to_uppercase()
-        } else {
-            self.key.to_owned()
-        };
-        let key = if self.shift && (!letter || self.ctrl) {
-            format!("Shift+{key}")
-        } else {
-            key
-        };
-        let key = if self.alt { format!("Alt+{key}") } else { key };
-        if self.ctrl { format!("Ctrl+{key}") } else { key }
-    }
-}
-
-/// Leaves `h l w b e W B 0 ^ $ g G f t ; , v V y` and digits to Vim (`DiffState::vim`).
-static KEYMAP: [(Chord, Command); 46] = [
-    (Chord::key("j"), Command::CursorDown),
-    (Chord::key("k"), Command::CursorUp),
-    (Chord::key("n"), Command::NextHunk),
-    (Chord::key("p"), Command::PrevHunk),
-    (Chord::key("]"), Command::NextFile),
-    (Chord::key("["), Command::PrevFile),
-    (Chord::shift("j"), Command::NextSection),
-    (Chord::shift("k"), Command::PrevSection),
-    (Chord::alt("Left"), Command::Back),
-    (Chord::alt("Right"), Command::Forward),
-    (Chord::key("i"), Command::NextWaiting),
-    (Chord::key("Space"), Command::ViewedAndNext),
-    (Chord::shift("Space"), Command::ToggleViewed),
-    (Chord::shift("a"), Command::MarkGroupViewed),
-    (Chord::key("u"), Command::UndoAccept),
-    (Chord::key("s"), Command::ToggleSplit),
-    (Chord::shift("s"), Command::ToggleReaderMode),
-    (Chord::ctrl("b"), Command::ToggleList),
-    (Chord::shift("Escape"), Command::Zoom),
-    (Chord::key("z"), Command::ToggleWholeFile),
-    (Chord::shift("e"), Command::ExpandAllContext),
-    (Chord::ctrl("l"), Command::FilterFiles),
-    (Chord::ctrl_shift("l"), Command::ClearFilter),
-    (Chord::ctrl("p"), Command::Picker),
-    (Chord::ctrl("k"), Command::Palette),
-    (Chord::key("/"), Command::Find),
-    (Chord::key("c"), Command::Comment),
-    (Chord::key("?"), Command::Ask),
-    (Chord::key("r"), Command::Reply),
-    (Chord::key("a"), Command::Agree),
-    (Chord::key("x"), Command::Dismiss),
-    (Chord::key("d"), Command::Defer),
-    (Chord::shift("c"), Command::Conversation),
-    (Chord::key("m"), Command::Map),
-    (Chord::key("}"), Command::NextMapView),
-    (Chord::key("{"), Command::PrevMapView),
-    (Chord::key("o"), Command::Brief),
-    (Chord::shift("t"), Command::Tour),
-    (Chord::shift("h"), Command::ToggleVerify),
-    (Chord::shift("f"), Command::FinishReview),
-    (Chord::key("F1"), Command::KeySheet),
-    (Chord::ctrl("o"), Command::OpenInEditor),
-    (Chord::shift("y"), Command::CopyLocation),
-    (Chord::shift("r"), Command::Reload),
-    (Chord::ctrl_shift("d"), Command::ToggleDensity),
-    (Chord::key("Escape"), Command::Escape),
-];
-
-pub fn keymap() -> &'static [(Chord, Command)] {
-    &KEYMAP
-}
-
-/// The command bound to `key` with these modifiers and no Alt. Letters match case-insensitively;
-/// shift on a punctuation key is ignored since the character already encodes it.
+/// The command the active keymap binds to `key` with these modifiers and no Alt. Letters match
+/// case-insensitively; shift on a punctuation key is ignored since the character already
+/// encodes it.
 pub fn lookup(key: &str, ctrl: bool, shift: bool) -> Option<Command> {
     lookup_chord(key, ctrl, shift, false)
 }
 
-/// [`lookup`] with Alt.
+/// [`lookup`] with Alt; `key` is a character or a key name (`Space`, `Left`, `F1`).
 pub fn lookup_chord(key: &str, ctrl: bool, shift: bool, alt: bool) -> Option<Command> {
-    let lower = key.to_lowercase();
-    let letter = lower.len() == 1 && lower.chars().all(|c| c.is_ascii_alphabetic());
-    let shift = if letter { shift || key != lower } else { shift && key.len() > 1 };
-    KEYMAP
-        .iter()
-        .find(|(c, _)| c.key.eq_ignore_ascii_case(&lower) && c.ctrl == ctrl && c.shift == shift && c.alt == alt)
-        .map(|(_, cmd)| *cmd)
+    let mut spec = String::new();
+    for (on, m) in [(ctrl, "Ctrl+"), (shift, "Shift+"), (alt, "Alt+")] {
+        if on {
+            spec.push_str(m);
+        }
+    }
+    spec.push_str(key);
+    let chord = Chord::parse(&spec)?;
+    crate::keymap::with_active(|k| k.lookup(&chord))
 }
 
 #[cfg(test)]
@@ -339,16 +322,22 @@ mod tests {
     use std::collections::HashSet;
 
     #[test]
-    fn every_command_has_one_unique_chord() {
-        let chords: HashSet<_> = keymap().iter().map(|(k, _)| *k).collect();
-        assert_eq!(chords.len(), keymap().len(), "a chord is bound twice");
+    fn every_command_has_a_vim_chord_and_a_unique_id() {
+        let vim = crate::keymap::Keymap::defaults(crate::keymap::Profile::Vim);
         for c in Command::ALL {
             assert!(!c.label().is_empty());
             assert!(!c.is_legacy());
-            let n = keymap().iter().filter(|(_, x)| *x == c).count();
-            let want = if Command::PALETTE_ONLY.contains(&c) { 0 } else { 1 };
+            let n = vim.chords(c).len();
+            let want = match c {
+                _ if Command::PALETTE_ONLY.contains(&c) => 0,
+                Command::KeySheet => 2,
+                _ => 1,
+            };
             assert_eq!(n, want, "{c:?} has {n} chords");
+            assert_eq!(Command::from_id(c.id()), Some(c));
         }
+        let ids: HashSet<_> = Command::ALL.iter().chain(&Command::LEGACY).map(|c| c.id()).collect();
+        assert_eq!(ids.len(), Command::ALL.len() + Command::LEGACY.len(), "ids are unique");
         for c in Command::LEGACY {
             assert!(c.chord().is_none() && !Command::ALL.contains(&c), "{c:?}");
         }
@@ -432,8 +421,8 @@ mod tests {
 
     #[test]
     fn chords_display_as_the_palette_shows_them() {
-        assert_eq!(Chord::ctrl("k").display(), "Ctrl+K");
-        assert_eq!(Chord::shift("v").display(), "V");
+        assert_eq!(Chord::parse("Ctrl+k").unwrap().display(), "Ctrl+K");
+        assert_eq!(Chord::parse("Shift+v").unwrap().display(), "V");
         assert_eq!(Command::FilterFiles.chord().unwrap().display(), "Ctrl+L");
         assert_eq!(Command::ClearFilter.chord().unwrap().display(), "Ctrl+Shift+L");
         assert_eq!(Command::Zoom.chord().unwrap().display(), "Shift+Escape");

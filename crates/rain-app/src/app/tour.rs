@@ -10,6 +10,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use rain_core::brief::Cite;
+use rain_core::command::Command;
 use rain_core::{FileDiff, Side, Thread, ThreadState};
 use rain_diffview::{Align, LineRef, Spot};
 use rune::{Key, KeyEvent, Tx};
@@ -615,7 +616,7 @@ impl App {
                 self.tour.resumable = true;
                 self.status = format!("Resume tour {}/{} · Enter", self.tour.step + 1, self.tour_views().len());
             }
-            TourStage::Start => self.status = "Tour skipped · T opens it".into(),
+            TourStage::Start => self.status = crate::keys::with_hints("Tour skipped", &[(Command::Tour, "opens it")]),
             TourStage::End => {
                 self.tour.resumable = false;
                 self.status.clear();
@@ -662,15 +663,16 @@ impl App {
     fn tour_status(&self) -> String {
         match self.tour.stage {
             TourStage::Start => "Tour · Enter starts · Esc skips to the reader".into(),
-            TourStage::End => "Tour done · p last step · Esc closes".into(),
+            TourStage::End => crate::keys::with_hints("Tour done", &[(Command::PrevHunk, "last step")]) + " · Esc closes",
             TourStage::Step => {
                 let n = self.tour_views().len();
                 let changed = self.tour_current().and_then(|v| v.at).is_some_and(|a| a.changed);
-                let mut s = format!(
-                    "Tour {}/{n} · Space {} · n p · Esc leaves",
-                    self.tour.step + 1,
-                    self.tour_space_does()
-                );
+                let steps = [Command::NextHunk, Command::PrevHunk].map(|c| c.hint()).join(" ");
+                let mut s = format!("Tour {}/{n} · Space {}", self.tour.step + 1, self.tour_space_does());
+                if !steps.trim().is_empty() {
+                    s = format!("{s} · {}", steps.trim());
+                }
+                s.push_str(" · Esc leaves");
                 if changed {
                     s = format!("{s} · Diff changed");
                 }
@@ -741,7 +743,8 @@ impl App {
             self.want(Scroll::Always);
             self.apply_tour(tx);
             if self.tour.live.as_ref().is_some_and(|l| l.at.is_some()) {
-                self.status = format!("Claude's walkthrough · step {i}/{n} · n next · Esc leaves");
+                let head = format!("Claude's walkthrough · step {i}/{n}");
+                self.status = crate::keys::with_hints(&head, &[(Command::NextHunk, "next")]) + " · Esc leaves";
             }
         }
         true
@@ -809,6 +812,19 @@ impl App {
     /// resume after `Esc`. `None` lets the key through.
     pub(crate) fn tour_key(&mut self, ev: &KeyEvent, tx: &mut Tx) -> Option<bool> {
         let m = ev.mods;
+        if self.tour_open() {
+            match (self.tour.stage, crate::keys::command_of(ev)) {
+                (TourStage::Step, Some(Command::NextHunk)) => {
+                    self.tour_next(tx);
+                    return Some(true);
+                }
+                (TourStage::Step | TourStage::End, Some(Command::PrevHunk)) => {
+                    self.tour_prev(tx);
+                    return Some(true);
+                }
+                _ => {}
+            }
+        }
         if m.ctrl || m.cmd || m.alt || m.logo {
             return None;
         }
@@ -821,15 +837,9 @@ impl App {
             }
             return None;
         }
-        let ch = match &ev.key {
-            Key::Text(t) if !m.shift => t.as_str(),
-            _ => "",
-        };
         match self.tour.stage {
             TourStage::Start if space || enter => self.begin_tour(tx),
             TourStage::Step if space => self.tour_space(tx),
-            TourStage::Step if ch == "n" => self.tour_next(tx),
-            TourStage::Step | TourStage::End if ch == "p" => self.tour_prev(tx),
             TourStage::End if space || enter => {
                 self.leave_tour();
             }

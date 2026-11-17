@@ -2,6 +2,7 @@
 //! threads, fuzzy-matched.
 
 use rain_core::command::Command;
+use rain_core::keymap::Profile;
 use rain_core::{FileTag, Note, NoteKind};
 use rain_diffview::{LineRef, VimKey};
 use rune::Tx;
@@ -22,6 +23,7 @@ pub enum Item {
     Note(String),
     Layout(ViewLayout),
     Theme(Theme),
+    Profile(Profile),
     Ask(AskItem),
     /// A row of [`VIM`].
     Vim(usize),
@@ -106,12 +108,14 @@ pub fn entries(s: &App) -> Vec<Entry> {
             kind: "Command",
         })
         .collect();
-    out.extend(VIM.iter().enumerate().map(|(i, (label, keys, _))| Entry {
-        item: Item::Vim(i),
-        label: (*label).to_owned(),
-        hint: (*keys).to_owned(),
-        kind: "Motion",
-    }));
+    if s.keymap_profile().vim_motions() {
+        out.extend(VIM.iter().enumerate().map(|(i, (label, keys, _))| Entry {
+            item: Item::Vim(i),
+            label: (*label).to_owned(),
+            hint: (*keys).to_owned(),
+            kind: "Motion",
+        }));
+    }
     out.extend([ViewLayout::Split, ViewLayout::Unified].iter().map(|l| Entry {
         item: Item::Layout(*l),
         label: format!("Layout: {}", l.label().to_lowercase()),
@@ -122,6 +126,12 @@ pub fn entries(s: &App) -> Vec<Entry> {
         item: Item::Theme(t),
         label: format!("Theme: {}", label.to_lowercase()),
         hint: if t == s.settings.theme { "on".into() } else { String::new() },
+        kind: "Setting",
+    }));
+    out.extend(Profile::ALL.iter().map(|&p| Entry {
+        item: Item::Profile(p),
+        label: format!("Keyboard shortcuts: {}", p.label()),
+        hint: if p == s.keymap_profile() { "on".into() } else { String::new() },
         kind: "Setting",
     }));
     out.extend(filter_entries(s));
@@ -246,7 +256,7 @@ fn toggle_filter(s: &mut App, item: &Item, tx: &mut Tx) {
 }
 
 /// What [`entries`] reads, so they are rebuilt only when it changes.
-type Source = (u64, u32, ViewLayout, Theme, rain_tree::TreeFilter);
+type Source = (u64, u32, ViewLayout, Theme, u64, rain_tree::TreeFilter);
 
 /// [`entries`] with their labels lowercased, kept while what they show stands; and the last
 /// query's matches, which a query typed on from it only narrows.
@@ -265,6 +275,7 @@ impl Cache {
             s.reloader.installs(),
             s.settings.layout,
             s.settings.theme,
+            s.keymap_gen,
             s.tree.filter.clone(),
         );
         if self.source.as_ref() == Some(&source) {
@@ -346,6 +357,7 @@ pub fn run_selected(s: &mut App, tx: &mut Tx) {
         Item::Note(id) => open_note(s, &id, tx),
         Item::Layout(l) => s.set_layout(l),
         Item::Theme(t) => s.set_theme(t),
+        Item::Profile(p) => s.set_profile(p),
         Item::Ask(a) => s.apply_ask_item(a),
         Item::Vim(i) => {
             for &k in VIM[i].2 {

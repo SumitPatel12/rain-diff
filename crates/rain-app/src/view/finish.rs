@@ -185,7 +185,7 @@ pub(super) fn reader_strips(s: &App, k: &Kit) -> Vec<El> {
             "reload-banner",
             st.message(),
             Tone::Warning,
-            &[("Reload  Shift+R", |s: &mut App, tx: &mut Tx| s.reload_now(tx))],
+            &[("Reload", |s: &mut App, tx: &mut Tx| s.reload_now(tx))],
             k,
         ));
     }

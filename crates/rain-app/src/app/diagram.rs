@@ -3,6 +3,7 @@
 
 use std::collections::BTreeMap;
 
+use rain_core::command::Command;
 use rain_core::overview::GraphFileRef;
 use rain_diagram::{DiagramEvent, ItemId, NodeMark, Zoom};
 use rain_diffview::LineRef;
@@ -48,7 +49,10 @@ impl App {
         }
         if self.toggle_overlay(Overlay::Map) {
             self.diagram.zoom = Zoom::Fit;
-            self.status = "Map · hover a node to see it · click to open its first hunk · c comment · ? question".into();
+            self.status = crate::keys::with_hints(
+                "Map · hover a node to see it · click to open its first hunk",
+                &[(Command::Comment, "comment"), (Command::Ask, "question")],
+            );
         }
     }
 

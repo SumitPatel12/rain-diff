@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use rain_comments::ops;
+use rain_core::command::Command;
 use rain_core::{Anchor, AnchorState, Disposition, Presence, PresenceState, Thread, ThreadKind, ThreadState};
 use rain_diffview::{LineRef, Spot};
 use rune::Tx;
@@ -240,7 +241,7 @@ impl App {
     /// `C`: the Conversation overlay.
     pub fn toggle_conversation(&mut self, _tx: &mut Tx) {
         if self.toggle_overlay(Overlay::Conversation) {
-            self.status = "Conversation · i next waiting · Esc closes".into();
+            self.status = crate::keys::with_hints("Conversation", &[(Command::NextWaiting, "next waiting")]) + " · Esc closes";
         }
     }
 
@@ -283,7 +284,8 @@ impl App {
         self.conversation.w_wrapped = false;
         let Some(id) = walk.get(at).cloned() else {
             self.conversation.w_wrapped = true;
-            self.status = format!("That was the last of {} waiting on you · i starts over", walk.len());
+            let head = format!("That was the last of {} waiting on you", walk.len());
+            self.status = crate::keys::with_hints(&head, &[(Command::NextWaiting, "starts over")]);
             return;
         };
         self.show_thread(&id, tx);

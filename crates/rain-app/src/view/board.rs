@@ -7,6 +7,7 @@ use std::borrow::Cow;
 use std::rc::Rc;
 
 use rain_comments::{anchor_label, ops};
+use rain_core::command::Command;
 use rain_core::{Thread, ThreadKind};
 use rain_tree::{TreeFilter, TreeView};
 use rain_triage::Group;
@@ -144,6 +145,7 @@ fn row_key(s: &App, i: usize) -> String {
         Some(Row::Sub(g)) => format!("list-sub-{}", slug(*g)),
         Some(Row::File(g)) => format!("file-{}", s.keys[*g]),
         Some(Row::Accepted(i)) => format!("done-{i}"),
+        Some(Row::AcceptedFile(g)) => format!("done-file-{}", s.keys[*g]),
         None => format!("row-{i}"),
     }
 }
@@ -157,6 +159,7 @@ fn build_row(s: &App, i: usize, look: &RowLook) -> El {
         Some(Row::Sub(g)) => sub_header(s, g, &listing, key, k),
         Some(Row::File(g)) => file_row(s, g, key, look),
         Some(Row::Accepted(a)) => accepted_row(s, a, key, k),
+        Some(Row::AcceptedFile(g)) => accepted_file_row(s, g, key, k),
         None => row().key(key).h(row_height(s)),
     }
 }
@@ -261,10 +264,14 @@ fn header(s: &App, sec: u8, l: &Listing, k: &Kit) -> El {
 /// `Accept N`: marks the group viewed without reading (Shift+A; u undoes).
 fn accept_button(g: Group, n: usize, k: &Kit) -> El {
     outline(format!("accept-{}", slug(g)), format!("Accept {n}"), None, 22.0, k)
-        .help(format!(
-            "Mark {n} {} files viewed without reading  Shift+A on a file in the group",
-            g.label().to_lowercase()
-        ))
+        .help(match rain_core::Command::MarkGroupViewed.chord() {
+            Some(c) => format!(
+                "Mark {n} {} files viewed without reading  {} on a file in the group",
+                g.label().to_lowercase(),
+                c.display()
+            ),
+            None => format!("Mark {n} {} files viewed without reading", g.label().to_lowercase()),
+        })
         .on_press_tx(move |s: &mut App, tx: &mut Tx| s.accept(g, tx))
 }
 
@@ -376,11 +383,10 @@ fn file_row(s: &App, g: usize, key: String, look: &RowLook) -> El {
             .role("checkbox")
             .label(if viewed { "Viewed" } else { "Mark viewed" })
             .checked(viewed)
-            .help(if viewed {
-                "Viewed · press to unmark  Shift+Space"
-            } else {
-                "Mark viewed  Shift+Space"
-            })
+            .help(crate::keys::tip(
+                if viewed { "Viewed · press to unmark" } else { "Mark viewed" },
+                rain_core::Command::ToggleViewed,
+            ))
             .size(20.0, 20.0)
             .center()
             .radius(radius::KEY)
@@ -398,30 +404,91 @@ fn file_row(s: &App, g: usize, key: String, look: &RowLook) -> El {
     row().key(key).w_full().px(6.0).child(r)
 }
 
+/// `▸ ✓ Generated · 34 accepted  [Undo]`: a press lists the group's files under it; Undo puts
+/// them back in their section.
 fn accepted_row(s: &App, a: usize, key: String, k: &Kit) -> El {
     let Some(acc) = s.mirror.accepted.get(a) else {
         return row().key(key).h(row_height(s));
     };
-    let label = format!("{} · {} accepted", acc.group.label(), acc.files.len());
-    let reason = acc.reason.clone();
+    let open = s.board.open_accepted.contains(&a);
+    let group = acc.group.label();
+    let label = format!("{group} · {} accepted", acc.files.len());
     let (_, r) = sr(k);
+    let undo = outline(format!("undo-accept-{a}"), "Undo", None, 20.0, k)
+        .help(match Command::UndoAccept.chord() {
+            Some(c) => format!(
+                "Undo this accept: its files go back to {group}, unviewed  {} for the latest",
+                c.display()
+            ),
+            None => format!("Undo this accept: its files go back to {group}, unviewed"),
+        })
+        .on_press(move |s: &mut App| s.undo_accept_at(a));
     k.interactive(
         row()
             .key(key)
             .role("button")
-            .label(reason.clone())
+            .label(format!("{label}: {}", acc.reason))
+            .expanded(open)
             .w_full()
             .h(24.0)
-            .pl(28.0)
+            .pl(12.0)
             .pr(8.0)
             .gap(6.0)
             .items_center()
             .radius(radius::BUTTON)
-            .on_press(move |s: &mut App| s.status = reason.clone()),
+            .cursor(Cursor::Pointer)
+            .on_press(move |s: &mut App| s.toggle_accepted(a)),
     )
+    .child(icons::draw(
+        if open { &icons::CHEV_D } else { &icons::CHEV_R },
+        14.0,
+        k.c.text_faint,
+    ))
     .child(icons::draw(&icons::CHECK, 14.0, r.accent))
     .child(text(label).font(TYPE.small).color(k.c.text_muted).truncate().grow(1.0).shrink())
-    .help("Undo accept  u")
+    .child(undo)
+    .help(format!("{} · press to list its files", acc.reason))
+}
+
+/// A file of an opened accepted group: its name and folder; a press opens it.
+fn accepted_file_row(s: &App, g: usize, key: String, k: &Kit) -> El {
+    let path = &s.keys[g];
+    let (dir, name) = path.rsplit_once('/').unwrap_or(("", path.as_str()));
+    k.interactive(
+        row()
+            .key(key)
+            .role("button")
+            .label(format!("{name}, accepted"))
+            .help(path.clone())
+            .w_full()
+            .h(row_height(s))
+            .pl(48.0)
+            .pr(8.0)
+            .gap(6.0)
+            .items_center()
+            .radius(radius::BUTTON)
+            .cursor(Cursor::Pointer)
+            .on_press_tx(move |s: &mut App, tx: &mut Tx| s.goto_file(g, tx)),
+    )
+    .child(
+        text(name.to_owned())
+            .font(TYPE.ui)
+            .color(k.c.text_muted)
+            .truncate_middle()
+            .shrink()
+            .min_w(60.0)
+            .a11y_hidden(),
+    )
+    .child(
+        text(dir.replacen('/', " · ", 1))
+            .font(TYPE.small)
+            .color(k.c.text_faint)
+            .truncate_head()
+            .grow(1.0)
+            .shrink()
+            .min_w(0.0)
+            .a11y_hidden(),
+    )
 }
 
 /// Whether the list's filter shows thread `t`'s file (a thread on no file shows unfiltered).
@@ -520,7 +587,8 @@ fn tray(s: &App, look: &Look) -> Option<El> {
         c = c.child(row().w_full().px(6.0).py(4.0).child(messages::snackbar(
             "accept-snack",
             msg.to_owned(),
-            Some(("Undo (u)", |s: &mut App, tx: &mut Tx| s.undo_accept(tx))),
+            Some(("Undo", |s: &mut App, tx: &mut Tx| s.undo_accept(tx))),
+            crate::keys::tip("Undo the accept", Command::UndoAccept),
             k,
         )));
     }
@@ -845,16 +913,13 @@ fn group_card(s: &App, group: Group, k: &Kit) -> El {
         c = c.child(muted(format!("+{} more", files.len() - 12), k));
     }
     let actions = row().gap(8.0).child(
-        Button::new(if n > 0 {
-            format!("Accept {n} (Space)")
-        } else {
-            "All viewed".into()
-        })
-        .variant(ButtonVariant::Outline)
-        .disabled(n == 0)
-        .on_press_tx(move |s: &mut App, tx: &mut Tx| s.accept(group, tx))
-        .build(k)
-        .key("card-accept"),
+        Button::new(if n > 0 { format!("Accept {n}") } else { "All viewed".into() })
+            .variant(ButtonVariant::Outline)
+            .disabled(n == 0)
+            .on_press_tx(move |s: &mut App, tx: &mut Tx| s.accept(group, tx))
+            .build(k)
+            .key("card-accept")
+            .help(crate::keys::tip("Accept this group's files", Command::ViewedAndNext)),
     );
     wrap_card(c.child(actions))
 }

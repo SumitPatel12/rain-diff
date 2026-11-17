@@ -144,7 +144,8 @@ pub(crate) fn inset_banner(key: &str, msg: String, tone: Tone, actions: &[Action
 
 /// A one-line note that the next one replaces: inverted (text on the ground's colour), with
 /// one bold action.
-pub(crate) fn snackbar(key: &str, msg: String, action: Option<Action>, k: &Kit) -> El {
+/// `help` is the action's tooltip; empty for none.
+pub(crate) fn snackbar(key: &str, msg: String, action: Option<Action>, help: String, k: &Kit) -> El {
     let (surf, r) = sr(k);
     let mut b = row()
         .key(key.to_owned())
@@ -160,9 +161,12 @@ pub(crate) fn snackbar(key: &str, msg: String, action: Option<Action>, k: &Kit) 
         .shadow(12.0, 30.0, r.shadow)
         .child(text(msg).font(TYPE.ui).color(surf.bar).truncate().shrink().a11y_hidden());
     if let Some((label, f)) = action {
+        let mut act = row();
+        if !help.is_empty() {
+            act = act.help(help);
+        }
         b = b.child(
-            row()
-                .key(format!("{key}-action"))
+            act.key(format!("{key}-action"))
                 .role("button")
                 .label(label)
                 .h(28.0)
@@ -190,7 +194,7 @@ mod tests {
             for t in [Tone::Info, Tone::Warning, Tone::Danger, Tone::Success] {
                 let _ = banner("b", "3 new commits".into(), t, &[go], &k);
             }
-            let _ = snackbar("s", "Viewed".into(), Some(go), &k);
+            let _ = snackbar("s", "Viewed".into(), Some(go), String::new(), &k);
         }
     }
 }

@@ -51,6 +51,16 @@ stroked!(
     r#"<path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" d="M10 4.5 6.5 8l3.5 3.5"/>"#
 );
 stroked!(
+    FOLD_ALL,
+    "fold-all",
+    r#"<path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" d="m4.5 2.5 3.5 3 3.5-3M4.5 13.5l3.5-3 3.5 3"/>"#
+);
+stroked!(
+    UNFOLD_ALL,
+    "unfold-all",
+    r#"<path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" d="m4.5 5.5 3.5-3 3.5 3M4.5 10.5l3.5 3 3.5-3"/>"#
+);
+stroked!(
     MAP,
     "map",
     r#"<rect fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" x="1.5" y="2.5" width="5" height="4" rx="1"/><rect fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" x="9.5" y="9.5" width="5" height="4" rx="1"/><path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" d="M4 6.5v3.5a1.5 1.5 0 0 0 1.5 1.5h4"/>"#

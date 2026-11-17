@@ -5,6 +5,7 @@
 
 use rain_comments::{Composer, ThreadCard};
 use rain_core::brief::{BriefDoc, Cite};
+use rain_core::command::Command;
 use rain_core::{Side, Thread, short_sha};
 use rune::{El, ScrollSpec, TextStyle, Tx, col, el, row, text};
 use rune_kit::{Button, ButtonVariant, ControlSize, Kit, Markdown, SegmentedControl};
@@ -140,7 +141,10 @@ fn title_row(s: &App, doc: Option<&BriefDoc>, k: &Kit) -> El {
                     .key("brief-tour")
                     .role("button")
                     .label(label.clone())
-                    .help(format!("A guided pass over {steps} steps, the code spotlit  Shift+T"))
+                    .help(crate::keys::tip(
+                        &format!("A guided pass over {steps} steps, the code spotlit"),
+                        Command::Tour,
+                    ))
                     .h(28.0)
                     .px(14.0)
                     .gap(8.0)
@@ -277,8 +281,8 @@ fn facts(s: &App, k: &Kit) -> El {
 fn map_card(s: &App, k: &Kit) -> Option<El> {
     let n = s.overview.as_ref()?.document.graph.nodes.len();
     let body = row().pt(4.0).child(
-        outline("open-map-card", "Open map", Some("m"), 24.0, k)
-            .help("Open the Map  m")
+        outline("open-map-card", "Open map", None, 24.0, k)
+            .help(crate::keys::tip("Open the Map", Command::Map))
             .on_press(|s: &mut App| s.toggle_map()),
     );
     let sub = if n == 1 { "· 1 node".to_owned() } else { format!("· {n} nodes") };
@@ -581,11 +585,17 @@ fn mode_buttons(k: &Kit, id: String) -> El {
         .key("sec-actions")
         .gap(4.0)
         .child(
-            outline("sec-comment", "Comment", Some("c"), 22.0, k)
-                .on_press(move |s: &mut App| s.comment_on_section(&id, None, ComposeMode::Comment)),
+            outline(
+                "sec-comment",
+                "Comment",
+                Command::Comment.chord().map(|c| c.display()).as_deref(),
+                22.0,
+                k,
+            )
+            .on_press(move |s: &mut App| s.comment_on_section(&id, None, ComposeMode::Comment)),
         )
         .child(
-            outline("sec-ask", "Ask", Some("?"), 22.0, k)
+            outline("sec-ask", "Ask", Command::Ask.chord().map(|c| c.display()).as_deref(), 22.0, k)
                 .on_press(move |s: &mut App| s.comment_on_section(&ask, None, ComposeMode::Question)),
         )
 }

@@ -240,6 +240,9 @@ fn more_menu(s: &App, k: &Kit, layer: &mut Vec<El>) -> El {
         .item(command_item("Zoom", &icons::ZOOM, Command::Zoom))
         .item(command_item("One file at a time", &icons::FILE, Command::ToggleReaderMode))
         .item(command_item("Expand all context", &icons::EXPAND, Command::ExpandAllContext))
+        .item(command_item("Collapse all context", &icons::FOLD_ALL, Command::CollapseAllContext))
+        .item(command_item("Collapse all files", &icons::FOLD_ALL, Command::CollapseAllFiles))
+        .item(command_item("Expand all files", &icons::UNFOLD_ALL, Command::ExpandAllFiles))
         .separator()
         .item(sub("Appearance", MoreSub::Appearance, open, appearance))
         .item(command_item("Keyboard shortcuts", &icons::KBD, Command::KeySheet))
@@ -326,11 +329,10 @@ pub(super) fn top_bar(s: &App, look: &Look, layer: &mut Vec<El>) -> El {
     let list_open = s.sidebar.is_open() && !s.layout.is_zoomed();
     let toggle = Ghost::new("list-toggle")
         .icon(&icons::SIDEBAR)
-        .help(if list_open {
-            "Hide the file list  Ctrl+B"
-        } else {
-            "Show the file list  Ctrl+B"
-        })
+        .help(crate::keys::tip(
+            if list_open { "Hide the file list" } else { "Show the file list" },
+            Command::ToggleList,
+        ))
         .build(k)
         .expanded(list_open)
         .on_press(|s: &mut App| s.toggle_list());
@@ -351,7 +353,7 @@ pub(super) fn top_bar(s: &App, look: &Look, layer: &mut Vec<El>) -> El {
         .child(more_menu(s, k, layer))
         .child(
             primary("finish-review", "Finish review…", k)
-                .help("Verdict and summary for this round  Shift+F")
+                .help(crate::keys::tip("Verdict and summary for this round", Command::FinishReview))
                 .on_press_tx(|s: &mut App, tx: &mut Tx| s.finish_review(tx)),
         )
 }

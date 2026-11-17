@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use rain_comments::ops::{self, ThreadExtra};
 use rain_core::brief::BriefDoc;
+use rain_core::command::Command;
 use rain_core::comments::{BRIEF_PATH, MAP_PATH, note_path};
 use rain_core::{Anchor, Event, EventKind, FileTag, Side, Target, TargetKind, Thread, ThreadKind, ThreadState};
 use rain_diffview::LineRef;
@@ -215,7 +216,7 @@ impl App {
         self.brief.focus_at = Some(self.reader_spot());
         if let Some(d) = self.brief_doc() {
             let title = rain_overview::brief::section_title(d, id);
-            self.status = format!("{title} · c comment · ? question");
+            self.status = crate::keys::with_hints(&title, &[(Command::Comment, "comment"), (Command::Ask, "question")]);
         }
     }
 

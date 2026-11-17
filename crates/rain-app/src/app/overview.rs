@@ -4,6 +4,7 @@
 use std::ops::Range;
 use std::time::{Duration, Instant};
 
+use rain_core::command::Command;
 use rain_core::{LineKind, Side};
 use rune::Tx;
 
@@ -128,8 +129,8 @@ impl App {
         };
         self.set_reader_tab(next);
         self.status = match next {
-            ReaderTab::Overview => "Overview · o back to the changes".into(),
-            ReaderTab::Changes => "Changes · o back to the overview".into(),
+            ReaderTab::Overview => crate::keys::with_hints("Overview", &[(Command::Brief, "back to the changes")]),
+            ReaderTab::Changes => crate::keys::with_hints("Changes", &[(Command::Brief, "back to the overview")]),
         };
     }
 

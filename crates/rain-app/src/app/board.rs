@@ -10,6 +10,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use rain_comments::ops;
+use rain_core::command::Command;
 use rain_core::{AcceptedGroup, ReaderMode};
 use rain_triage::{Group, Item, Triage};
 use rune::Tx;
@@ -127,6 +128,8 @@ pub enum Row {
     File(usize),
     /// An accepted group in Done, by index into the session's `accepted`.
     Accepted(usize),
+    /// A file of an opened accepted group, by full-list index.
+    AcceptedFile(usize),
 }
 
 /// The list as drawn: its rows, and per section the files the filter shows and those an
@@ -175,6 +178,8 @@ pub struct BoardState {
     forward: Vec<String>,
     /// The accept snackbar's text and when it appeared.
     pub snack: Option<(String, Instant)>,
+    /// Accepted groups in Done opened to list their files, by index into `accepted`.
+    pub open_accepted: BTreeSet<usize>,
     cache: RefCell<Option<(u64, Arc<Listing>)>>,
 }
 
@@ -281,6 +286,7 @@ impl App {
             self.has_map(),
             self.reloader.installs(),
             self.tree.filter_revision(),
+            &self.board.open_accepted,
         )
             .hash(&mut h);
         (&f.tags, &f.repos, f.unviewed_only, f.commented_only, &f.text).hash(&mut h);
@@ -342,14 +348,13 @@ impl App {
                     }
                     l.rows.push(Row::Header(DONE));
                     if !self.section_folded(DONE) {
-                        l.rows.extend(
-                            self.mirror
-                                .accepted
-                                .iter()
-                                .enumerate()
-                                .filter(|(_, a)| !a.undone)
-                                .map(|(i, _)| Row::Accepted(i)),
-                        );
+                        for (i, a) in self.mirror.accepted.iter().enumerate().filter(|(_, a)| !a.undone) {
+                            l.rows.push(Row::Accepted(i));
+                            if self.board.open_accepted.contains(&i) {
+                                l.rows
+                                    .extend(a.files.iter().filter_map(|k| self.index_of(k)).map(Row::AcceptedFile));
+                            }
+                        }
                     }
                 }
                 _ => {
@@ -413,7 +418,12 @@ impl App {
         };
         match group {
             Some(g) if !g.is_change() => self.accept(g, tx),
-            Some(_) => self.status = "Real changes are read one by one: Space marks this file viewed".into(),
+            Some(_) => {
+                self.status = crate::keys::with_hints(
+                    "Real changes are read one by one",
+                    &[(Command::ViewedAndNext, "marks this file viewed")],
+                );
+            }
             None => self.status = "No file to accept the group of".into(),
         }
     }
@@ -468,11 +478,28 @@ impl App {
 
     /// `u`: undoes the last accept that is not undone: its files read unviewed again.
     pub fn undo_accept(&mut self, _tx: &mut Tx) {
-        let Some(i) = self.mirror.accepted.iter().rposition(|a| !a.undone) else {
+        match self.mirror.accepted.iter().rposition(|a| !a.undone) {
+            Some(i) => self.undo_accept_at(i),
+            None => self.status = "Nothing to undo".into(),
+        }
+    }
+
+    /// Opens or folds accepted group `i` in Done to list its files.
+    pub fn toggle_accepted(&mut self, i: usize) {
+        if !self.board.open_accepted.remove(&i) {
+            self.board.open_accepted.insert(i);
+        }
+    }
+
+    /// Undoes accepted group `i` (any, not just the last): its files go back to their section,
+    /// unviewed unless read by hand since.
+    pub fn undo_accept_at(&mut self, i: usize) {
+        let Some(a) = self.mirror.accepted.get(i).filter(|a| !a.undone).cloned() else {
             self.status = "Nothing to undo".into();
             return;
         };
-        let a = self.mirror.accepted[i].clone();
+        self.board.open_accepted.remove(&i);
+        let newest = self.mirror.accepted.iter().rposition(|a| !a.undone) == Some(i);
         let mut items: Vec<(String, String)> = Vec::new();
         let mut unmarked: Vec<&str> = Vec::new();
         for k in &a.files {
@@ -499,7 +526,9 @@ impl App {
             }
             s.version += 1;
         });
-        self.board.snack = None;
+        if newest {
+            self.board.snack = None;
+        }
         self.status = format!("Undone: {}", a.reason);
     }
 
@@ -528,7 +557,12 @@ impl App {
         });
         if single {
             self.show_pick(cur.map_or(Pick::Landing, Pick::File));
-            self.status = "File at a time · Space done+next · ] [ items · Shift+S stream".into();
+            let items = [Command::NextFile, Command::PrevFile].map(|c| c.hint()).join(" ");
+            let mut status = crate::keys::with_hints("File at a time", &[(Command::ViewedAndNext, "done+next")]);
+            if !items.trim().is_empty() {
+                status = format!("{status} · {} items", items.trim());
+            }
+            self.status = crate::keys::with_hints(&status, &[(Command::ToggleReaderMode, "stream")]);
         } else {
             self.board.single = None;
             self.rebuild_annotations();

@@ -7,6 +7,7 @@ pub mod command;
 pub mod comments;
 pub mod diff;
 pub mod hash;
+pub mod keymap;
 pub mod launch;
 pub mod notes;
 pub mod overview;
@@ -15,13 +16,14 @@ pub mod session;
 pub mod tags;
 
 pub use brief::{BriefDoc, Cite};
-pub use command::{Chord, Command, keymap};
+pub use command::Command;
 pub use comments::{
     Anchor, AnchorHow, AnchorState, Answer, AnswerStatus, CodeSnapshot, CommentImport, DismissReason, Disposition, Draft, HunkViewed,
     ImportBody, Message, Orphan, OrphanReason, Target, TargetKind, Thread, ThreadKind, ThreadState, ViewedRecord,
 };
 pub use diff::{DiffSet, FileDiff, FileDiffBuilder, FileStatus, Hunk, LineKind, LineRec, RepoInfo, Side};
 pub use hash::{diff_content_hash, short_sha};
+pub use keymap::{Chord, ChordKey, Keymap, Profile};
 pub use launch::{Launch, RepoLaunch};
 pub use notes::{Note, NoteKind};
 pub use overview::OverviewDocument;

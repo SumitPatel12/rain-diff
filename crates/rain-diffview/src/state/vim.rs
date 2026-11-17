@@ -113,14 +113,14 @@ impl VisualSpan {
 }
 
 /// One file's lines in row order, each on the side the cursor takes there.
-struct FileLines<'a> {
-    st: &'a DiffState,
-    f: usize,
-    prefer: Side,
+pub(super) struct FileLines<'a> {
+    pub(super) st: &'a DiffState,
+    pub(super) f: usize,
+    pub(super) prefer: Side,
 }
 
 impl FileLines<'_> {
-    fn step(&self, r: u32, forward: bool) -> Option<(u32, Side)> {
+    pub(super) fn step(&self, r: u32, forward: bool) -> Option<(u32, Side)> {
         let mut i = i64::from(r);
         loop {
             i += if forward { 1 } else { -1 };
@@ -154,7 +154,7 @@ impl Lines for FileLines<'_> {
     }
 }
 
-fn norm(t: &str, col: usize) -> usize {
+pub(super) fn norm(t: &str, col: usize) -> usize {
     if t.is_empty() { 0 } else { motion::snap(t, col) }
 }
 
@@ -171,7 +171,7 @@ impl DiffState {
     }
 
     /// The cursor's row, side and line text, when its line has a row.
-    fn cursor_line(&self) -> Option<(u32, Side, &str)> {
+    pub(super) fn cursor_line(&self) -> Option<(u32, Side, &str)> {
         let (_, at) = self.cursor?;
         let r = self.cursor_row()?;
         Some((r, at.side, self.row_text(r, at.side)?))
@@ -205,7 +205,7 @@ impl DiffState {
 
     /// Puts the cursor on row `r`'s line on `side` at byte `col`, keeping it three lines off the
     /// viewport's edges (`reveal`) and its column on screen while lines don't wrap.
-    fn land(&mut self, r: u32, side: Side, col: usize, reveal: bool, tx: &mut Tx) {
+    pub(super) fn land(&mut self, r: u32, side: Side, col: usize, reveal: bool, tx: &mut Tx) {
         let before = self.cursor_row();
         let row = self.rows[r as usize];
         let Some(n) = self.row_line(row, side) else { return };
@@ -304,7 +304,7 @@ impl DiffState {
         }
     }
 
-    fn toggle_visual(&mut self, line: bool) {
+    pub(super) fn toggle_visual(&mut self, line: bool) {
         match self.visual {
             Some(v) if v.line == line => self.end_visual(),
             Some(v) => {
@@ -320,6 +320,7 @@ impl DiffState {
                 };
                 self.span = None;
                 self.selection = None;
+                self.caret_visual = false;
                 self.visual = Some(Visual { line, file, at, byte });
                 self.sync_visual();
             }
@@ -356,7 +357,7 @@ impl DiffState {
 
     /// The text visual mode covers: whole lines each ending in a newline, or from character to
     /// character.
-    fn visual_text(&self) -> Option<String> {
+    pub(super) fn visual_text(&self) -> Option<String> {
         let s = self.visual_span()?;
         let mut out = String::new();
         let mut first = true;
@@ -383,7 +384,7 @@ impl DiffState {
 
     /// Visual mode becomes the diff's own selection, for the composer: a span on one side, or
     /// the lines it covers.
-    fn visual_to_selection(&mut self) {
+    pub(super) fn visual_to_selection(&mut self) {
         let Some(v) = self.visual else { return };
         if v.line {
             self.visual = None;
@@ -438,7 +439,7 @@ impl DiffState {
     }
 
     /// Puts the cursor on the first line at the reading position when it has none on screen.
-    fn ensure_cursor(&mut self, tx: &mut Tx) -> bool {
+    pub(super) fn ensure_cursor(&mut self, tx: &mut Tx) -> bool {
         if self.cursor_row().is_some() {
             return true;
         }
@@ -448,14 +449,14 @@ impl DiffState {
         false
     }
 
-    fn move_in_line(&mut self, to: impl FnOnce(&str, usize) -> Option<usize>, tx: &mut Tx) {
+    pub(super) fn move_in_line(&mut self, to: impl FnOnce(&str, usize) -> Option<usize>, tx: &mut Tx) {
         let Some((r, side, t)) = self.cursor_line() else { return };
         let Some(b) = to(t, norm(t, self.col)) else { return };
         self.want = Want::Here;
         self.land(r, side, b, true, tx);
     }
 
-    fn word(&mut self, kind: u8, big: bool, n: u32, tx: &mut Tx) {
+    pub(super) fn word(&mut self, kind: u8, big: bool, n: u32, tx: &mut Tx) {
         let Some((r, side, t)) = self.cursor_line() else { return };
         let lines = FileLines {
             st: self,
@@ -485,7 +486,7 @@ impl DiffState {
 
     /// `gg` / `G`: the file's first or last line, or with a count its line `count` on the
     /// cursor's side, at its first non-blank.
-    fn file_edge(&mut self, last: bool, count: u32, tx: &mut Tx) {
+    pub(super) fn file_edge(&mut self, last: bool, count: u32, tx: &mut Tx) {
         let prefer = self.cursor.map_or(Side::New, |(_, at)| at.side);
         let f = self.cursor.map_or(self.visible, |(f, _)| f);
         if f >= self.files.len() {
@@ -516,14 +517,14 @@ impl DiffState {
         self.land(r, side, col, true, tx);
     }
 
-    /// Ctrl+D / Ctrl+U: half a viewport down or up, the cursor moving as many lines and keeping
-    /// its place on screen.
-    fn half_page(&mut self, down: bool, tx: &mut Tx) {
+    /// Ctrl+D / Ctrl+U (`part` 0.5), Page Down / Page Up: that part of a viewport down or up,
+    /// the cursor moving as many lines and keeping its place on screen.
+    pub(super) fn half_page(&mut self, down: bool, part: f32, tx: &mut Tx) {
         let [y, h, _] = self.scroll.get();
         let h = if h > 0.0 { h } else { 30.0 * self.m.line };
-        let n = (h / 2.0 / self.m.line).round().max(1.0) as u32;
+        let n = (h * part / self.m.line).round().max(1.0) as u32;
         let from = match self.cursor_row() {
-            Some(r) if self.in_view(r as usize) => r,
+            Some(r) if self.visible_rows.is_empty() || self.visible_rows.contains(&(r as usize)) => r,
             _ => self.row_below_header().unwrap_or(0),
         };
         let Some(r) = self.step_rows(i64::from(from), down, n) else {
@@ -567,7 +568,7 @@ impl DiffState {
             }
             VimKey::Escape => return Vim::Pass,
             VimKey::HalfDown | VimKey::HalfUp => {
-                self.half_page(key == VimKey::HalfDown, tx);
+                self.half_page(key == VimKey::HalfDown, 0.5, tx);
                 return Vim::Done;
             }
             VimKey::Char(c) => c,

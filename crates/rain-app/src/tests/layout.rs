@@ -28,6 +28,11 @@ fn shift_escape_twice_restores_the_layout_exactly() {
     assert!(rt.find("rail").is_none(), "zoom hides the rail too");
     assert!(rt.state.diff_width > reader + 300.0, "{reader} -> {}", rt.state.diff_width);
     assert!(rt.state.status.starts_with("Zoomed"), "{}", rt.state.status);
+    assert!(
+        crate::app::layout::is_zoomed_status(&rt.state.status),
+        "the status bar leaves it to the zoom chip"
+    );
+    assert!(!crate::app::layout::is_zoomed_status("Zoomed out of nothing"));
     press(&mut rt, Key::Escape, Mods::default());
     assert!(rt.state.layout.is_zoomed(), "Esc is not a way out of zoom");
     press(&mut rt, Key::Escape, shift());

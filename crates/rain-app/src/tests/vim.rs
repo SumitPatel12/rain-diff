@@ -89,6 +89,106 @@ fn the_block_is_a_square_one_cell_wide_and_a_click_moves_it() {
     assert_eq!(at(&rt), (line, 0), "a click at the line's start puts the cursor there");
 }
 
+/// A patch changing `s.rs`: a context line, a changed line, an added long line, a context line.
+fn split_patch() -> (PathBuf, String) {
+    let long: Vec<String> = (0..60).map(|i| format!("w{i:02}")).collect();
+    let long = format!("    let long = [{}];", long.join(", "));
+    let p = format!(
+        "diff --git a/s.rs b/s.rs\n--- a/s.rs\n+++ b/s.rs\n@@ -1,3 +1,4 @@\n fn alpha(beta, gamma) {{\n-    let x = old_value;\n+    let x = new_value;\n+{long}\n }}\n"
+    );
+    let d = temp_dir();
+    std::fs::create_dir_all(&d).unwrap();
+    let path = d.join("s.patch");
+    std::fs::write(&path, p).unwrap();
+    (path, long)
+}
+
+fn el_of(rt: &Runtime<App>, key: &str) -> Vec<(usize, rune::ElementInfo)> {
+    rt.elements()
+        .into_iter()
+        .enumerate()
+        .filter(|(_, e)| e.key.as_deref() == Some(key))
+        .collect()
+}
+
+/// The block over the code `text` it sits in: its index, rect and the text's index and rect.
+fn block_and_text(rt: &Runtime<App>) -> Option<(usize, [f32; 4], usize, [f32; 4])> {
+    let (bi, b) = el_of(rt, "block").into_iter().next()?;
+    let (ti, t) = el_of(rt, "text").into_iter().find(|(_, t)| t.parent == b.parent)?;
+    Some((bi, b.rect, ti, t.rect))
+}
+
+#[test]
+fn the_block_is_a_full_line_square_over_its_glyph_in_every_layout_and_density() {
+    for layout in [ViewLayout::Unified, ViewLayout::Split] {
+        for density in [Density::Comfortable, Density::Compact] {
+            let (patch, long) = split_patch();
+            let _mono = rune::text::with_families("Inter", "ui-monospace");
+            let mut rt = runtime(app(patch, false));
+            rt.set_font_families("Inter", "ui-monospace");
+            rt.update(|s, _| {
+                s.set_layout(layout);
+                s.set_density(density);
+            });
+            settle(&mut rt);
+            let case = format!("{layout:?} {density:?}");
+            let line_h = rt.state.active().metrics().line;
+            keys(&mut rt, "jw");
+            assert_eq!(at(&rt), (1, 3), "{case}");
+            let (bi, b, ti, t) = block_and_text(&rt).unwrap_or_else(|| panic!("{case}: a block"));
+            let cell = b[2];
+            assert_eq!(el_of(&rt, "block").len(), 1, "{case}: one block");
+            assert!((b[3] - line_h).abs() < 0.01, "{case}: the line's height {line_h}: {b:?}");
+            assert!((6.0..10.0).contains(&cell), "{case}: one cell wide: {b:?}");
+            assert!((b[0] - (t[0] + 3.0 * cell)).abs() < 0.75, "{case}: on `a`: {b:?} {t:?}");
+            assert!((b[1] - t[1]).abs() < 0.01, "{case}: from the line's top");
+            let e = &rt.elements()[bi];
+            assert_eq!(e.radius, 0.0, "{case}: square corners");
+            assert!(bi > ti, "{case}: drawn over the text and its highlights");
+            let glyph = rt.elements().into_iter().find(|g| g.parent == Some(bi)).map(|g| g.text);
+            assert_eq!(glyph, Some(Some("a".into())), "{case}: the glyph drawn again inverted");
+
+            keys(&mut rt, "Gk0w");
+            assert_eq!(at(&rt), (3, 4), "{case}");
+            let (_, b, _, t) = block_and_text(&rt).unwrap_or_else(|| panic!("{case}: a block on the long line"));
+            assert!(
+                (b[0] - (t[0] + 4.0 * cell)).abs() < 0.75 && (b[1] - t[1]).abs() < 0.01,
+                "{case}: {b:?} {t:?}"
+            );
+            keys(&mut rt, "$");
+            let blocks = el_of(&rt, "block").len();
+            match layout {
+                ViewLayout::Unified => assert_eq!(blocks, 1, "{case}: unwrapped, still a square"),
+                _ => assert_eq!(blocks, 0, "{case}: on a wrapped line the highlight stands in"),
+            }
+
+            keys(&mut rt, "0");
+            let (_, _, _, t) = block_and_text(&rt).unwrap();
+            let (x, y) = (t[0] + 7.5 * cell, t[1] + line_h / 2.0);
+            rt.pointer_move(x, y);
+            rt.pointer_down(x, y);
+            rt.pointer_up(x, y);
+            settle(&mut rt);
+            assert_eq!(at(&rt), (3, 7), "{case}: a click puts the cursor on the clicked character");
+            if layout == ViewLayout::Split {
+                let (x, y) = (t[0] + 2.5 * cell, t[1] + line_h * 1.5);
+                rt.pointer_move(x, y);
+                rt.pointer_down(x, y);
+                rt.pointer_up(x, y);
+                settle(&mut rt);
+                let (line, byte) = at(&rt);
+                assert_eq!(line, 3, "{case}");
+                assert!(byte > 20, "{case}: on the second line, at {byte}");
+                let b = long.as_bytes();
+                assert!(
+                    b[byte - 2] == b'w' && b[byte - 1].is_ascii_digit() && b[byte].is_ascii_digit(),
+                    "{case}: two cells into the second line's first word: {byte}"
+                );
+            }
+        }
+    }
+}
+
 #[test]
 fn vim_motions_reach_the_diff_ahead_of_the_keymap() {
     let mut rt = vim_rt(200);

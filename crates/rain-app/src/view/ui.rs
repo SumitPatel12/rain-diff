@@ -136,7 +136,7 @@ impl Ghost {
         }
         // Keys live in the tooltip only, never on the button's face.
         let help = match (self.help, &self.hint) {
-            (Some(h), Some(key)) if !h.contains(key.as_str()) => Some(format!("{h}  {key}")),
+            (Some(h), Some(key)) => Some(format!("{h}  {key}")),
             (Some(h), _) => Some(h),
             (None, Some(key)) => self.label.as_ref().map(|l| format!("{l}  {key}")),
             (None, None) => None,

@@ -94,12 +94,18 @@ pub(crate) fn code_left(digits: u32) -> f32 {
 
 thread_local! {
     static LINE_BUILDS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static FOLD_BUILDS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
 /// Lines built on this thread so far, memoised ones not counted: a test reads it around a key
 /// to check the key rebuilt only the rows it touched.
 pub fn line_builds() -> u64 {
     LINE_BUILDS.with(|n| n.get())
+}
+
+/// Gap and file-note rows built on this thread so far, memoised ones not counted.
+pub fn fold_builds() -> u64 {
+    FOLD_BUILDS.with(|n| n.get())
 }
 
 /// The [`Tx`] scroll key of the viewport of a [`DiffView`] with the default key `"diff"`, for
@@ -343,7 +349,7 @@ impl<S: 'static> DiffView<S> {
         let look = Look::new(k, self.fills, self.selection, self.colors, st.metrics());
         let wrap = st.wraps();
         let key = self.key.clone();
-        if !wrap && let Some(r) = rune::memo::layout(&format!("{key}/scroll")) {
+        if let Some(r) = rune::memo::layout(&format!("{key}/scroll")) {
             st.set_viewport(r);
         }
         st.set_scroll_key(&key);
@@ -698,6 +704,8 @@ struct Marks {
     vis: Option<(Side, u32, u32)>,
     /// The viewport's height on the cursor's row, which sizes its margin box.
     room: u32,
+    /// The viewport's width on the cursor's row while lines wrap, which places its block.
+    wide: u32,
     range: [bool; 2],
     spans: u64,
 }
@@ -763,6 +771,7 @@ impl<S: 'static> View<S> {
                     v.bytes(i as u32, len).map(|b| (side, b.start as u32, b.end as u32))
                 }),
             room: if cursor { st.viewport_height().to_bits() } else { 0 },
+            wide: if cursor && st.wraps() { st.view_width().to_bits() } else { 0 },
             ..Marks::default()
         };
         if st.annotations().is_empty() {
@@ -790,10 +799,10 @@ impl<S: 'static> View<S> {
         let lit = |e: El| if dim { e.child(self.dim_scrim()) } else { e };
         match r {
             Row::File(f) => lit(self.file_row(s, st, f as usize)),
-            Row::Note(f) => memo(&key, (self.look.version, st.rev, st.view_width().to_bits(), dim), || {
+            Row::Note(f) => memo(&key, (self.look.version, st.rev, self.view_w(st).map(f32::to_bits), dim), || {
                 lit(self.note(st, f as usize))
             }),
-            Row::Gap { f, gap } => memo(&key, (self.look.version, st.rev, st.view_width().to_bits(), dim), || {
+            Row::Gap { f, gap } => memo(&key, (self.look.version, st.rev, self.view_w(st).map(f32::to_bits), dim), || {
                 lit(self.gap(st, f as usize, gap as usize))
             }),
             _ if !st.annotations().is_empty() && self.d.annotation.is_some() && self.annotated(st, r) => {
@@ -1314,34 +1323,33 @@ impl<S: 'static> View<S> {
             vis,
             block,
         };
-        let (shown, spans, pads, mut lit) = drawn(c.text, spans, m, st.wraps(), &paint);
+        let wrap = st.wraps();
+        let (shown, spans, pads, mut lit) = drawn(c.text, spans, m, wrap, &paint);
         let cell_w = rune::text::advance("0", l.font);
-        // Highlights have round corners: the block is a square behind its glyph instead, the
-        // highlight left only to colour the glyph.
-        let square = (has_block && !st.wraps())
-            .then(|| lit.last().map(TextHighlight::range))
-            .flatten()
-            .map(|r| {
-                if let Some(h) = lit.last_mut() {
-                    *h = TextHighlight::new(r.clone(), l.text.alpha(0.0)).color(l.bg).pad(0.0);
-                }
-                let head = &shown[..r.start];
-                // A line's measured width leaves out trailing spaces, so measure past a mark.
-                let x = if head.len() <= 4096 {
-                    rune::text::advance(&format!("{head}|"), l.font) - rune::text::advance("|", l.font)
-                } else {
-                    cell_w * head.chars().count() as f32
-                };
-                let w = rune::text::advance(&shown[r], l.font).max(cell_w);
+        // Highlights have round corners and paint under later ones: the block is a square over
+        // the text with its glyph drawn again inverted, where the view knows the glyph's place.
+        let block = if has_block { lit.pop() } else { None };
+        let square = block.and_then(|h| {
+            let r = h.range();
+            let x = (!wrap || wrap_width(st, f).is_some_and(|w| on_first_line(&shown, r.end, w, cell_w)))
+                .then(|| x_in(&shown[..r.start], l.font, cell_w));
+            if x.is_none() {
+                lit.push(h);
+            }
+            x.map(|x| {
+                let w = rune::text::advance(&shown[r.clone()], l.font).max(cell_w);
                 el().key("block")
                     .absolute(x, 0.0)
                     .w(w)
                     .h(l.font.line_height)
                     .fill(l.text)
+                    .inert()
                     .a11y_hidden()
-            });
+                    .child(text(shown[r].to_owned()).font(l.font).color(l.bg).single_line())
+            })
+        });
         let mut t = rich(shown, spans).font(l.font).color(l.text).key("text");
-        t = if st.wraps() { t.w_full() } else { t.single_line() };
+        t = if wrap { t.w_full() } else { t.single_line() };
         if !lit.is_empty() {
             t = t.text_highlights(lit);
         }
@@ -1349,13 +1357,9 @@ impl<S: 'static> View<S> {
             t = t.selectable(true).selection_color(l.selection);
             t = pads.into_iter().fold(t, |t, r| t.uncopied(r));
         }
-        let t = match square {
-            Some(b) => el().key("cell").child(b).child(t),
-            None => t,
-        };
         let (get, cell) = (self.d.get_mut.clone(), format!("{row_key}.{}", side as u8));
         let (aim, click) = (self.d.get_mut.clone(), self.d.get_mut.clone());
-        let row_at = i as u32;
+        let (row_at, line_h) = (i as u32, l.font.line_height);
         let mut code = col()
             .grow(1.0)
             .min_w(0.0)
@@ -1363,12 +1367,18 @@ impl<S: 'static> View<S> {
             .pr(CODE_PAD.1)
             .child(t)
             .on_pointer_move_local(move |s: &mut S, p, tx: &mut Tx| {
-                aim(s).pointer_x = p.x - CODE_PAD.0;
+                aim(s).pointer = [p.x - CODE_PAD.0, p.y];
                 tx.live_only();
             })
             .on_press_tx(move |s: &mut S, tx: &mut Tx| {
                 let st = click(s);
-                let col = (st.pointer_x / cell_w).max(0.0) as u32;
+                let [x, y] = st.pointer;
+                let col = (x / cell_w).max(0.0) as u32;
+                let line = (y / line_h).max(0.0) as usize;
+                let col = match (line, st.wraps()) {
+                    (1.., true) => wrapped_col(st, row_at, side, line, col, cell_w),
+                    _ => col,
+                };
                 st.click_code(row_at, side, col, tx);
             })
             .on_hover_change(move |s: &mut S, inside, tx: &mut Tx| {
@@ -1386,7 +1396,10 @@ impl<S: 'static> View<S> {
                     .pb(2.0),
             );
         }
-        code
+        match square {
+            Some(b) => code.child(b),
+            None => code,
+        }
     }
 
     fn gutter_w(&self, st: &DiffState, f: usize) -> f32 {
@@ -1470,6 +1483,7 @@ impl<S: 'static> View<S> {
     /// The unchanged lines between two hunks, folded: a band with buttons to show more, the
     /// count and the next hunk's header.
     fn gap(&self, st: &DiffState, f: usize, gap: usize) -> El {
+        FOLD_BUILDS.with(|n| n.set(n.get() + 1));
         let l = &self.look;
         let file = &st.files()[f];
         let hidden = st.hidden(f, gap).unwrap_or(0);
@@ -1577,6 +1591,7 @@ impl<S: 'static> View<S> {
 
     /// A file with no lines to show.
     fn note(&self, st: &DiffState, f: usize) -> El {
+        FOLD_BUILDS.with(|n| n.set(n.get() + 1));
         let l = &self.look;
         let file = &st.files()[f];
         let msg = if file.binary {
@@ -1746,6 +1761,80 @@ impl<S: 'static> View<S> {
 /// An annotation's widget, keyed by its id so it keeps its state as rows come and go.
 fn note(el: El, a: &Annotation) -> El {
     col().key(format!("a.{}", a.id)).w_full().child(el)
+}
+
+/// The width `file`'s code wraps at, from the view's width: `None` until it is laid out.
+fn wrap_width(st: &DiffState, file: usize) -> Option<f32> {
+    let (w, n) = (st.view_width(), number_w(st.digits(file)));
+    let gutter = match st.draw(file) {
+        Draw::Split => return Some((w - 1.0) / 2.0 - MARKS - n - SIGN.1 - CODE_PAD.0 - CODE_PAD.1).filter(|_| w > 0.0),
+        Draw::One(_) => MARKS + n + SIGN.0,
+        Draw::Unified => MARKS + 2.0 * n + SIGN.0,
+    };
+    Some(w - gutter - CODE_PAD.0 - CODE_PAD.1).filter(|_| w > 0.0)
+}
+
+/// How far into a line `head` reaches, trailing spaces included.
+fn x_in(head: &str, font: TextStyle, cell_w: f32) -> f32 {
+    if head.len() <= 4096 {
+        // A line's measured width leaves out trailing spaces, so measure past a mark.
+        rune::text::advance(&format!("{head}|"), font) - rune::text::advance("|", font)
+    } else {
+        cell_w * head.chars().filter(|&c| c != '\u{200B}').count() as f32
+    }
+}
+
+/// Whether the byte before `end` in `shown`, wrapped at `w`, sits on the first line, by
+/// counting columns as [`wrap_starts`] does rather than shaping the text.
+fn on_first_line(shown: &str, end: usize, w: f32, cell_w: f32) -> bool {
+    let cols = (w / cell_w + 0.01).max(1.0) as u32;
+    let col = shown[..end].chars().filter(|&c| c != '\u{200B}').count() as u32;
+    wrap_starts(shown, cols, 2).get(1).is_none_or(|&b| col <= b)
+}
+
+/// The column a click lands on, `col` cells into the `line`th line of row `r`'s wrapped code.
+fn wrapped_col(st: &DiffState, r: u32, side: Side, line: usize, col: u32, cell_w: f32) -> u32 {
+    let (Some(code), Some(row)) = (st.row_text(r, side), st.rows.get(r as usize)) else {
+        return col;
+    };
+    let Some(w) = wrap_width(st, row.file()) else { return col };
+    let (shown, ..) = tabbed(code, Vec::new(), Vec::new(), true);
+    let starts = wrap_starts(&shown, (w / cell_w + 0.01).max(1.0) as u32, line + 2);
+    let Some(&start) = starts.get(line) else {
+        return starts.last().map_or(col, |s| s + col);
+    };
+    match starts.get(line + 1) {
+        Some(&next) => (start + col).min(next.saturating_sub(1)),
+        None => start + col,
+    }
+}
+
+/// Where the first `lines` lines of `shown` start, in columns, wrapped at `cols` as text layout
+/// breaks it: after a space or a zero-width space, a word longer than a line left whole.
+fn wrap_starts(shown: &str, cols: u32, lines: usize) -> Vec<u32> {
+    let mut starts = vec![0];
+    let (mut col, mut line, mut brk) = (0u32, 0u32, None::<u32>);
+    for ch in shown.chars() {
+        if starts.len() >= lines {
+            break;
+        }
+        let zw = ch == '\u{200B}';
+        if !zw
+            && !ch.is_whitespace()
+            && col - line >= cols
+            && let Some(b) = brk.take().filter(|&b| b > line)
+        {
+            starts.push(b);
+            line = b;
+        }
+        if !zw {
+            col += 1;
+        }
+        if zw || ch.is_whitespace() {
+            brk = Some(col);
+        }
+    }
+    starts
 }
 
 /// A line as drawn: text, spans, inserted (uncopied) ranges and span marks, from `tabbed`.
@@ -1966,6 +2055,30 @@ mod tests {
             &p,
         );
         assert!(shown.is_empty() && pads.is_empty() && lit.is_empty(), "no block, nothing added");
+    }
+
+    #[test]
+    fn wrapped_lines_start_after_spaces_and_breaks_and_long_words_stay_whole() {
+        let all = usize::MAX;
+        assert_eq!(wrap_starts("aaa bbb ccc", 5, all), vec![0, 4, 8]);
+        assert_eq!(wrap_starts("aaa bbb ccc", 5, 2), vec![0, 4], "stops at the lines asked for");
+        assert_eq!(wrap_starts("aaa bbb ccc", 8, all), vec![0, 8]);
+        assert_eq!(wrap_starts("abcdefghij kl", 4, all), vec![0, 11]);
+        assert_eq!(
+            wrap_starts("a.\u{200B}bcde", 3, all),
+            vec![0, 2],
+            "a zero-width space breaks and takes no column"
+        );
+        assert_eq!(wrap_starts("short", 80, all), vec![0]);
+    }
+
+    #[test]
+    fn the_block_is_on_the_first_wrapped_line_while_its_word_is() {
+        let (w, cell) = (5.0 * 7.0, 7.0);
+        assert!(on_first_line("aaa bbb ccc", 1, w, cell));
+        assert!(on_first_line("aaa bbb ccc", 3, w, cell), "the word's last character");
+        assert!(!on_first_line("aaa bbb ccc", 5, w, cell), "bbb wrapped to the second line");
+        assert!(on_first_line("short", 5, w * 4.0, cell), "no wrap at all");
     }
 
     #[test]

@@ -12,6 +12,7 @@ mod diagram;
 mod editor;
 mod filter;
 mod find;
+mod folds;
 pub(crate) mod layout;
 mod nav;
 mod notes;
@@ -24,6 +25,7 @@ pub(crate) mod rest;
 mod review;
 mod ruler;
 mod session;
+pub(crate) mod shortcuts;
 mod tour;
 mod verify;
 pub(crate) mod vim;
@@ -47,7 +49,7 @@ use rain_tree::TreeState;
 use rune::{TextEdit, Tx};
 use rune_kit::PaneState;
 
-use crate::load::{self, Data, LARGE_FILE_LINES, Msg};
+use crate::load::{self, Data, Msg};
 use crate::settings::{Density, Settings, Theme, ViewLayout};
 use crate::theme::Scheme;
 
@@ -70,6 +72,7 @@ pub(crate) use remote::APPLY_CALLS;
 pub use review::{LineMaps, ReviewState, VERDICTS, verdict_label};
 pub use ruler::RulerState;
 pub(crate) use session::{comment_counts, file_of_thread};
+pub use shortcuts::ShortcutsState;
 pub use tour::{FoundBy, TourStage, TourState};
 
 /// Thread authors whose messages don't count as "someone else's": the user writes without one.
@@ -178,6 +181,9 @@ pub struct App {
     pub composer_ui: ComposerUi,
     pub reloader: ReloadState,
     pub ruler: RulerState,
+    pub shortcuts: ShortcutsState,
+    /// Bumped whenever the active keymap is replaced, so cached hints rebuild.
+    pub keymap_gen: u64,
     pub diff_width: f32,
     pub window_width: f32,
     /// A window size laid out since the last save.
@@ -241,6 +247,12 @@ impl App {
             session_error.or(settings_error).unwrap_or_default()
         };
         let goto = launch.goto.clone();
+        let (keymap, ignored) = settings.keymap.build();
+        rain_core::keymap::set_active(keymap);
+        let status = match ignored.first() {
+            Some(_) if status.is_empty() => shortcuts::ignored_message(&ignored),
+            _ => status,
+        };
         if settings.migrated
             && let Some(p) = &settings_path
         {
@@ -260,6 +272,8 @@ impl App {
             composer_ui: ComposerUi::default(),
             reloader: ReloadState::default(),
             ruler: RulerState::default(),
+            shortcuts: ShortcutsState::default(),
+            keymap_gen: 0,
             launch,
             shared,
             session_path,
@@ -389,7 +403,7 @@ impl App {
         self.timings.load_ms = d.timings.total_ms;
         let mut diff = DiffState::new(d.files);
         diff.set_repo_ids(self.repos.iter().map(|r| r.id.clone()).collect());
-        diff.set_collapsed_where(true, |f| f.lines.len() > LARGE_FILE_LINES || (f.generated && f.lines.len() > 2_000));
+        diff.set_collapsed_where(true, folds::large);
         self.diff = diff;
         self.install_excerpt_source();
         self.filter.subset = None;
@@ -579,6 +593,7 @@ impl App {
         self.sidebar = layout::list_pane(settings.sidebar_width, settings.list_open);
         self.layout = LayoutState::default();
         self.settings = settings;
+        self.apply_keymap();
     }
 
     pub fn save_settings(&self) {
@@ -815,6 +830,9 @@ impl App {
     /// Closes the topmost layer `Esc` reaches before the filter: the palette, the top overlay,
     /// the composer, a reply, find, the tour, a focused thread. Zoom is not a layer.
     fn close_layer(&mut self) -> bool {
+        if self.close_shortcuts() {
+            return true;
+        }
         if self.menus.close() {
             return true;
         }
@@ -900,6 +918,9 @@ impl App {
             Command::Zoom => self.toggle_zoom(),
             Command::ToggleWholeFile => self.toggle_whole_file(tx),
             Command::ExpandAllContext => self.expand_all_context(tx),
+            Command::CollapseAllContext => self.collapse_all_context(tx),
+            Command::CollapseAllFiles => self.collapse_all_files(),
+            Command::ExpandAllFiles => self.expand_all_files(),
             Command::FilterFiles | Command::FocusTree => self.focus_list_filter(tx),
             Command::ClearFilter => {
                 self.clear_filter();
@@ -909,11 +930,13 @@ impl App {
             Command::Find => self.open_find(),
             Command::Comment => {
                 if !self.artifact_key(ComposeMode::Comment) {
+                    self.active_mut().take_visual_selection();
                     self.comment(tx);
                 }
             }
             Command::Ask => {
                 if !self.artifact_key(ComposeMode::Question) {
+                    self.active_mut().take_visual_selection();
                     self.ask_question(tx);
                 }
             }
@@ -930,10 +953,7 @@ impl App {
             Command::Tour => self.start_tour(tx),
             Command::ToggleVerify => self.toggle_verify_card(),
             Command::FinishReview => self.finish_review(tx),
-            Command::KeySheet => {
-                self.open_palette();
-                self.status = "Every command with its keys".into();
-            }
+            Command::KeySheet => self.open_shortcuts(),
             Command::OpenInEditor => self.open_in_editor(),
             Command::CopyLocation => self.copy_location(tx),
             Command::CopyAll => self.copy_all(tx),
@@ -960,6 +980,7 @@ impl App {
             || self.palette.edit.focused
             || self.tree.filter_edit.focused
             || self.review.summary.focused
+            || self.shortcuts.search.focused
             || (self.picker.edit.focused && self.layout.is_open(Overlay::Picker))
     }
 }

@@ -46,7 +46,7 @@ fn half(c: char) -> Option<VimKey> {
 impl App {
     /// Whether the diff is what the keys move in: the Changes tab with no Map or Conversation
     /// over it.
-    fn vim_live(&self) -> bool {
+    pub(crate) fn vim_live(&self) -> bool {
         self.reader_tab() == ReaderTab::Changes && !self.layout.is_open(Overlay::Map) && !self.layout.is_open(Overlay::Conversation)
     }
 

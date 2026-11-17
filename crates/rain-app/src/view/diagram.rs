@@ -207,9 +207,12 @@ fn legend(st: &DiagramStyle, k: &Kit) -> El {
         .child(item(el().w(10.0).h(10.0).radius(2.0).fill(st.thread.alpha(0.4)), "threads"))
         .child(item(el().w(10.0).h(10.0).radius(2.0).border(2.0, st.foreground), "selected"))
         .child(
-            text("Click opens the files · c comment · ? ask")
-                .font(TYPE.small)
-                .color(k.c.text_faint),
+            text(crate::keys::with_hints(
+                "Click opens the files",
+                &[(Command::Comment, "comment"), (Command::Ask, "ask")],
+            ))
+            .font(TYPE.small)
+            .color(k.c.text_faint),
         )
         .child(
             el().pin(Some(0.0), Some(0.0), Some(0.0), None)
@@ -362,11 +365,24 @@ fn side_pane(s: &App, node: &str, k: &Kit) -> El {
             .on_press_tx(|s: &mut App, tx: &mut Tx| s.open_selected_node(tx)),
         )
         .child(
-            outline("map-comment", "Comment", Some("c"), 26.0, k).on_press(move |s: &mut App| s.comment_on_node(&id, ComposeMode::Comment)),
+            outline(
+                "map-comment",
+                "Comment",
+                Command::Comment.chord().map(|c| c.display()).as_deref(),
+                26.0,
+                k,
+            )
+            .on_press(move |s: &mut App| s.comment_on_node(&id, ComposeMode::Comment)),
         )
         .child(
-            outline("map-ask", "Ask Claude", Some("?"), 26.0, k)
-                .on_press(move |s: &mut App| s.comment_on_node(&ask, ComposeMode::Question)),
+            outline(
+                "map-ask",
+                "Ask Claude",
+                Command::Ask.chord().map(|c| c.display()).as_deref(),
+                26.0,
+                k,
+            )
+            .on_press(move |s: &mut App| s.comment_on_node(&ask, ComposeMode::Question)),
         )
         .child(
             el().pin(Some(0.0), Some(0.0), Some(0.0), None)

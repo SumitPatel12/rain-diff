@@ -26,7 +26,7 @@ pub const ATTACHED_SECS: u64 = 15;
 /// Diff lines quoted above and below the anchor.
 const EXCERPT_CONTEXT: u32 = 12;
 pub const NO_ANSWERER: &str = "no agent attached · set ask.command in the palette";
-pub const NOT_ALLOWED: &str = "waiting for Allow (Ctrl+K › Ask: allow)";
+pub const NOT_ALLOWED: &str = "waiting for Allow (Command palette › Ask: allow)";
 
 enum Phase {
     /// An idle attached agent has until then to start on it.

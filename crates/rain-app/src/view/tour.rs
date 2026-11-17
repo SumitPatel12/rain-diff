@@ -210,9 +210,13 @@ fn step(s: &App, k: &Kit) -> Option<El> {
         .w_full()
         .gap(6.0)
         .items_center()
-        .child(nav_button(Nav::Back("Previous", "Previous step"), "tour-prev", "p", k, |s, tx| {
-            s.tour_prev(tx)
-        }))
+        .child(nav_button(
+            Nav::Back("Previous", "Previous step"),
+            "tour-prev",
+            rain_core::Command::PrevHunk,
+            k,
+            |s, tx| s.tour_prev(tx),
+        ))
         .child(el().grow(1.0));
     let primary = capitalized(s.tour_space_does());
     nav = nav
@@ -220,7 +224,7 @@ fn step(s: &App, k: &Kit) -> Option<El> {
         .child(nav_button(
             Nav::Forward("Next", "Next step, not marked understood"),
             "tour-next",
-            "n",
+            rain_core::Command::NextHunk,
             k,
             |s, tx| s.tour_next(tx),
         ));
@@ -239,7 +243,7 @@ enum Nav {
 }
 
 /// An outlined nav button with a chevron; its key lives in the tooltip only.
-fn nav_button(nav: Nav, key: &str, shortcut: &str, k: &Kit, f: impl Fn(&mut App, &mut Tx) + 'static) -> El {
+fn nav_button(nav: Nav, key: &str, cmd: rain_core::Command, k: &Kit, f: impl Fn(&mut App, &mut Tx) + 'static) -> El {
     let (surf, _) = sr(k);
     let (label, help, back) = match nav {
         Nav::Back(l, h) => (l, h, true),
@@ -251,7 +255,7 @@ fn nav_button(nav: Nav, key: &str, shortcut: &str, k: &Kit, f: impl Fn(&mut App,
         .key(key.to_owned())
         .role("button")
         .label(label)
-        .help(format!("{help}  {shortcut}"))
+        .help(crate::keys::tip(help, cmd))
         .h(26.0)
         .px(8.0)
         .gap(4.0)
@@ -374,7 +378,7 @@ fn end(s: &App, k: &Kit) -> El {
             .child(nav_button(
                 Nav::Back("Last step", "Back to the last step"),
                 "tour-back",
-                "p",
+                rain_core::Command::PrevHunk,
                 k,
                 |s, tx| s.tour_prev(tx),
             ))

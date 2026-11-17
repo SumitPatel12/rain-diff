@@ -1,5 +1,6 @@
-//! The file header's `Whole file z` button.
+//! The file header's `Whole file` button, `Changes only` while the file shows whole.
 
+use rain_core::command::Command;
 use rune::{El, Tx};
 use rune_kit::Kit;
 
@@ -19,19 +20,18 @@ pub(super) fn header_button(s: &App, g: usize, k: &Kit) -> Option<El> {
         Some(_) if f.hunks.is_empty() || f.binary => return None,
         Some(why) => ("Whole file", why, true),
         // The same label while it reads, so the button keeps its width.
-        None if s.active().needs_texts(local) => ("Whole file", "Reading the whole file  z", false),
-        None if s.is_whole(g) => ("Whole file", "Show only the changes  z", false),
-        None => ("Whole file", "Show the whole file with changes inline  z", false),
+        None if s.active().needs_texts(local) => ("Whole file", "Reading the whole file", false),
+        None if s.is_whole(g) => ("Changes only", "Show only the changes", false),
+        None => ("Whole file", "Show the whole file with changes inline", false),
     };
-    let b = Ghost::new(format!("whole-{g}"))
-        .icon(&icons::FILE)
+    let mut b = Ghost::new(format!("whole-{g}"))
+        .icon(if s.is_whole(g) { &icons::FOLD_ALL } else { &icons::FILE })
         .label(label)
-        .hint("z")
-        .help(help)
-        .on(s.is_whole(g))
-        .height(26.0)
-        .build(k)
-        .checked(s.is_whole(g));
+        .help(help);
+    if let Some(c) = Command::ToggleWholeFile.chord() {
+        b = b.hint(c.display());
+    }
+    let b = b.height(26.0).build(k);
     Some(if disabled {
         b.opacity(0.45)
     } else {

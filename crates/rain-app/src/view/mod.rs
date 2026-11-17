@@ -19,6 +19,7 @@ mod peek;
 mod picker;
 mod ruler;
 mod selection;
+mod shortcuts;
 mod sidebar;
 mod status;
 mod tabs;
@@ -47,6 +48,8 @@ pub(crate) fn toolbar_title(s: &App) -> String {
 #[cfg(test)]
 pub(crate) use overview::{cite_target, demote_headings, inline_cites, link_cites, parse_cite};
 pub(crate) use peek::code as peek_code;
+#[cfg(test)]
+pub(crate) use status::hint_pairs;
 pub(crate) use weather::{Motion as WeatherMotion, moved as weather_moved};
 
 pub fn scheme_of(s: &App, cx: &Cx<App>) -> Scheme {
@@ -89,6 +92,9 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
     root = root.children(selection::toolbar(s, k, cx));
     if s.palette.open {
         root = root.child(palette::palette_overlay(s, k).absolute(0.0, 0.0));
+    }
+    if s.shortcuts.open {
+        root = root.child(shortcuts::shortcuts_overlay(s, k).absolute(0.0, 0.0));
     }
     if s.phase == Phase::Ready {
         filter::chips_popover(s, k, &mut layer);
@@ -325,7 +331,8 @@ fn reader_pane(s: &App, look: &Look, cx: &mut Cx<App>) -> El {
                         .items_center()
                         .child(muted("Fix the repo or refs, then reload.", k))
                         .child(
-                            ui::outline("error-reload", "Reload", Some("Shift+R"), 24.0, k)
+                            ui::outline("error-reload", "Reload", None, 24.0, k)
+                                .help(crate::keys::tip("Reload", rain_core::Command::Reload))
                                 .on_press_tx(|s: &mut App, tx: &mut rune::Tx| s.reload_now(tx)),
                         ),
                 ),

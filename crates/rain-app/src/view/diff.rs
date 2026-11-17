@@ -2,6 +2,7 @@
 //! drafts, inline notes and the gutter marks of what is folded.
 
 use rain_comments::{CardLook, ThreadCard, anchor_label, ops};
+use rain_core::command::Command;
 use rain_core::{AnchorState, Thread, ThreadKind};
 use rain_diffview::{Annotation, DiffColors, DiffView};
 use rune::{Cursor, El, Tx, col, el, row, text};
@@ -74,7 +75,14 @@ fn viewed_toggle(g: usize, on: bool, k: &Kit) -> El {
         .role("checkbox")
         .label("Viewed")
         .checked(on)
-        .help("Viewed  Shift+Space · Space marks viewed and goes to the next file")
+        .help(format!(
+            "{}{}",
+            crate::keys::tip("Viewed", Command::ToggleViewed),
+            Command::ViewedAndNext
+                .chord()
+                .map(|n| format!(" · {} marks viewed and goes to the next file", n.display()))
+                .unwrap_or_default()
+        ))
         .h(26.0)
         .pl(8.0)
         .pr(10.0)
@@ -121,7 +129,7 @@ fn header_lead(s: &App, local: usize, k: &Kit) -> Option<El> {
     Some(row().gap(6.0).items_center().child(copy).child(group_tag(s.group_of(g), k)))
 }
 
-/// After the stats: the changed-since chip, then at the end `Whole file z` · Viewed · `⋯`
+/// After the stats: the changed-since chip, then at the end `Whole file` (or `Changes only`) · Viewed · `⋯`
 /// (Open in editor, Copy location).
 fn header_actions(s: &App, local: usize, k: &Kit) -> El {
     let (surf, _) = sr(k);
@@ -140,7 +148,11 @@ fn header_actions(s: &App, local: usize, k: &Kit) -> El {
         .child(
             Ghost::new(format!("file-more-{g}"))
                 .icon(&icons::MORE)
-                .help("Open in editor  Ctrl+O · Copy location  Y")
+                .help(format!(
+                    "{} · {}",
+                    crate::keys::tip("Open in editor", Command::OpenInEditor),
+                    crate::keys::tip("Copy location", Command::CopyLocation)
+                ))
                 .on(s.menus.file == Some(g))
                 .build(k)
                 .expanded(s.menus.file == Some(g))
@@ -182,7 +194,12 @@ pub(super) fn file_menu(s: &App, k: &Kit, layer: &mut Vec<El>) {
         }
         r
     };
-    let mut open = item(format!("open-{g}"), "Open in editor", "Ctrl+O", blocked.is_some());
+    let mut open = item(
+        format!("open-{g}"),
+        "Open in editor",
+        &Command::OpenInEditor.hint(),
+        blocked.is_some(),
+    );
     if let Some(why) = blocked {
         open = open.help(why);
     } else {
