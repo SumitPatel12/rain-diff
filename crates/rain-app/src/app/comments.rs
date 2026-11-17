@@ -9,7 +9,11 @@ use rain_diffview::{Annotation, LineRange, LineRef};
 use rune::{TextEdit, Tx};
 use serde_json::json;
 
+use super::conversation::{ToastAction, UNDO_DELETE_FOR};
 use super::{App, ComposerState, Overlay};
+
+/// What Ask puts in an empty reply box.
+const ASK_SEED: &str = "@claude ";
 
 impl App {
     pub fn rebuild_annotations(&mut self) {
@@ -324,15 +328,81 @@ impl App {
         match self.target_thread() {
             Some(id) => {
                 self.expanded.insert(id.clone());
-                self.reply_to = Some(id.clone());
-                self.reply_edit = TextEdit::default();
-                self.reply_edit.focused = true;
+                self.start_reply(&id, "");
                 self.focused_thread = Some(id.clone());
                 self.rebuild_annotations();
                 self.goto_thread(&id, tx);
             }
             None => self.status = "No thread here to reply to".into(),
         }
+    }
+
+    /// Opens `id`'s reply box with the draft it was left with, else `seed`; Ask's `seed` leads a
+    /// draft that doesn't mention Claude. A reply open on another thread keeps its text.
+    fn start_reply(&mut self, id: &str, seed: &str) {
+        self.keep_reply_draft();
+        let text = match self.reply_drafts.remove(id) {
+            Some(d) if !seed.is_empty() && !mentions_claude(&d) => format!("{seed}{d}"),
+            Some(d) => d,
+            None => seed.to_owned(),
+        };
+        self.reply_to = Some(id.to_owned());
+        if !text.is_empty() {
+            let _ = self.reply_edit.paste(&text);
+        }
+        self.reply_edit.focused = true;
+    }
+
+    /// Closes the reply box, keeping its text for when that thread's reply opens again.
+    pub(crate) fn keep_reply_draft(&mut self) {
+        if let Some(id) = self.reply_to.take() {
+            let text = std::mem::take(&mut self.reply_edit.text);
+            if text.trim().is_empty() || text.trim() == ASK_SEED.trim() {
+                self.reply_drafts.remove(&id);
+            } else {
+                self.reply_drafts.insert(id, text);
+                self.status = "Reply kept as a draft: Reply on that thread brings it back".into();
+            }
+        }
+        self.reply_edit = TextEdit::default();
+    }
+
+    /// Send on an empty composer: says why nothing went.
+    pub fn nothing_to_send(&mut self) {
+        let what = if self.composer.as_ref().is_some_and(|c| c.edit_of.is_some()) {
+            "the message"
+        } else if self.composer_ui.mode == ComposerMode::Question {
+            "a question"
+        } else {
+            "a comment"
+        };
+        self.status = format!("Nothing to send: type {what} first");
+    }
+
+    /// Undo on a deleted thread: puts it back where it was, focused.
+    pub fn restore_thread(&mut self, t: Thread, at: usize) {
+        let id = t.id.clone();
+        if self.mutate(|s| ops::restore_thread(s, t, at)) {
+            self.focused_thread = Some(id);
+            self.rebuild_annotations();
+            self.status = "Thread restored".into();
+        }
+    }
+
+    /// `u` while a deleted thread's Undo shows: restores the latest; whether there was one.
+    pub fn undo_delete(&mut self, tx: &mut Tx) -> bool {
+        let Some(key) = self
+            .conversation
+            .toasts
+            .iter()
+            .rev()
+            .find(|t| matches!(t.action, Some(ToastAction::Restore(..))))
+            .map(|t| t.key.clone())
+        else {
+            return false;
+        };
+        self.toast_action(&key, tx);
+        true
     }
 
     pub fn card_action(&mut self, id: &str, action: CardAction, tx: &mut Tx) {
@@ -361,25 +431,19 @@ impl App {
             CardAction::AskReply => {
                 self.folded.remove(id);
                 self.expanded.insert(id.to_owned());
-                self.reply_to = Some(id.to_owned());
-                self.reply_edit = TextEdit::default();
-                let _ = self.reply_edit.paste("@claude ");
-                self.reply_edit.focused = true;
+                self.start_reply(id, ASK_SEED);
             }
             CardAction::OpenReply => {
                 self.folded.remove(id);
                 self.expanded.insert(id.to_owned());
-                self.reply_to = Some(id.to_owned());
-                self.reply_edit = TextEdit::default();
-                self.reply_edit.focused = true;
+                self.start_reply(id, "");
             }
-            CardAction::CancelReply => {
-                self.reply_to = None;
-                self.reply_edit = TextEdit::default();
-            }
+            CardAction::CancelReply => self.keep_reply_draft(),
+            CardAction::EmptyReply => self.status = "Nothing to send: type a reply first".into(),
             CardAction::Reply(body) => {
                 self.mutate(|s| ops::reply(s, id, &body, None));
                 self.reply_to = None;
+                self.reply_drafts.remove(id);
                 self.reply_edit = TextEdit::default();
                 self.status = "Reply saved".into();
                 let question = ops::thread(&self.mirror, id).is_some_and(|t| t.kind() == ThreadKind::Question);
@@ -410,11 +474,8 @@ impl App {
                 };
                 self.push_ui_event(EventKind::Disposition, id, json!({"disposition": now}));
                 if now == Some(Disposition::Ask) {
-                    self.reply_to = Some(id.to_owned());
                     self.expanded.insert(id.to_owned());
-                    self.reply_edit = TextEdit::default();
-                    let _ = self.reply_edit.paste("@claude ");
-                    self.reply_edit.focused = true;
+                    self.start_reply(id, ASK_SEED);
                 }
             }
             CardAction::OpenDismiss => {
@@ -476,9 +537,22 @@ impl App {
                 let mine = ops::thread(&self.mirror, id)
                     .is_some_and(|t| t.messages.iter().all(|m| m.author.as_deref().is_none_or(|a| a.trim().is_empty())));
                 if mine {
-                    self.mutate(|s| ops::delete_thread(s, id));
+                    let gone = self.mutate(|s| {
+                        let at = s.threads.iter().position(|t| t.id == id)?;
+                        let t = s.threads[at].clone();
+                        ops::delete_thread(s, id);
+                        Some((t, at))
+                    });
                     self.focused_thread = None;
                     self.status = "Thread deleted".into();
+                    if let Some((t, at)) = gone {
+                        self.push_toast(
+                            format!("deleted-{id}"),
+                            "Thread deleted".into(),
+                            Some(ToastAction::Restore(Box::new(t), at)),
+                        );
+                        tx.wake_after(UNDO_DELETE_FOR + std::time::Duration::from_millis(20));
+                    }
                 } else {
                     self.status = "Threads with the agent's messages are resolved or dismissed, not deleted".into();
                 }

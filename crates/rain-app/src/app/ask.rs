@@ -26,7 +26,7 @@ pub const ATTACHED_SECS: u64 = 15;
 /// Diff lines quoted above and below the anchor.
 const EXCERPT_CONTEXT: u32 = 12;
 pub const NO_ANSWERER: &str = "no agent attached · set ask.command in the palette";
-pub const NOT_ALLOWED: &str = "no agent attached · allow the local command (Ctrl+K › Ask: allow)";
+pub const NOT_ALLOWED: &str = "waiting for Allow (Ctrl+K › Ask: allow)";
 
 enum Phase {
     /// An idle attached agent has until then to start on it.
@@ -438,13 +438,13 @@ impl App {
                     );
                     NOT_ALLOWED
                 } else {
+                    self.status = format!("Waiting for an agent: {NO_ANSWERER}");
                     NO_ANSWERER
                 };
                 self.set_answer(&id, |a| {
                     a.status = AnswerStatus::Queued;
                     a.error = Some(why.into());
                 });
-                self.status = format!("Waiting for an agent: {why}");
                 changed = true;
                 continue;
             }

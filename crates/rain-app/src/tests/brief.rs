@@ -333,6 +333,45 @@ fn map_tabs_never_repeat_and_a_press_still_opens_the_file() {
 }
 
 #[test]
+fn braces_step_through_the_map_views_and_the_tabs_take_the_keyboard() {
+    let mut rt = with_brief(true);
+    typed(&mut rt, "}");
+    assert!(rt.state.status.contains("m opens the Map"), "{}", rt.state.status);
+    typed(&mut rt, "m");
+    let shown: Vec<usize> = (0..rt.state.layouts.len()).filter(|&i| rt.state.layouts[i].is_some()).collect();
+    assert!(shown.len() > 1, "the overview fixture has several views");
+    assert_eq!(rt.state.diagram.target, shown[0]);
+    typed(&mut rt, "}");
+    assert_eq!(rt.state.diagram.target, shown[1]);
+    typed(&mut rt, "{");
+    typed(&mut rt, "{");
+    assert_eq!(rt.state.diagram.target, *shown.last().unwrap(), "wraps round");
+    let tab = rt.elements().into_iter().find(|e| e.key.as_deref() == Some("map-tabs-0")).unwrap();
+    assert!(tab.focusable);
+    let palette: Vec<String> = crate::palette::filtered(&rt.state, "map view")
+        .into_iter()
+        .map(|e| format!("{} {}", e.label, e.hint))
+        .collect();
+    assert!(palette.contains(&"Next map view }".to_owned()), "{palette:?}");
+    assert!(palette.contains(&"Previous map view {".to_owned()), "{palette:?}");
+}
+
+#[test]
+fn the_map_never_fits_its_titles_under_eleven_points() {
+    let mut rt = sized_runtime(app(story(), true), (1440.0, 900.0));
+    rt.update(|s, _| s.toggle_map());
+    settle(&mut rt);
+    let l = rt.state.layouts[rt.state.diagram.target].clone().unwrap();
+    let canvas = rt
+        .elements()
+        .into_iter()
+        .find(|e| !e.exiting && e.key.as_deref() == Some("diagram-canvas"))
+        .unwrap();
+    let title = canvas.rect[2] / l.width * rain_diagram::design::TITLE_SIZE;
+    assert!(title >= 11.0 - 0.01, "titles at {title} pt");
+}
+
+#[test]
 fn a_narrow_map_stacks_its_lanes() {
     let a = app(story(), true);
     let mut rt = sized_runtime(a, (700.0, 600.0));

@@ -26,6 +26,8 @@ pub enum Zoom {
 impl Zoom {
     pub const MIN: f32 = 0.25;
     pub const MAX: f32 = 3.0;
+    /// The least scale that keeps a node title at 11 points or more.
+    pub const READABLE: f32 = 11.0 / TITLE_SIZE;
 
     /// The scale this zoom draws `width` at in a viewport `viewport_w` wide.
     pub fn factor(self, width: f32, viewport_w: f32) -> f32 {
@@ -128,6 +130,7 @@ pub struct Diagram<'l, S> {
     zoom: Zoom,
     viewport: (f32, f32),
     fit_grow: f32,
+    fit_min: f32,
     key: String,
     on_event: Option<Handler<S>>,
     marks: BTreeMap<String, NodeMark>,
@@ -169,6 +172,7 @@ impl<'l, S: 'static> Diagram<'l, S> {
             zoom: Zoom::Fit,
             viewport: (0.0, 0.0),
             fit_grow: 1.0,
+            fit_min: Zoom::MIN,
             key: "diagram".into(),
             on_event: None,
             marks: BTreeMap::new(),
@@ -208,6 +212,11 @@ impl<'l, S: 'static> Diagram<'l, S> {
         self.fit_grow = max;
         self
     }
+    /// Keeps `Zoom::Fit` from shrinking under `min`; past it the viewport scrolls instead.
+    pub fn fit_min(mut self, min: f32) -> Self {
+        self.fit_min = min;
+        self
+    }
     /// Element key of the scroll viewport (`diagram` by default); the canvas is `<key>-canvas`.
     pub fn key(mut self, key: impl Into<String>) -> Self {
         self.key = key.into();
@@ -220,8 +229,10 @@ impl<'l, S: 'static> Diagram<'l, S> {
 
     /// The scale the diagram draws at.
     pub fn scale(&self) -> f32 {
-        self.zoom
-            .factor_in((self.layout.width, self.layout.height), self.viewport, self.fit_grow)
+        let k = self
+            .zoom
+            .factor_in((self.layout.width, self.layout.height), self.viewport, self.fit_grow);
+        if self.zoom == Zoom::Fit { k.max(self.fit_min) } else { k }
     }
 
     pub fn build(self, _kit: &Kit) -> El {
@@ -292,7 +303,7 @@ impl<'l, S: 'static> Diagram<'l, S> {
                         p.at(it.rect)
                             .key(format!("selected:{}", node.replace('/', "\u{2215}")))
                             .radius(CARD_RADIUS * k)
-                            .outline(2.0, 2.0, self.style.thread),
+                            .outline(2.0, 2.0, self.style.foreground),
                     );
                 }
             }

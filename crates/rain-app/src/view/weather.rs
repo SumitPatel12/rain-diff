@@ -121,24 +121,27 @@ impl Shower {
 /// The loader: one small cloud raining red and green into a puddle, over the loading message.
 pub(super) fn loader(s: &App, msg: &str, look: &Look) -> El {
     let k = &look.kit;
+    let calm = s.rest.calm.get();
     let t = s.rest.clock;
     let (w, h) = (200.0, 120.0);
     let (cx, cw) = (34.0, 132.0);
     let puff = |d: f32, x: f32, y: f32, ink: Color| el().size(d, d).radius(d / 2.0).fill(ink).absolute(x, y);
     let mut drops = Vec::new();
-    Shower {
-        key: "loader-",
-        left: cx + 12.0,
-        top: 40.0,
-        w: cw - 24.0,
-        fall: 66.0,
-        count: 14,
-        speed: 70.0,
-        width: 3.5,
-        alpha: 0.95,
+    if !calm {
+        Shower {
+            key: "loader-",
+            left: cx + 12.0,
+            top: 40.0,
+            w: cw - 24.0,
+            fall: 66.0,
+            count: 14,
+            speed: 70.0,
+            width: 3.5,
+            alpha: 0.95,
+        }
+        .draw(t, &mut drops);
     }
-    .draw(t, &mut drops);
-    let bob = (t * 1.1).sin() * 1.5;
+    let bob = if calm { 0.0 } else { (t * 1.1).sin() * 1.5 };
     let (back, front) = (brand::cloud_back(), brand::cloud_front());
     let scene = el()
         .key("loader-rain")
@@ -151,7 +154,7 @@ pub(super) fn loader(s: &App, msg: &str, look: &Look) -> El {
             el().key("loader-puddle")
                 .size(150.0, 3.0)
                 .radius(1.5)
-                .fill(k.alpha(k.c.text_faint, 0.35))
+                .fill(k.alpha(k.c.icon_faint, 0.35))
                 .absolute(25.0, 107.0),
         )
         .children(drops)
@@ -182,8 +185,11 @@ pub(super) fn loader(s: &App, msg: &str, look: &Look) -> El {
 /// The flood over the whole window while it rains or drains; `None` when clear.
 pub(super) fn flood(s: &App, look: &Look) -> Option<El> {
     let now = Instant::now();
+    // Reduced motion: the flood as it stands once risen, still.
+    let calm = s.rest.calm.get();
     let (since, level, drain) = match s.rest.weather {
         Weather::Clear => return None,
+        Weather::Flood(_) if calm => (FLOOD_IN, 1.0, 0.0),
         Weather::Flood(at) => {
             let since = now.saturating_duration_since(at);
             (since, flood_level(since), 0.0)
@@ -194,7 +200,7 @@ pub(super) fn flood(s: &App, look: &Look) -> Option<El> {
         }
     };
     let (w, h) = rune::memo::layout_size("app").map_or((1440.0, 900.0), |sz| (sz[0], sz[1]));
-    let t = s.rest.clock;
+    let t = if calm { 0.0 } else { s.rest.clock };
     let secs = since.as_secs_f32();
     // The cloud slides down over the first 2.5 s and lifts away as the water drains.
     let gather = 1.0 - (1.0 - (secs / 2.5).clamp(0.0, 1.0)).powi(3);
@@ -208,13 +214,16 @@ pub(super) fn flood(s: &App, look: &Look) -> Option<El> {
         .size(w, h)
         .instant_changes()
         .fill(brand::sky_top().alpha(0.45 * gather * fade))
-        .clip_rounded(0.0)
-        .on_press(|_: &mut App| {});
+        .clip_rounded(0.0);
+    // Draining, it lets clicks through to the app as the water falls away.
+    if matches!(s.rest.weather, Weather::Flood(_)) {
+        sky = sky.on_press(|_: &mut App| {});
+    }
 
     let water_h = level * h * 0.55;
     let surface = h - water_h;
     // Rain from the cloud's underside once it is in, onto the water (or the window's floor).
-    if gather > 0.98 && drain < 0.4 {
+    if !calm && gather > 0.98 && drain < 0.4 {
         let mut drops = Vec::new();
         Shower {
             key: "flood-",
@@ -264,7 +273,7 @@ pub(super) fn flood(s: &App, look: &Look) -> Option<El> {
         let ch = rune::memo::layout_size("break-card").map_or(170.0, |sz| sz[1]);
         [((w - CARD_W) / 2.0).max(0.0), top, CARD_W, ch]
     });
-    let bolt = (gather > 0.98 && drain < 0.2)
+    let bolt = (!calm && gather > 0.98 && drain < 0.2)
         .then(|| strike(t, cloud_bottom, w, card_at))
         .flatten();
 

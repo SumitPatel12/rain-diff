@@ -531,6 +531,13 @@ pub fn look(scheme: Scheme) -> Look {
         paint(&mut kit, t, &s);
     }
     let c = &mut kit.c;
+    if scheme == Scheme::Light {
+        // The neutral grey reads 4.4:1 on the light ground under the status line.
+        c.text_muted = rune::oklch(0.48, 0.01, 265.0);
+    }
+    // No faint ink reaches 4.5:1 on selected rows and stays below muted: text gets two levels,
+    // and faint is left to icons and marks (`icon_faint`).
+    c.text_faint = c.text_muted;
     c.page = s.bar;
     c.bg_deep = s.bar;
     c.layer_01 = s.card_head;

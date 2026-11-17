@@ -536,6 +536,21 @@ impl App {
         self.show_step(Scroll::Always, tx);
     }
 
+    /// What `Space` does on the current step, as `tour_space` decides it: `show findings`,
+    /// `understood · next`, `understood · finish`, or `next` on a live step.
+    pub fn tour_space_does(&self) -> &'static str {
+        let i = self.tour.step;
+        if self.tour.live.is_some() {
+            "next"
+        } else if self.tour_findings_hidden(i) && !self.tour_findings(i).is_empty() {
+            "show findings"
+        } else if i + 1 >= self.tour_views().len() {
+            "understood · finish"
+        } else {
+            "understood · next"
+        }
+    }
+
     /// `Space`: reveals hidden findings first; else understood, the file viewed when no later
     /// step needs it, and the next step.
     pub fn tour_space(&mut self, tx: &mut Tx) {
@@ -549,7 +564,8 @@ impl App {
             self.want(Scroll::Never);
             self.apply_tour(tx);
             let n = self.tour_findings(i).len();
-            self.status = format!("{n} finding(s) on this step · Space understood + next");
+            let s = if n == 1 { "" } else { "s" };
+            self.status = format!("{n} finding{s} on this step · Space {}", self.tour_space_does());
             self.save_tour();
             return;
         }
@@ -638,7 +654,11 @@ impl App {
             TourStage::Step => {
                 let n = self.tour_views().len();
                 let changed = self.tour_current().and_then(|v| v.at).is_some_and(|a| a.changed);
-                let mut s = format!("Tour {}/{n} · Space understood + next · n p · Esc leaves", self.tour.step + 1);
+                let mut s = format!(
+                    "Tour {}/{n} · Space {} · n p · Esc leaves",
+                    self.tour.step + 1,
+                    self.tour_space_does()
+                );
                 if changed {
                     s = format!("{s} · Diff changed");
                 }

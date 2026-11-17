@@ -141,7 +141,7 @@ pub struct DiagramStyle {
     /// (see-through, or it hides the card's text).
     pub viewed: Color,
     pub viewed_fill: Color,
-    /// A node's thread-count badge and the selection ring.
+    /// A node's thread-count badge; the selection ring is `foreground`.
     pub thread: Color,
     pub thread_text: Color,
     /// One hue per key family in the data-model lens; none of them is a delta tone.

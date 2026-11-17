@@ -94,6 +94,7 @@ fn act(d: &mut Demo, id: &str, a: CardAction, _: &mut Tx) {
         | CardAction::Retry
         | CardAction::CancelAnswer
         | CardAction::Attach
+        | CardAction::EmptyReply
         | CardAction::Hover(_) => {}
     }
 }

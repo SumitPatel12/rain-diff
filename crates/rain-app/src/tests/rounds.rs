@@ -308,6 +308,12 @@ fn since_round_shows_only_the_hunks_changed_after_the_round() {
     assert!(h.new_start <= 61 && 61 < h.new_start + h.new_count, "{h:?}");
     assert_eq!(rt.state.review.lens.as_ref().map(|l| (l.round, l.hunks)), Some((1, 1)));
     assert!(rt.find("round-reset").is_some());
+    let bar = rt.elements().into_iter().find(|e| e.key.as_deref() == Some("filter-bar-text"));
+    assert_eq!(
+        bar.and_then(|e| e.text),
+        Some(format!("1 of {} files changed since round 1", rt.state.keys.len())),
+        "the bar names the round, not an empty filter"
+    );
     reload(&mut rt);
     assert_eq!(rt.state.active().files()[0].hunks.len(), 1, "the lens survives a reload");
     let (x, y) = rt.find("round-reset").unwrap();

@@ -54,7 +54,8 @@ fn wired(s: &App, k: &Kit, rows: (usize, usize), long: bool, bare: bool) -> El {
         .anchor_label(title(s))
         .rows(rows.0, rows.1)
         .on_submit(|s: &mut App, body: String, _: &mut Tx| s.submit_composer(body))
-        .on_cancel(|s: &mut App, _: &mut Tx| s.cancel_composer());
+        .on_cancel(|s: &mut App, _: &mut Tx| s.cancel_composer())
+        .on_empty(|s: &mut App, _: &mut Tx| s.nothing_to_send());
     if let Some(p) = s.composer.as_ref().map(|c| c.preview.clone()) {
         c = c.preview(p);
     }

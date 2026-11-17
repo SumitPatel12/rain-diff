@@ -625,6 +625,30 @@ fn fit_with_room_to_grow_enlarges_a_small_diagram_until_it_meets_an_edge() {
     assert!((k - 0.5).abs() < 0.01, "a wide diagram still shrinks to the width: {k}");
 }
 
+#[test]
+fn fit_min_stops_the_shrink_where_titles_stay_readable() {
+    let g = graph(SCHEMA);
+    let l = architecture(&g, &GraphViewScope::All);
+    let narrow = (l.width / 3.0, l.height);
+    let fit = |d: Diagram<T>| d.viewport(narrow.0, narrow.1).zoom(Zoom::Fit).scale();
+    assert!((fit(Diagram::new(&l)) - 1.0 / 3.0).abs() < 0.01, "no floor by default");
+    let k = fit(Diagram::new(&l).fit_min(Zoom::READABLE));
+    assert_eq!(k, Zoom::READABLE);
+    assert!(k * crate::design::TITLE_SIZE >= 11.0 - 0.001);
+    let wide = Diagram::<T>::new(&l)
+        .viewport(l.width * 0.95, l.height)
+        .zoom(Zoom::Fit)
+        .fit_min(Zoom::READABLE)
+        .scale();
+    assert!((wide - 0.95).abs() < 0.01, "above the floor Fit still fits: {wide}");
+    let p100 = Diagram::<T>::new(&l)
+        .viewport(narrow.0, narrow.1)
+        .zoom(Zoom::Custom(0.5))
+        .fit_min(Zoom::READABLE)
+        .scale();
+    assert_eq!(p100, 0.5, "a chosen zoom is not floored");
+}
+
 fn fit_view(s: &T, _: &mut Cx<T>) -> El {
     Diagram::new(&s.layout)
         .hover(s.hover.clone())

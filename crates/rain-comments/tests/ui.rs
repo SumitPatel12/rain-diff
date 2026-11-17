@@ -16,6 +16,7 @@ struct App {
     focused: bool,
     dismissing: bool,
     cancelled: usize,
+    empty_sends: usize,
     window_keys: Vec<String>,
     mode: ComposerMode,
     kind: ThreadKind,
@@ -56,6 +57,7 @@ fn act(a: &mut App, id: &str, action: CardAction, _: &mut Tx) {
         CardAction::Resolve | CardAction::CloseOrphan => {
             ops::resolve(&mut a.s, id);
         }
+        CardAction::EmptyReply => a.empty_sends += 1,
         CardAction::EditMessage(_)
         | CardAction::Delete
         | CardAction::Retry
@@ -130,6 +132,7 @@ fn runtime(threads: usize) -> Runtime<App> {
         focused: true,
         dismissing: false,
         cancelled: 0,
+        empty_sends: 0,
         window_keys: Vec::new(),
         mode: ComposerMode::Comment,
         kind: ThreadKind::Comment,
@@ -522,6 +525,54 @@ fn suggestion_blocks_read_back_as_diff_fences() {
     };
     let shown = display_body(&format!("Add vouchers:\n{block}"), Some(&snap));
     assert_eq!(shown, "Add vouchers:\n```diff\n-return total;\n+return total + vouchers;\n```");
+}
+
+#[test]
+fn the_expanded_body_drops_the_prefix_its_head_already_shows() {
+    let mut rt = runtime(1);
+    rt.state.collapsed = false;
+    rt.invalidate();
+    settle(&mut rt);
+    let t = rt.state.s.threads[0].clone();
+    assert_eq!(rain_comments::ui::body_under_head(&t), "broken. Details.");
+    assert_eq!(t.messages[0].body, "F0 issue (blocking): broken. Details.", "stored text untouched");
+    let drawn: Vec<String> = rt.elements().into_iter().filter_map(|e| e.text).collect();
+    assert!(drawn.iter().any(|s| s.contains("broken. Details.")), "{drawn:?}");
+    assert!(!drawn.iter().any(|s| s.contains("issue (blocking):")), "{drawn:?}");
+
+    let mut other = t.clone();
+    other.kind = Some(ThreadKind::Question);
+    assert_eq!(
+        rain_comments::ui::body_under_head(&other),
+        other.messages[0].body,
+        "a head that says something else keeps the prefix in the body"
+    );
+    other.kind = None;
+    other.blocking = Some(false);
+    assert_eq!(rain_comments::ui::body_under_head(&other), other.messages[0].body);
+}
+
+#[test]
+fn an_empty_send_focuses_the_box_and_says_so() {
+    let mut rt = runtime(1);
+    rt.state.collapsed = false;
+    rt.state.replying = true;
+    rt.invalidate();
+    settle(&mut rt);
+    click(&mut rt, "reply");
+    press(
+        &mut rt,
+        Key::Enter,
+        Mods {
+            ctrl: true,
+            cmd: true,
+            ..Mods::default()
+        },
+    );
+    settle(&mut rt);
+    assert_eq!(rt.state.empty_sends, 1);
+    assert!(rt.state.reply.focused);
+    assert_eq!(rt.state.s.threads[0].messages.len(), 1, "nothing sent");
 }
 
 #[test]

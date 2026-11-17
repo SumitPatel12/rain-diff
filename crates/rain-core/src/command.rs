@@ -38,10 +38,13 @@ pub enum Command {
     Defer,
     Conversation,
     Map,
+    NextMapView,
+    PrevMapView,
     Brief,
     GoOverview,
     GoChanges,
     Tour,
+    ToggleVerify,
     FinishReview,
     KeySheet,
     OpenInEditor,
@@ -62,7 +65,7 @@ pub enum Command {
 }
 
 impl Command {
-    pub const ALL: [Command; 48] = [
+    pub const ALL: [Command; 51] = [
         Command::CursorDown,
         Command::CursorUp,
         Command::NextHunk,
@@ -98,10 +101,13 @@ impl Command {
         Command::Defer,
         Command::Conversation,
         Command::Map,
+        Command::NextMapView,
+        Command::PrevMapView,
         Command::Brief,
         Command::GoOverview,
         Command::GoChanges,
         Command::Tour,
+        Command::ToggleVerify,
         Command::FinishReview,
         Command::KeySheet,
         Command::OpenInEditor,
@@ -151,7 +157,7 @@ impl Command {
             Command::ViewedAndNext => "Mark viewed and go to next",
             Command::ToggleViewed => "Toggle viewed",
             Command::MarkGroupViewed => "Accept this group",
-            Command::UndoAccept => "Undo the last accept",
+            Command::UndoAccept => "Undo the last delete or accept",
             Command::ToggleSplit => "Split / unified",
             Command::LayoutAuto => "Layout: auto",
             Command::ToggleReaderMode => "Stream / file at a time",
@@ -172,10 +178,13 @@ impl Command {
             Command::Defer => "Defer",
             Command::Conversation => "Conversation",
             Command::Map => "Map",
+            Command::NextMapView => "Next map view",
+            Command::PrevMapView => "Previous map view",
             Command::Brief => "Overview / Changes",
             Command::GoOverview => "Go to Overview",
             Command::GoChanges => "Go to Changes",
             Command::Tour => "Tour",
+            Command::ToggleVerify => "Verify by hand: fold / unfold",
             Command::FinishReview => "Finish review",
             Command::KeySheet => "Keyboard shortcuts",
             Command::OpenInEditor => "Open in editor",
@@ -253,7 +262,7 @@ impl Chord {
     }
 }
 
-static KEYMAP: [(Chord, Command); 44] = [
+static KEYMAP: [(Chord, Command); 47] = [
     (Chord::key("j"), Command::CursorDown),
     (Chord::key("k"), Command::CursorUp),
     (Chord::key("n"), Command::NextHunk),
@@ -289,8 +298,11 @@ static KEYMAP: [(Chord, Command); 44] = [
     (Chord::key("d"), Command::Defer),
     (Chord::shift("c"), Command::Conversation),
     (Chord::key("m"), Command::Map),
+    (Chord::key("}"), Command::NextMapView),
+    (Chord::key("{"), Command::PrevMapView),
     (Chord::key("b"), Command::Brief),
     (Chord::shift("t"), Command::Tour),
+    (Chord::shift("h"), Command::ToggleVerify),
     (Chord::shift("f"), Command::FinishReview),
     (Chord::key("F1"), Command::KeySheet),
     (Chord::ctrl("o"), Command::OpenInEditor),
@@ -370,6 +382,10 @@ mod tests {
         assert_eq!(lookup("m", false, false), Some(Command::Map));
         assert_eq!(lookup("b", false, false), Some(Command::Brief));
         assert_eq!(lookup("T", false, false), Some(Command::Tour));
+        assert_eq!(lookup("}", false, true), Some(Command::NextMapView));
+        assert_eq!(lookup("{", false, true), Some(Command::PrevMapView));
+        assert_eq!(lookup("H", false, false), Some(Command::ToggleVerify));
+        assert_eq!(lookup("h", false, false), None);
         assert_eq!(lookup("S", false, true), Some(Command::ToggleReaderMode));
         assert_eq!(lookup("s", false, false), Some(Command::ToggleSplit));
         assert_eq!(lookup("l", false, false), Some(Command::ToggleList));

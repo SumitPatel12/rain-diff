@@ -194,6 +194,18 @@ pub fn delete_thread(s: &mut Session, thread_id: &str) -> bool {
     changed
 }
 
+/// Puts back a thread [`delete_thread`] removed, at index `at` (or last); nothing when a thread
+/// with its id is already there. Whether anything changed.
+pub fn restore_thread(s: &mut Session, t: Thread, at: usize) -> bool {
+    if s.threads.iter().any(|x| x.id == t.id) {
+        return false;
+    }
+    let at = at.min(s.threads.len());
+    s.threads.insert(at, t);
+    s.bump_comments();
+    true
+}
+
 /// Moves a thread to `state`, keeping its messages. `sha` names the revision the change refers
 /// to (`addressed in abc123`); `reason` is kept for `dismissed` only. Whether anything changed.
 pub fn set_state(s: &mut Session, thread_id: &str, state: ThreadState, sha: Option<&str>, reason: Option<DismissReason>) -> bool {

@@ -99,14 +99,20 @@ pub(super) fn chips_popover(s: &App, k: &Kit, layer: &mut Vec<El>) {
     layer.push(popover::anchored(k, surface, "filter-chips-button", Placement::BottomStart, 6.0));
 }
 
-/// "4 of 10 files — server, Must review" with Clear, on the card head band.
+/// "4 of 10 files — server, Must review" (or "… changed since round 1") with Clear, on the card
+/// head band.
 pub(super) fn filter_bar(s: &App, k: &Kit) -> Option<El> {
     if !s.filter_active() {
         return None;
     }
     let (surf, _) = sr(k);
     let n = s.filter.subset.as_ref().map_or(0, |v| v.files.len());
-    let msg = format!("{n} of {} files — {}", s.keys.len(), filter_terms(s));
+    let terms = filter_terms(s);
+    let msg = match &s.review.lens {
+        _ if !terms.is_empty() => format!("{n} of {} files — {terms}", s.keys.len()),
+        Some(l) => format!("{n} of {} files changed since round {}", s.keys.len(), l.round),
+        None => format!("{n} of {} files", s.keys.len()),
+    };
     Some(
         row()
             .key("filter-bar")

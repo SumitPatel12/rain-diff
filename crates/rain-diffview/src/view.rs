@@ -861,30 +861,28 @@ impl<S: 'static> View<S> {
             .child(c.children(all.map(|a| note(build(s, a), a))))
     }
 
-    /// The marks column: the app's mark, else the hover's `+` and `?`.
+    /// The marks column: the app's mark, else the hover's `+` and `?`. Assistive tech reaches
+    /// both; an empty cell stays hidden from it.
     fn marks_cell(&self, f: usize, at: Option<LineRef>, mark: Option<El>) -> El {
         let l = &self.look;
-        let mut cell = row().key("mk").w(MARKS).h(l.m.line).center().a11y_hidden();
+        let cell = row().key("mk").w(MARKS).h(l.m.line).center();
         if let Some(m) = mark {
             return cell.child(m);
         }
         if let Some(at) = at
             && (self.d.on_comment.is_some() || self.d.on_ask.is_some())
         {
-            let mut add = row()
-                .key("hover-add")
-                .absolute(2.0, ((l.m.line - 16.0) / 2.0).floor())
-                .gap(2.0)
-                .group_opacity(0.0, 1.0);
+            // Each button presses over the line's full height and half the pair's width.
+            let mut add = row().key("hover-add").absolute(1.0, 0.0).h(l.m.line).group_opacity(0.0, 1.0);
             if let Some(cb) = self.d.on_comment.clone() {
                 add = add.child(self.hover_button(f, at, "plus", &PLUS, "Comment on this line  c", l.comment, cb));
             }
             if let Some(cb) = self.d.on_ask.clone() {
                 add = add.child(self.hover_button(f, at, "ask", &QUESTION, "Ask about this line  ?", l.ask, cb));
             }
-            cell = cell.child(add);
+            return cell.child(add);
         }
-        cell
+        cell.a11y_hidden()
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -893,17 +891,23 @@ impl<S: 'static> View<S> {
         let get = self.d.get_mut.clone();
         row()
             .key(key.to_owned())
-            .size(18.0, 16.0)
+            .w(20.0)
+            .h_full()
             .center()
-            .radius(4.0)
-            // Solid, so the code under the gutter never shows through.
-            .fill(fill.alpha(1.0))
             .cursor(Cursor::Pointer)
             .role("button")
             .label(label.to_owned())
             .help(label.to_owned())
-            // A drawn glyph, centred in its box (text glyphs sit on a baseline, not the middle).
-            .child(icon(glyph, 12.0).color(l.on_accent).a11y_hidden())
+            .child(
+                row()
+                    .size(18.0, 16.0)
+                    .center()
+                    .radius(4.0)
+                    // Solid, so the code under the gutter never shows through.
+                    .fill(fill.alpha(1.0))
+                    // A drawn glyph, centred in its box (text glyphs sit on a baseline, not the middle).
+                    .child(icon(glyph, 12.0).color(l.on_accent).a11y_hidden()),
+            )
             .on_press_tx(move |s: &mut S, tx| {
                 let st = get(s);
                 let lines = match st.selection() {

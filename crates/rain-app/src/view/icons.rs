@@ -103,7 +103,7 @@ stroked!(
 stroked!(
     FOLD,
     "fold",
-    r#"<path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" d="m4.5 3.5 3.5 3 3.5-3M4.5 12.5l3.5-3 3.5 3"/>"#
+    r#"<path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" d="M2.5 3v10M13.5 8H6M9 4.5 5.5 8 9 11.5"/>"#
 );
 stroked!(
     CLOSE,

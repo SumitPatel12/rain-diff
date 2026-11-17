@@ -301,6 +301,7 @@ fn file_row(s: &App, g: usize, key: String, look: &RowLook) -> El {
         .role("button")
         .hover_group()
         .label(said.join(", "))
+        .help(path.clone())
         .w_full()
         .h(h)
         .pl(10.0)
@@ -315,7 +316,7 @@ fn file_row(s: &App, g: usize, key: String, look: &RowLook) -> El {
                 // One weight whether current or not, so selecting a row moves nothing in it.
                 .font(TYPE.ui)
                 .color(name_color)
-                .truncate()
+                .truncate_middle()
                 .shrink()
                 .min_w(60.0)
                 .a11y_hidden(),
@@ -324,7 +325,7 @@ fn file_row(s: &App, g: usize, key: String, look: &RowLook) -> El {
             text(dir)
                 .font(TYPE.small)
                 .color(k.c.text_faint)
-                .truncate()
+                .truncate_head()
                 .grow(1.0)
                 .shrink()
                 .min_w(0.0)
@@ -365,7 +366,7 @@ fn file_row(s: &App, g: usize, key: String, look: &RowLook) -> El {
     } else {
         el().size(12.0, 12.0)
             .radius(6.0)
-            .border(1.5, k.c.text_faint)
+            .border(1.5, k.c.icon_faint)
             .group_opacity(0.0, 1.0)
             .a11y_hidden()
     };

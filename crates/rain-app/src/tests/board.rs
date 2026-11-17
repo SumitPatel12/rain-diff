@@ -197,6 +197,18 @@ fn the_walk_is_the_list_order() {
 }
 
 #[test]
+fn the_board_single_scene_shows_its_group_card() {
+    let spec = crate::spec();
+    let scene = spec.scenes.iter().find(|(n, _)| *n == "board-single").expect("the scene").1;
+    let mut a = app(story(), true);
+    scene(&mut a);
+    let rt = runtime(a);
+    assert!(rt.state.single_mode());
+    assert!(rt.find("group-card").is_some());
+    assert!(rt.find("empty").is_none(), "not \"No changes.\" beside a full list");
+}
+
+#[test]
 fn file_at_a_time_shows_one_item_and_pages() {
     let mut rt = runtime(app(story(), true));
     let first = rt.state.current().unwrap();

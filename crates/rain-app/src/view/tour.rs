@@ -5,6 +5,7 @@
 use rune::{Cursor, El, Tx, col, el, row, text};
 use rune_kit::{ButtonVariant, Checkbox, Kit};
 
+use super::icons;
 use super::ui::{outline, sr};
 use super::{STATUS_HEIGHT, TOOLBAR_HEIGHT, muted};
 use crate::app::{App, FoundBy, TourStage};
@@ -16,35 +17,45 @@ const RULER_CLEAR: f32 = 30.0;
 /// The status line under the reader.
 const STATUS_H: f32 = STATUS_HEIGHT;
 
+/// The card, with the reader's toasts stacked above it so neither covers the other.
 pub(super) fn tour(s: &App, k: &Kit) -> Option<El> {
     let card = match s.tour.stage {
-        TourStage::Start => start(s, k),
-        TourStage::Step => step(s, k)?,
-        TourStage::End => end(s, k),
+        TourStage::Start => Some(start(s, k)),
+        TourStage::Step => step(s, k),
+        TourStage::End => Some(end(s, k)),
     };
-    let panel = col()
-        .key("overlay-tour")
-        .role("dialog")
-        .label("Tour")
-        .w(CARD_W)
-        .max_h(560.0)
-        .gap(8.0)
-        .padding(16.0)
-        .clip_rounded(radius::ISLAND)
-        .on_press(|_: &mut App| {})
-        .child(card);
-    Some(
-        col()
-            .key("tour-layer")
-            .w_full()
-            .h_full()
-            .pt(TOOLBAR_HEIGHT + 8.0)
-            .pb(STATUS_H + 12.0)
-            .pr(RULER_CLEAR)
-            .items_end()
-            .justify_end()
-            .child(rune_kit::popover::raised(k, panel, radius::ISLAND)),
-    )
+    let toasts = super::conversation::toasts(s, k);
+    if card.is_none() && toasts.is_none() {
+        return None;
+    }
+    let mut layer = col()
+        .key("tour-layer")
+        .w_full()
+        .h_full()
+        .gap(12.0)
+        .pt(TOOLBAR_HEIGHT + 8.0)
+        .pb(STATUS_H + 12.0)
+        .pr(RULER_CLEAR)
+        .items_end()
+        .justify_end();
+    if let Some(t) = toasts {
+        layer = layer.child(t);
+    }
+    if let Some(card) = card {
+        let panel = col()
+            .key("overlay-tour")
+            .role("dialog")
+            .label("Tour")
+            .w(CARD_W)
+            .max_h(560.0)
+            .gap(8.0)
+            .padding(16.0)
+            .clip_rounded(radius::ISLAND)
+            .on_press(|_: &mut App| {})
+            .child(card);
+        layer = layer.child(rune_kit::popover::raised(k, panel, radius::ISLAND));
+    }
+    Some(layer)
 }
 
 fn heading(t: impl Into<String>, k: &Kit) -> El {
@@ -115,7 +126,13 @@ fn start(s: &App, k: &Kit) -> El {
                 .build(k)
                 .key("tour-my-pass"),
         )
-        .child(muted("Findings on each step stay hidden until you have read it; Space shows them.", k).wrap());
+        .child(
+            muted(
+                "Findings on each step stay hidden until you have read it; the first Space on a step shows them.",
+                k,
+            )
+            .wrap(),
+        );
     let mut actions = row().w_full().gap(8.0).items_center();
     let go = if resume {
         format!("Resume at {}/{n}", s.tour.step + 1)
@@ -193,19 +210,62 @@ fn step(s: &App, k: &Kit) -> Option<El> {
         .w_full()
         .gap(6.0)
         .items_center()
-        .child(button("‹ p", "tour-prev", ButtonVariant::Ghost, k, |s, tx| s.tour_prev(tx)))
+        .child(nav_button(Nav::Back("Previous", "Previous step"), "tour-prev", "p", k, |s, tx| {
+            s.tour_prev(tx)
+        }))
         .child(el().grow(1.0));
-    let primary = if !v.live && s.tour_findings_hidden(i) && !s.tour_findings(i).is_empty() {
-        "Show findings"
-    } else if i + 1 >= n {
-        "Understood · finish"
-    } else {
-        "Understood · next"
-    };
+    let primary = capitalized(s.tour_space_does());
     nav = nav
-        .child(button(primary, "tour-space", ButtonVariant::Contrast, k, |s, tx| s.tour_space(tx)))
-        .child(button("n ›", "tour-next", ButtonVariant::Ghost, k, |s, tx| s.tour_next(tx)));
+        .child(button(&primary, "tour-space", ButtonVariant::Contrast, k, |s, tx| s.tour_space(tx)).help(format!("{primary}  Space")))
+        .child(nav_button(
+            Nav::Forward("Next", "Next step, not marked understood"),
+            "tour-next",
+            "n",
+            k,
+            |s, tx| s.tour_next(tx),
+        ));
     Some(c.child(nav))
+}
+
+fn capitalized(t: &str) -> String {
+    let mut c = t.chars();
+    c.next().map(|f| f.to_uppercase().chain(c).collect()).unwrap_or_default()
+}
+
+/// A nav button's label, tooltip and which side its chevron sits on.
+enum Nav {
+    Back(&'static str, &'static str),
+    Forward(&'static str, &'static str),
+}
+
+/// An outlined nav button with a chevron; its key lives in the tooltip only.
+fn nav_button(nav: Nav, key: &str, shortcut: &str, k: &Kit, f: impl Fn(&mut App, &mut Tx) + 'static) -> El {
+    let (surf, _) = sr(k);
+    let (label, help, back) = match nav {
+        Nav::Back(l, h) => (l, h, true),
+        Nav::Forward(l, h) => (l, h, false),
+    };
+    let chev = icons::draw(if back { &icons::CHEV_L } else { &icons::CHEV_R }, 14.0, k.c.text_muted);
+    let word = text(label).font(TYPE.small).color(k.c.text_base).a11y_hidden();
+    let b = row()
+        .key(key.to_owned())
+        .role("button")
+        .label(label)
+        .help(format!("{help}  {shortcut}"))
+        .h(26.0)
+        .px(8.0)
+        .gap(4.0)
+        .center()
+        .radius(radius::SMALL)
+        .border(1.0, surf.card_border)
+        .cursor(Cursor::Pointer)
+        .focusable(true);
+    let b = if back {
+        b.child(chev).child(word)
+    } else {
+        b.child(word).child(chev)
+    };
+    k.interactive(b).press_scale(0.97).on_press_tx(f)
 }
 
 /// "Findings at this step": a count while hidden, else who found what.
@@ -225,7 +285,10 @@ fn findings(s: &App, i: usize, k: &Kit) -> El {
     if s.tour_findings_hidden(i) && s.tour.live.is_none() {
         return c.child(
             muted(
-                format!("{} finding(s) here, hidden until you have read it · Space shows them", f.len()),
+                match f.len() {
+                    1 => "1 finding here, hidden until you have read it · Space shows it".to_owned(),
+                    n => format!("{n} findings here, hidden until you have read it · Space shows them"),
+                },
                 k,
             )
             .wrap()
@@ -308,9 +371,13 @@ fn end(s: &App, k: &Kit) -> El {
         row()
             .w_full()
             .gap(8.0)
-            .child(button("◀ Last step (p)", "tour-back", ButtonVariant::Ghost, k, |s, tx| {
-                s.tour_prev(tx)
-            }))
+            .child(nav_button(
+                Nav::Back("Last step", "Back to the last step"),
+                "tour-back",
+                "p",
+                k,
+                |s, tx| s.tour_prev(tx),
+            ))
             .child(el().grow(1.0))
             .child(button("Close", "tour-close", ButtonVariant::Contrast, k, |s, _| {
                 s.leave_tour();

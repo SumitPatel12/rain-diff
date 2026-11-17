@@ -476,6 +476,18 @@ fn a_folder_that_is_not_a_repo_is_an_error_not_an_empty_diff() {
 }
 
 #[test]
+fn the_load_error_reloads_from_its_button() {
+    let mut a = app(story(), false);
+    a.phase = Phase::Error("fatal: bad revision".into());
+    let mut rt = runtime(a);
+    let (x, y) = rt.find("error-reload").expect("a Reload button beside the error");
+    rt.pointer_down(x, y);
+    rt.pointer_up(x, y);
+    settle(&mut rt);
+    assert_eq!(rt.state.phase, Phase::Ready, "the reload loaded the diff");
+}
+
+#[test]
 fn launch_flags_parse_from_leftover_arguments() {
     let args: Vec<String> = [
         "--fixture",
@@ -647,6 +659,8 @@ fn a_subset_routes_active_global_and_local() {
     assert_eq!((s.local(2), s.local(5), s.local(0)), (Some(1), Some(0), None));
     assert_eq!(s.current(), Some(5));
     assert_eq!(s.active().mode(), s.diff.mode());
+    let bar = rt.elements().into_iter().find(|e| e.key.as_deref() == Some("filter-bar-text"));
+    assert_eq!(bar.and_then(|e| e.text).as_deref(), Some("2 of 40 files"), "no dash without terms");
     typed(&mut rt, "]");
     assert_eq!(rt.state.current(), Some(2));
     typed(&mut rt, "]");

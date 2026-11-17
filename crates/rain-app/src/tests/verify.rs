@@ -44,6 +44,50 @@ fn the_checklist_floats_over_the_diff_and_ticks_into_the_session() {
 }
 
 #[test]
+fn shift_h_folds_and_opens_the_checklist_and_its_rows_take_the_keyboard() {
+    let mut rt = with_verify();
+    press(
+        &mut rt,
+        Key::Text("H".into()),
+        Mods {
+            shift: true,
+            ..Mods::default()
+        },
+    );
+    assert!(rt.find("verify-0").is_none(), "folded to its head");
+    press(
+        &mut rt,
+        Key::Text("H".into()),
+        Mods {
+            shift: true,
+            ..Mods::default()
+        },
+    );
+    assert!(rt.find("verify-0").is_some(), "open again");
+    let focusable = |k: &str| {
+        rt.elements()
+            .into_iter()
+            .find(|e| e.key.as_deref() == Some(k))
+            .is_some_and(|e| e.focusable)
+    };
+    assert!(focusable("verify-head") && focusable("verify-0"));
+}
+
+#[test]
+fn shift_h_without_verify_items_says_so() {
+    let mut rt = runtime(app(story(), true));
+    press(
+        &mut rt,
+        Key::Text("H".into()),
+        Mods {
+            shift: true,
+            ..Mods::default()
+        },
+    );
+    assert!(rt.state.status.starts_with("Nothing to verify by hand"), "{}", rt.state.status);
+}
+
+#[test]
 fn escape_lets_go_of_a_focused_section() {
     let mut rt = with_verify();
     rt.update(|s, _| s.focus_section("verify"));

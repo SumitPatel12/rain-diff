@@ -89,7 +89,7 @@ pub(super) fn finish(s: &App, k: &Kit) -> Option<El> {
             .child(
                 el().size(6.0, 6.0)
                     .radius(3.0)
-                    .fill(if w.go_to_must { r.must } else { k.c.text_faint }),
+                    .fill(if w.go_to_must { r.must } else { k.c.icon_faint }),
             )
             .child(text(w.text.clone()).font(TYPE.ui).color(k.c.text_base).wrap().grow(1.0).shrink());
         if w.go_to_must {

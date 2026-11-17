@@ -543,7 +543,10 @@ fn spec() -> AppSpec<App> {
             ("board-single", |s| {
                 scene_base(s);
                 seed_threads(s);
-                s.mutate(|ss| ss.ui.reader = rain_core::ReaderMode::Single);
+                s.mutate(|ss| {
+                    ss.ui.reader = rain_core::ReaderMode::Single;
+                    ss.version += 1;
+                });
                 s.show_pick(app::board::Pick::Group(rain_triage::Group::Generated));
             }),
             ("picker", |s| {

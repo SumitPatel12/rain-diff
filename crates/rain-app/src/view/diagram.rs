@@ -3,6 +3,7 @@
 //! is viewed and badged with their threads, a side pane for the selected node (its files,
 //! threads, Comment / Ask), and a legend. Lanes stack under [`STACK_WIDTH`].
 
+use rain_core::command::Command;
 use rain_diagram::{Diagram, DiagramStyle, Zoom};
 use rune::{Cursor, Cx, El, Tx, col, el, row, text};
 use rune_kit::Kit;
@@ -18,8 +19,15 @@ pub(super) const PANE_WIDTH: f32 = 300.0;
 /// Below this width the Map stacks its lanes one under another.
 pub(crate) const STACK_WIDTH: f32 = 700.0;
 
-/// A segmented switch on the well: one item per label, `on` lifted.
-fn segments(key: &str, labels: &[String], on: Option<usize>, k: &Kit, pick: impl Fn(usize) -> Box<dyn Fn(&mut App)>) -> El {
+/// A segmented switch on the well: one item per label, `on` lifted, `keys` in each tooltip.
+fn segments(
+    key: &str,
+    labels: &[String],
+    on: Option<usize>,
+    keys: Option<&str>,
+    k: &Kit,
+    pick: impl Fn(usize) -> Box<dyn Fn(&mut App)>,
+) -> El {
     let (surf, _) = sr(k);
     let mut seg = row()
         .key(key.to_owned())
@@ -41,6 +49,7 @@ fn segments(key: &str, labels: &[String], on: Option<usize>, k: &Kit, pick: impl
             .items_center()
             .radius(radius::SMALL)
             .cursor(Cursor::Pointer)
+            .focusable(true)
             .child(
                 text(l.clone())
                     .font(TYPE.small)
@@ -48,6 +57,9 @@ fn segments(key: &str, labels: &[String], on: Option<usize>, k: &Kit, pick: impl
                     .a11y_hidden(),
             )
             .on_press(move |s: &mut App| f(s));
+        if let Some(keys) = keys {
+            t = t.help(format!("{l}  {keys}"));
+        }
         t = if active {
             t.fill(surf.card_head).border(1.0, surf.card_border)
         } else {
@@ -70,7 +82,9 @@ pub(super) fn map_view(s: &App, k: &Kit, cx: &mut Cx<App>) -> El {
     let labels: Vec<String> = shown.iter().map(|&i| names[i].clone()).collect();
     let at = shown.iter().position(|&i| i == s.diagram.target);
     let picks = shown.clone();
-    let tabs = segments("map-tabs", &labels, at, k, move |i| {
+    let chord = |c: Command| c.chord().map(|k| k.display()).unwrap_or_default();
+    let view_keys = format!("{} {} switch views", chord(Command::NextMapView), chord(Command::PrevMapView));
+    let tabs = segments("map-tabs", &labels, at, Some(&view_keys), k, move |i| {
         let t = picks[i];
         Box::new(move |s: &mut App| s.pick_map_view(t))
     });
@@ -80,7 +94,7 @@ pub(super) fn map_view(s: &App, k: &Kit, cx: &mut Cx<App>) -> El {
         Zoom::P150 => Some(2),
         Zoom::Custom(_) => None,
     };
-    let zoom = segments("map-zoom", &["Fit".into(), "100%".into(), "150%".into()], zi, k, |i| {
+    let zoom = segments("map-zoom", &["Fit".into(), "100%".into(), "150%".into()], zi, None, k, |i| {
         Box::new(move |s: &mut App| {
             s.diagram.zoom = match i {
                 0 => Zoom::Fit,
@@ -157,6 +171,7 @@ fn diagram(s: &App, l: &rain_diagram::Layout, style: DiagramStyle, (w, h): (f32,
         .hover(s.diagram.hover.clone())
         .zoom(s.diagram.zoom)
         .fit_grow(2.0)
+        .fit_min(Zoom::READABLE)
         .viewport(w, h)
         .marks(s.map_marks())
         .selected(s.diagram.selected.clone())
@@ -190,7 +205,7 @@ fn legend(st: &DiagramStyle, k: &Kit) -> El {
         .child(item(swatch(st.removed), "removed"))
         .child(item(el().w(14.0).h(3.0).radius(1.5).fill(st.viewed), "share viewed"))
         .child(item(el().w(10.0).h(10.0).radius(2.0).fill(st.thread.alpha(0.4)), "threads"))
-        .child(item(el().w(10.0).h(10.0).radius(2.0).border(2.0, k.c.text_base), "selected"))
+        .child(item(el().w(10.0).h(10.0).radius(2.0).border(2.0, st.foreground), "selected"))
         .child(
             text("Click opens the files · c comment · ? ask")
                 .font(TYPE.small)
@@ -297,7 +312,7 @@ fn side_pane(s: &App, node: &str, k: &Kit) -> El {
             .child(if viewed {
                 icons::draw(&icons::CHECK, 14.0, r.accent)
             } else {
-                el().size(10.0, 10.0).radius(5.0).border(1.5, k.c.text_faint).a11y_hidden()
+                el().size(10.0, 10.0).radius(5.0).border(1.5, k.c.icon_faint).a11y_hidden()
             })
             .child(
                 text(f.path.clone())

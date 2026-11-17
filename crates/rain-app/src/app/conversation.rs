@@ -17,6 +17,8 @@ pub const OFFLINE_AFTER_SECS: u64 = 60;
 pub const MAX_TOASTS: usize = 3;
 /// How long a toast stays after it shows or the pointer leaves it.
 pub const TOAST_FOR: Duration = Duration::from_secs(5);
+/// How long a deleted thread's toast offers Undo.
+pub const UNDO_DELETE_FOR: Duration = Duration::from_secs(6);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Section {
@@ -38,7 +40,7 @@ impl Section {
 
     pub fn title(self) -> &'static str {
         match self {
-            Section::Waiting => "WAITING ON YOU",
+            Section::Waiting => "YOUR TURN",
             Section::Addressed => "ADDRESSED? (confirm)",
             Section::Yours => "YOURS",
             Section::Orphaned => "ORPHANED",
@@ -120,6 +122,8 @@ pub enum ToastAction {
     Orphaned,
     /// Lets the local command answer questions (asked once).
     AllowAsk,
+    /// Undo: puts a deleted thread back at its index.
+    Restore(Box<Thread>, usize),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -136,6 +140,15 @@ impl AgentToast {
     /// Waits on the user (Allow) or on a running answer, so it stays until that ends.
     pub fn sticky(&self) -> bool {
         matches!(self.action, Some(ToastAction::AllowAsk)) || self.key.starts_with("ask-")
+    }
+
+    /// How long it stays once shown or left by the pointer.
+    pub fn lasts(&self) -> Duration {
+        if matches!(self.action, Some(ToastAction::Restore(..))) {
+            UNDO_DELETE_FOR
+        } else {
+            TOAST_FOR
+        }
     }
 }
 
@@ -277,7 +290,7 @@ impl App {
         if let Some(t) = ops::thread(&self.mirror, &id) {
             let what = match section_of(t) {
                 Section::Addressed => "addressed? confirm with a",
-                Section::Waiting => "waiting on you",
+                Section::Waiting => "your turn",
                 _ => "open question",
             };
             self.status = format!("{}/{} · {} · {what}", at + 1, walk.len(), short_name(t));
@@ -402,6 +415,7 @@ impl App {
             Some(ToastAction::AllowAsk) if !self.settings.ask.allowed => {
                 self.apply_ask_item(super::ask::AskItem::Allow);
             }
+            Some(ToastAction::Restore(t, at)) => self.restore_thread(*t, at),
             Some(ToastAction::AllowAsk) | None => {}
         }
     }
@@ -435,14 +449,14 @@ impl App {
     /// one is due.
     pub fn expire_toasts(&mut self, now: Instant) -> (bool, Option<Duration>) {
         let before = self.conversation.toasts.len();
-        let live = |t: &AgentToast| t.sticky() || t.hovered || now.saturating_duration_since(t.since) < TOAST_FOR;
+        let live = |t: &AgentToast| t.sticky() || t.hovered || now.saturating_duration_since(t.since) < t.lasts();
         self.conversation.toasts.retain(live);
         let next = self
             .conversation
             .toasts
             .iter()
             .filter(|t| !t.sticky() && !t.hovered)
-            .map(|t| TOAST_FOR.saturating_sub(now.saturating_duration_since(t.since)))
+            .map(|t| t.lasts().saturating_sub(now.saturating_duration_since(t.since)))
             .min();
         (self.conversation.toasts.len() != before, next)
     }
@@ -1090,6 +1104,10 @@ mod tests {
                 ] {
                     assert!(rt.find(key).is_some(), "{key} at {size:?} dark {dark}");
                 }
+                assert!(
+                    rt.elements().iter().any(|e| e.text.as_deref() == Some("Your turn")),
+                    "the narrow section does not reuse the broad waiting count's words"
+                );
                 let orphan = rt.state.conversation_section(Section::Orphaned)[0].id.clone();
                 assert!(rt.find(&format!("conv-snapshot-{orphan}")).is_some());
                 assert!(rt.find("presence-dot").is_some());

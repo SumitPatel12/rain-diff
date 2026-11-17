@@ -148,6 +148,8 @@ pub struct App {
     pub composer_edit: TextEdit,
     pub reply_to: Option<String>,
     pub reply_edit: TextEdit,
+    /// Unsent reply text per thread, back when that thread's reply opens again; not saved.
+    pub reply_drafts: BTreeMap<String, String>,
     pub expanded: BTreeSet<String>,
     /// Threads and notes (`note:<id>`) folded into the gutter; kept across reloads, not saved.
     pub folded: BTreeSet<String>,
@@ -282,6 +284,7 @@ impl App {
             composer_edit: TextEdit::default(),
             reply_to: None,
             reply_edit: TextEdit::default(),
+            reply_drafts: BTreeMap::new(),
             expanded: BTreeSet::new(),
             folded: BTreeSet::new(),
             popped_note: None,
@@ -804,7 +807,8 @@ impl App {
             self.cancel_composer();
             return true;
         }
-        if self.reply_to.take().is_some() {
+        if self.reply_to.is_some() {
+            self.keep_reply_draft();
             return true;
         }
         if self.find.open {
@@ -857,7 +861,11 @@ impl App {
             Command::ViewedAndNext => self.viewed_and_next(tx),
             Command::ToggleViewed => self.toggle_viewed_current(),
             Command::MarkGroupViewed => self.accept_group(tx),
-            Command::UndoAccept => self.undo_accept(tx),
+            Command::UndoAccept => {
+                if !self.undo_delete(tx) {
+                    self.undo_accept(tx);
+                }
+            }
             Command::ToggleSplit => self.toggle_split(),
             Command::LayoutAuto => self.set_layout(ViewLayout::Auto),
             Command::ToggleReaderMode => self.toggle_reader_mode(tx),
@@ -888,10 +896,12 @@ impl App {
             Command::Defer => self.dispose(Disposition::Defer),
             Command::Conversation => self.toggle_conversation(tx),
             Command::Map | Command::Overview => self.toggle_map(),
+            Command::NextMapView | Command::PrevMapView => self.step_map_view(cmd == Command::NextMapView),
             Command::Brief => self.toggle_reader_tab(),
             Command::GoOverview => self.set_reader_tab(ReaderTab::Overview),
             Command::GoChanges => self.set_reader_tab(ReaderTab::Changes),
             Command::Tour => self.start_tour(tx),
+            Command::ToggleVerify => self.toggle_verify_card(),
             Command::FinishReview => self.finish_review(tx),
             Command::KeySheet => {
                 self.open_palette();

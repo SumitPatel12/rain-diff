@@ -122,6 +122,49 @@ fn the_buttons_drain_it() {
 }
 
 #[test]
+fn the_app_takes_clicks_as_soon_as_the_water_drains() {
+    let mut rt = runtime(reminder(90.0));
+    rt.update(|s, _| s.rest.weather = Weather::Drain(Instant::now(), 1000));
+    rt.frame(1.0 / 60.0);
+    assert!(rt.find("flood").is_some(), "the water is still falling away");
+    let (x, y) = rt.find("more-menu").expect("the top bar's ⋯");
+    rt.pointer_down(x, y);
+    rt.pointer_up(x, y);
+    rt.frame(1.0 / 60.0);
+    assert!(rt.state.menus.more, "the press reached the ⋯ under the draining water");
+}
+
+#[test]
+fn reduced_motion_holds_the_weather_still() {
+    let mut a = reminder(90.0);
+    a.rest.weather = Weather::Flood(Instant::now());
+    let mut rt = runtime(a);
+    rt.set_system_reduced_motion(true);
+    settle(&mut rt);
+    assert!(rt.state.rest.calm.get());
+    assert!(rt.find("break-card").is_some(), "the card shows at once");
+    assert!(rt.find("flood-water").is_some(), "the water stands at its level");
+    assert!(!(0..200).any(|i| rt.find(&format!("flood-drop-{i}")).is_some()), "no falling rain");
+    assert!(rt.find("flood-bolt").is_none(), "no lightning");
+    rt.update(|s, _| s.rest_taken());
+    assert_eq!(rt.state.rest.weather, Weather::Clear, "it clears without a drain");
+}
+
+#[test]
+fn reduced_motion_keeps_the_loader_cloud_without_rain() {
+    let mut a = reminder(90.0);
+    a.phase = crate::app::Phase::Loading("Running git diff".into());
+    let mut rt = runtime(a);
+    rt.set_system_reduced_motion(true);
+    rt.frame(1.0 / 60.0);
+    rt.update(|s, _| s.rest.clock = 2.0);
+    rt.frame(1.0 / 60.0);
+    assert!(rt.find("loader-cloud").is_some());
+    assert!(rt.find("loading").is_some(), "the message stays");
+    assert!(!(0..14).any(|i| rt.find(&format!("loader-drop-{i}")).is_some()), "no drops fall");
+}
+
+#[test]
 fn the_preview_rains_and_leaves_the_count_alone() {
     let mut a = reminder(90.0);
     a.rest.active = Duration::from_secs(1200);

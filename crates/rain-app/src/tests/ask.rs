@@ -461,6 +461,11 @@ fn the_launcher_waits_until_the_user_allows_it_once() {
     assert!(ctl.borrow().reqs.is_empty(), "nothing runs before the user allows it");
     assert_eq!(status(&a, &id).error.as_deref(), Some(crate::app::ask::NOT_ALLOWED));
     assert!(a.conversation.toasts.iter().any(|t| t.key == "ask-allow"));
+    assert!(
+        !a.status.contains("Allow") && !a.status.contains("agent"),
+        "the toast says it, the status line does not repeat it: {}",
+        a.status
+    );
     let mut tx = Tx::default();
     a.toast_action("ask-allow", &mut tx);
     assert!(a.settings.ask.allowed);

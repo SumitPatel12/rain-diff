@@ -232,6 +232,17 @@ fn the_toolbar_carries_title_meter_more_and_finish() {
     let bottom = toolbar.rect[1] + toolbar.rect[3];
     let (_, status_y) = rt.find("status-waiting").unwrap();
     assert!(status_y > bottom + 500.0, "waiting sits in the status bar");
+    let chip = rt
+        .elements()
+        .into_iter()
+        .find(|e| e.key.as_deref() == Some("status-waiting"))
+        .unwrap()
+        .rect;
+    let on_chip = |r: [f32; 4]| r[0] >= chip[0] && r[0] < chip[0] + chip[2] && r[1] >= chip[1] && r[1] < chip[1] + chip[3];
+    assert!(
+        !rt.elements().iter().any(|e| e.text.as_deref() == Some("w") && on_chip(e.rect)),
+        "the key lives in the tooltip, not on the chip"
+    );
     assert_eq!(rt.state.waiting_count(), 2);
     let (x, y) = rt.find("status-waiting").unwrap();
     rt.pointer_down(x, y);

@@ -66,6 +66,19 @@ impl App {
         self.diagram.zoom = Zoom::Fit;
     }
 
+    /// `}` / `{`: the next or previous Map view that draws, wrapping round.
+    pub fn step_map_view(&mut self, forward: bool) {
+        if !self.layout.is_open(Overlay::Map) || !self.has_map() {
+            self.status = "Map views: m opens the Map".into();
+            return;
+        }
+        let shown: Vec<usize> = (0..self.layouts.len()).filter(|&i| self.layouts[i].is_some()).collect();
+        let at = shown.iter().position(|&i| i == self.diagram.target).unwrap_or(0);
+        let n = shown.len();
+        let next = if forward { (at + 1) % n } else { (at + n - 1) % n };
+        self.pick_map_view(shown[next]);
+    }
+
     /// Viewed share and open threads per graph node, from the files each node cites.
     pub fn map_marks(&self) -> BTreeMap<String, NodeMark> {
         let Some(l) = &self.overview else { return BTreeMap::new() };

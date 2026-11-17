@@ -75,7 +75,7 @@ pub(crate) fn hint_pairs(s: &App) -> Vec<(String, String)> {
         return vec![("Enter".into(), "open in reader".into()), ("Esc".into(), "close peek".into())];
     } else if s.layout.is_open(crate::app::Overlay::Tour) && s.tour.stage == crate::app::TourStage::Step && s.composer.is_none() {
         return vec![
-            ("Space".into(), "understood · next".into()),
+            ("Space".into(), s.tour_space_does().into()),
             ("Esc".into(), "leave the tour".into()),
         ];
     } else if s.layout.is_open(crate::app::Overlay::Conversation) && s.composer.is_none() && s.reply_to.is_none() {
@@ -257,8 +257,7 @@ pub(super) fn status_bar(s: &App, look: &Look, layer: &mut Vec<El>) -> El {
                     .font(TYPE.small)
                     .color(k.c.warning.fg)
                     .a11y_hidden(),
-            )
-            .child(kbd("w", k)),
+            ),
         );
     }
     bar.child(super::conversation::presence_dot(s, k))

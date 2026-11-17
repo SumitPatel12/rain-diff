@@ -47,6 +47,15 @@ impl App {
         self.mirror.verified.iter().any(|v| v == item)
     }
 
+    /// `Shift+H` and the card's head: folds the Verify card to its pill, or opens it.
+    pub fn toggle_verify_card(&mut self) {
+        if self.verify_items().is_empty() {
+            self.status = "Nothing to verify by hand: the brief has no Verify items".into();
+            return;
+        }
+        self.brief.verify_shut = !self.brief.verify_shut;
+    }
+
     /// Ticks or unticks a Verify item, in the session.
     pub fn toggle_verified(&mut self, item: &str) {
         let item = item.to_owned();

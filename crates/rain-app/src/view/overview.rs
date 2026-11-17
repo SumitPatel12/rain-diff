@@ -1006,6 +1006,21 @@ pub(super) fn artifact_composer(_s: &App, d: &ArtifactDraft, k: &Kit) -> El {
         )
 }
 
+/// The no-brief card's text, naming only what this page really shows.
+fn fallback_copy(s: &App) -> String {
+    let from_diff = if s.overview.is_some() {
+        "Facts and the Map come from the diff"
+    } else {
+        "Facts come from the diff"
+    };
+    let until = if s.story_notes().is_empty() {
+        format!("Until then, {from_diff}.")
+    } else {
+        format!("Until then, the agent's story notes stand in below, and {from_diff}.")
+    };
+    format!("**No brief yet.** Ask the agent to run `rain brief set` (see docs/agent.md).\n\n{until}")
+}
+
 /// No brief yet: the story notes with Comment / Ask per note, and how to get a brief.
 fn fallback(s: &App, k: &Kit) -> El {
     let (surf, _) = sr(k);
@@ -1019,13 +1034,7 @@ fn fallback(s: &App, k: &Kit) -> El {
             .radius(radius::CARD)
             .fill(surf.panel)
             .border(1.0, surf.card_border)
-            .child(
-                Markdown::new(
-                    "**No brief yet.** Ask the agent to run `rain brief set` (see docs/agent.md).\n\nUntil then, the agent's story notes stand in below, and Facts and the Map come from the diff.",
-                )
-                .selectable(true)
-                .build(k),
-            ),
+            .child(Markdown::new(fallback_copy(s)).selectable(true).build(k)),
     );
     if let Some(story) = notes::story_card(s, k) {
         c = c.child(story);

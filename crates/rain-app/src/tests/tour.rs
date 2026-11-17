@@ -229,6 +229,89 @@ fn my_pass_first_hides_the_seeded_findings_on_step_two_until_space() {
     assert!(ids.iter().all(|id| annotated(&rt, id)), "shown at once without My pass first");
 }
 
+/// Every visible text on screen.
+fn texts(rt: &Runtime<App>) -> Vec<String> {
+    rt.elements().into_iter().filter(|e| !e.exiting).filter_map(|e| e.text).collect()
+}
+
+/// The visible text and accessible name of the element keyed `key`.
+fn button_text(rt: &Runtime<App>, key: &str) -> (String, Option<String>) {
+    let els = rt.elements();
+    let b = els.iter().find(|e| !e.exiting && e.key.as_deref() == Some(key)).unwrap();
+    let inside = format!("{}/", b.path);
+    let text: String = els
+        .iter()
+        .filter(|e| !e.exiting && e.path.starts_with(&inside))
+        .filter_map(|e| e.text.clone())
+        .collect();
+    (text, b.label.clone())
+}
+
+#[test]
+fn every_space_hint_says_what_space_will_do() {
+    let mut a = with_brief(app(story(), true));
+    seed_findings(&mut a);
+    let mut rt = runtime(a);
+    begin(&mut rt);
+    press(&mut rt, key("n"), Mods::default());
+    assert_eq!(rt.state.tour_space_does(), "show findings");
+    assert_eq!(button_text(&rt, "tour-space").0, "Show findings");
+    assert!(rt.state.status.contains("Space show findings"), "{}", rt.state.status);
+    assert!(texts(&rt).iter().any(|t| t == "show findings"), "the status line's hint");
+    assert!(
+        !texts(&rt).iter().any(|t| t.contains("understood")),
+        "nothing promises understood yet"
+    );
+
+    press(&mut rt, key(" "), Mods::default());
+    assert_eq!(rt.state.tour.step, 1);
+    assert_eq!(rt.state.tour_space_does(), "understood · next");
+    assert_eq!(button_text(&rt, "tour-space").0, "Understood · next");
+    assert!(rt.state.status.contains("Space understood · next"), "{}", rt.state.status);
+    assert!(texts(&rt).iter().any(|t| t == "understood · next"));
+
+    rt.update(|s, tx| s.tour_goto(4, tx));
+    settle(&mut rt);
+    assert_eq!(rt.state.tour_space_does(), "understood · finish");
+    assert_eq!(button_text(&rt, "tour-space").0, "Understood · finish");
+}
+
+#[test]
+fn nav_buttons_carry_words_and_keep_their_keys_in_the_tooltip() {
+    let mut rt = runtime(with_brief(app(story(), true)));
+    begin(&mut rt);
+    for (key, word) in [("tour-prev", "Previous"), ("tour-next", "Next")] {
+        let (text, label) = button_text(&rt, key);
+        assert_eq!((text.as_str(), label.as_deref()), (word, Some(word)), "{key}");
+    }
+    rt.update(|s, tx| s.tour_goto(4, tx));
+    press(&mut rt, key("n"), Mods::default());
+    assert_eq!(rt.state.tour.stage, TourStage::End);
+    let (text, label) = button_text(&rt, "tour-back");
+    assert_eq!((text.as_str(), label.as_deref()), ("Last step", Some("Last step")));
+    let glyphs = texts(&rt).into_iter().filter(|t| t.contains(['‹', '›', '◀'])).count();
+    assert_eq!(glyphs, 0);
+}
+
+#[test]
+fn a_toast_stacks_above_the_tour_card_instead_of_under_it() {
+    let mut rt = runtime(with_brief(app(story(), true)));
+    begin(&mut rt);
+    rt.update(|s, _| {
+        s.push_toast(
+            "ask-allow".into(),
+            "Allow?".into(),
+            Some(crate::app::conversation::ToastAction::AllowAsk),
+        )
+    });
+    settle(&mut rt);
+    let els = rt.elements();
+    let rect = |k: &str| els.iter().find(|e| !e.exiting && e.key.as_deref() == Some(k)).map(|e| e.rect);
+    let (toast, card) = (rect("toasts").expect("toasts shown"), rect("overlay-tour").unwrap());
+    assert!(toast[1] + toast[3] <= card[1], "toast {toast:?} ends above the card {card:?}");
+    assert_eq!(els.iter().filter(|e| !e.exiting && e.key.as_deref() == Some("toasts")).count(), 1);
+}
+
 #[test]
 fn esc_leaves_keeping_the_place_and_enter_resumes_without_moving_the_reader() {
     let mut rt = runtime(with_brief(app(story(), true)));

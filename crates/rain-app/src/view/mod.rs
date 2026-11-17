@@ -60,6 +60,7 @@ pub(crate) fn window_width(s: &App) -> f32 {
 pub fn view(s: &App, cx: &mut Cx<App>) -> El {
     let scheme = scheme_of(s, cx);
     s.seen_scheme.set(scheme);
+    s.rest.calm.set(cx.is_reduced_motion());
     let look = theme::look(scheme);
     let k = &look.kit;
     crate::title_bar::paint(scheme.is_dark(), look.s.bar, k.c.text_base);
@@ -269,6 +270,8 @@ fn reader(s: &App, look: &Look, cx: &mut Cx<App>) -> El {
         pane = pane.child(v.pin(Some(14.0), None, None, Some(14.0)));
     }
     match conversation::toasts(s, &look.kit) {
+        // With the tour open they stack above its card instead, in the tour's layer.
+        _ if s.layout.is_open(Overlay::Tour) => pane,
         // Toasts stack inside the reader, over its bottom right, clear of the status line and
         // of the Map's node pane.
         Some(t) => {
@@ -317,10 +320,13 @@ fn reader_pane(s: &App, look: &Look, cx: &mut Cx<App>) -> El {
                 )
                 .child(
                     row()
-                        .gap(4.0)
+                        .gap(8.0)
                         .items_center()
                         .child(muted("Fix the repo or refs, then reload.", k))
-                        .help("Reload  Shift+R"),
+                        .child(
+                            ui::outline("error-reload", "Reload", Some("Shift+R"), 24.0, k)
+                                .on_press_tx(|s: &mut App, tx: &mut rune::Tx| s.reload_now(tx)),
+                        ),
                 ),
         )),
         Phase::Ready if s.layout.is_zoomed() => ready(s, k, pane, cx),
@@ -370,7 +376,7 @@ fn ready(s: &App, k: &Kit, mut pane: El, cx: &mut Cx<App>) -> El {
             col()
                 .key("empty")
                 .gap(6.0)
-                .child(icons::draw(&icons::FILE, 24.0, k.c.text_faint))
+                .child(icons::draw(&icons::FILE, 24.0, k.c.icon_faint))
                 .child(text(title).font(theme::TYPE.h2).color(k.c.text_base))
                 .child(muted(msg, k)),
         ));

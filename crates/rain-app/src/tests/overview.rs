@@ -289,6 +289,28 @@ fn the_overview_without_a_brief_says_how_to_get_one() {
 }
 
 #[test]
+fn the_no_brief_card_promises_only_what_the_page_shows() {
+    let said = |with_overview: bool| {
+        let mut rt = runtime(app(story(), with_overview));
+        rt.update(|s, _| s.set_reader_tab(ReaderTab::Overview));
+        settle(&mut rt);
+        assert!(rt.state.story_notes().is_empty());
+        rt.elements()
+            .into_iter()
+            .filter(|e| !e.exiting && e.path.contains("overview-empty"))
+            .filter_map(|e| e.text)
+            .collect::<Vec<_>>()
+            .join("")
+    };
+    let bare = said(false);
+    assert!(bare.contains("Facts come from the diff"), "{bare}");
+    assert!(!bare.contains("story notes") && !bare.contains("Map"), "{bare}");
+    let mapped = said(true);
+    assert!(mapped.contains("Facts and the Map come from the diff"), "{mapped}");
+    assert!(!mapped.contains("story notes"), "{mapped}");
+}
+
+#[test]
 fn facts_and_map_sit_beside_the_text_on_a_wide_window_and_above_it_on_a_narrow_one() {
     let wide = sized_runtime(
         {

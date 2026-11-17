@@ -1,5 +1,6 @@
 //! The break reminder: minutes of active use, counted from input, then rain until a break.
 
+use std::cell::Cell;
 use std::time::{Duration, Instant};
 
 use rune::Tx;
@@ -44,6 +45,8 @@ pub struct Rest {
     pub preview: Option<Duration>,
     pub checked: Option<Instant>,
     pub weather: Weather,
+    /// The OS asks for reduced motion, as the last view saw it: the weather holds still.
+    pub calm: Cell<bool>,
 }
 
 impl Default for Rest {
@@ -55,6 +58,7 @@ impl Default for Rest {
             preview: None,
             checked: None,
             weather: Weather::Clear,
+            calm: Cell::new(false),
         }
     }
 }
@@ -77,8 +81,9 @@ impl App {
 
     pub(crate) fn rest_poll(&mut self, tx: &mut Tx) -> bool {
         // The loader's clouds rain from the clock too.
+        let calm = self.rest.calm.get();
         let loading = matches!(self.phase, super::Phase::Loading(_));
-        if loading {
+        if loading && !calm {
             tx.wake_after(FRAME);
         }
         let (now, input) = (Instant::now(), rune::last_input());
@@ -87,12 +92,12 @@ impl App {
         match self.rest.weather {
             Weather::Clear if self.settings.break_reminder.enabled => tx.wake_after(CHECK_EVERY),
             Weather::Clear => {}
-            Weather::Flood(_) if still => tx.wake_after(CHECK_EVERY),
+            Weather::Flood(_) if still || calm => tx.wake_after(CHECK_EVERY),
             // The rain is drawn from the clock: one frame after another until it is clear.
             _ => tx.wake_after(FRAME),
         }
         // Redraw only when the clock has moved since the last drawing.
-        let animating = loading || (self.rest.weather != Weather::Clear && !still);
+        let animating = !calm && (loading || (self.rest.weather != Weather::Clear && !still));
         let moved = animating && self.rest.clock != self.rest.drawn;
         self.rest.drawn = self.rest.clock;
         changed || moved
@@ -164,11 +169,15 @@ impl App {
             self.rest.active = active;
         }
         let now = Instant::now();
+        self.rest.checked = Some(now);
+        if self.rest.calm.get() {
+            self.rest.weather = Weather::Clear;
+            return;
+        }
         let level = match self.rest.weather {
             Weather::Flood(at) => flood_level(now.saturating_duration_since(at)),
             _ => 0.0,
         };
         self.rest.weather = Weather::Drain(now, (level * 1000.0) as u16);
-        self.rest.checked = Some(now);
     }
 }

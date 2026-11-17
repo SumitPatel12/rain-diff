@@ -445,27 +445,18 @@ fn gutter_mark(s: &App, here: &[&Annotation], k: &Kit) -> Option<El> {
                 if n == 1 { "" } else { "s" }
             );
             let id = a.id.clone();
-            return Some(
-                mark_box(bg, Some(ring), false)
-                    .label(said.clone())
-                    .help(said)
-                    .on_press(move |s: &mut App| s.unfold(&id))
-                    .child(icons::draw(&icons::CHAT, 12.0, fg))
-                    .child(text(n.to_string()).font(TYPE.mark).color(fg)),
-            );
+            let face = mark_box(bg, Some(ring), false)
+                .child(icons::draw(&icons::CHAT, 12.0, fg))
+                .child(text(n.to_string()).font(TYPE.mark).color(fg).a11y_hidden());
+            return Some(mark_hit(face, said).on_press(move |s: &mut App| s.unfold(&id)));
         }
     }
     for a in here {
         if a.id.starts_with("note:") && s.is_folded(&a.id) {
             let id = a.id.clone();
             let said = "Folded note — click to unfold".to_owned();
-            return Some(
-                mark_box(r.note_bg, Some(r.note_border), false)
-                    .label(said.clone())
-                    .help(said)
-                    .on_press(move |s: &mut App| s.unfold(&id))
-                    .child(icons::draw(&icons::SPARK, 12.0, r.note)),
-            );
+            let face = mark_box(r.note_bg, Some(r.note_border), false).child(icons::draw(&icons::SPARK, 12.0, r.note));
+            return Some(mark_hit(face, said).on_press(move |s: &mut App| s.unfold(&id)));
         }
     }
     for a in here {
@@ -473,6 +464,8 @@ fn gutter_mark(s: &App, here: &[&Annotation], k: &Kit) -> Option<El> {
             let said = "Unsent draft — c to continue".to_owned();
             return Some(
                 mark_box(rune::Color::TRANSPARENT, Some(surf.strong_line), true)
+                    .key("gm")
+                    .role("note")
                     .label(said.clone())
                     .help(said)
                     .child(icons::draw(&icons::EDIT, 11.0, k.c.text_muted)),
@@ -482,18 +475,23 @@ fn gutter_mark(s: &App, here: &[&Annotation], k: &Kit) -> Option<El> {
     None
 }
 
-fn mark_box(bg: rune::Color, ring: Option<rune::Color>, dashed: bool) -> El {
-    let mut b = row()
+/// A pressable gutter mark: `face` as drawn, pressed anywhere in the marks cell's height.
+fn mark_hit(face: El, said: String) -> El {
+    row()
         .key("gm")
         .role("button")
-        .h(16.0)
-        .min_w(18.0)
-        .px(3.0)
-        .gap(2.0)
+        .label(said.clone())
+        .help(said)
+        .focusable(true)
+        .min_w(22.0)
+        .h_full()
         .center()
-        .radius(radius::CHIP)
-        .fill(bg)
-        .cursor(Cursor::Pointer);
+        .cursor(Cursor::Pointer)
+        .child(face)
+}
+
+fn mark_box(bg: rune::Color, ring: Option<rune::Color>, dashed: bool) -> El {
+    let mut b = row().h(16.0).min_w(18.0).px(3.0).gap(2.0).center().radius(radius::CHIP).fill(bg);
     if let Some(r) = ring {
         b = b.border(1.0, r);
         if dashed {

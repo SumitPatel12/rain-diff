@@ -21,6 +21,8 @@ pub enum CardAction {
     AskReply,
     CancelReply,
     Reply(String),
+    /// Send pressed on an empty reply box.
+    EmptyReply,
     /// Set this disposition, or clear it when the thread already has it.
     Disposition(Disposition),
     /// Show the dismiss reasons; [`CardAction::Dismiss`] picks one.
@@ -110,6 +112,21 @@ pub fn anchor_label(path: &str, anchor: &Anchor) -> String {
     };
     let old = if anchor.side() == Side::Old { " (old)" } else { "" };
     format!("{path}:{lines}{old}")
+}
+
+/// The first message as an expanded card draws it: without its `F1 issue (blocking):` prefix
+/// when the head already says the same; the stored text is untouched.
+pub fn body_under_head(t: &Thread) -> &str {
+    let Some(first) = t.messages.first() else { return "" };
+    let kind = t.kind();
+    match label::parse(&first.body) {
+        Some(l)
+            if !l.rest.is_empty() && (t.kind.is_none() || l.kind.label() == kind.label()) && (l.blocking != Some(true) || t.blocking()) =>
+        {
+            l.rest
+        }
+        _ => &first.body,
+    }
 }
 
 /// A body as Markdown to draw: each ```` ```suggestion ```` block becomes a `diff` fence of
@@ -598,17 +615,21 @@ impl<'t, S: 'static> ThreadCard<'t, S> {
             );
         }
         head = head.child(
-            k.interactive(
+            roomy(
                 row()
                     .key("fold")
                     .role("button")
                     .label("Fold into the gutter")
                     .help("Fold into the gutter  Enter")
+                    .focusable(true),
+                row()
                     .size(22.0, 22.0)
                     .center()
                     .radius(6.0)
-                    .focusable(true)
+                    .child(hover_tint(k, 6.0))
                     .child(rune::icon(&FOLD, 14.0).color(k.c.text_muted)),
+                1.0,
+                1.0,
             )
             .on_press_tx(fire(CardAction::Toggle)),
         );
@@ -623,7 +644,8 @@ impl<'t, S: 'static> ThreadCard<'t, S> {
         let mut body = col().key("messages").w_full();
         for (i, m) in t.messages.iter().enumerate() {
             let who = m.author.clone().filter(|a| !a.trim().is_empty()).unwrap_or_else(|| "you".into());
-            let md = Markdown::new(display_body(&m.body, t.code_snapshot.as_ref()))
+            let shown = if i == 0 { body_under_head(t) } else { m.body.as_str() };
+            let md = Markdown::new(display_body(shown, t.code_snapshot.as_ref()))
                 .selectable(true)
                 .build(k);
             if i == 0 {
@@ -654,15 +676,17 @@ impl<'t, S: 'static> ThreadCard<'t, S> {
                 );
             if is_mine(m.author.as_deref()) {
                 meta = meta.child(
-                    k.interactive(
+                    roomy(
+                        row().key(format!("edit-{}", m.id)).role("button").label("Edit").focusable(true),
                         row()
-                            .key(format!("edit-{}", m.id))
-                            .role("button")
-                            .label("Edit")
+                            .h(ROW_FACE)
                             .px(4.0)
+                            .center_y()
                             .radius(4.0)
-                            .focusable(true)
+                            .child(hover_tint(k, 4.0))
                             .child(text("· Edit").font(k.ty.small).color(k.c.text_faint).a11y_hidden()),
+                        0.0,
+                        ROW_PAD,
                     )
                     .on_press_tx(fire(CardAction::EditMessage(m.id.clone()))),
                 );
@@ -710,15 +734,17 @@ impl<'t, S: 'static> ThreadCard<'t, S> {
                     )
                     .child(text(label).key("answer-text").font(k.ty.small).color(k.c.info.fg).grow(1.0))
                     .child(
-                        k.interactive(
+                        roomy(
+                            row().key("cancel-answer").role("button").label("Cancel the answer").focusable(true),
                             row()
-                                .key("cancel-answer")
-                                .role("button")
-                                .label("Cancel the answer")
+                                .h(ROW_FACE)
                                 .px(4.0)
+                                .center_y()
                                 .radius(4.0)
-                                .focusable(true)
+                                .child(hover_tint(k, 4.0))
                                 .child(text("Cancel the answer").font(k.ty.small).color(k.c.info.fg).a11y_hidden()),
+                            0.0,
+                            ROW_PAD,
                         )
                         .on_press_tx(fire(CardAction::CancelAnswer)),
                     ),
@@ -727,11 +753,13 @@ impl<'t, S: 'static> ThreadCard<'t, S> {
         if let Some((edit, access)) = self.reply {
             let submit = self.on_action.clone();
             let cancel = self.on_action.clone();
+            let empty = self.on_action.clone();
             let (sid, cid): (Rc<str>, Rc<str>) = (Rc::from(t.id.as_str()), Rc::from(t.id.as_str()));
+            let eid: Rc<str> = Rc::from(t.id.as_str());
             let placeholder = if kind == ThreadKind::Question {
-                "Follow-up question… Claude answers here (Ctrl+Enter to send, Esc to cancel)"
+                "Follow-up question… Claude answers here (Ctrl+Enter to send, Esc keeps a draft)"
             } else {
-                "Reply… @claude asks Claude (Ctrl+Enter to send, Esc to cancel)"
+                "Reply… @claude asks Claude (Ctrl+Enter to send, Esc keeps a draft)"
             };
             let composer = Composer::new_rc(&edit, access)
                 .key("reply")
@@ -744,6 +772,11 @@ impl<'t, S: 'static> ThreadCard<'t, S> {
                 .on_cancel(move |s: &mut S, tx: &mut Tx| {
                     if let Some(f) = &cancel {
                         f(s, &cid, CardAction::CancelReply, tx);
+                    }
+                })
+                .on_empty(move |s: &mut S, tx: &mut Tx| {
+                    if let Some(f) = &empty {
+                        f(s, &eid, CardAction::EmptyReply, tx);
                     }
                 })
                 .build(k);
@@ -908,11 +941,36 @@ const STRONG: TextStyle = TextStyle::new(13.0, 600.0).lh(20.0);
 const STRONG_SMALL: TextStyle = TextStyle::new(12.0, 600.0).lh(18.0);
 const MICRO: TextStyle = TextStyle::new(11.0, 400.0).lh(16.0);
 const MONO_MICRO: TextStyle = TextStyle::new(11.0, 400.0).mono().lh(16.0);
+/// A text button's drawn height in a card row, and the padding that makes its press area 24.
+const ROW_FACE: f32 = 18.0;
+const ROW_PAD: f32 = 3.0;
+
+/// `hit` (the button: key, role, label, press) around `face`, reaching `x`/`y` past it on each
+/// side without moving anything: the press area grows, the drawing stays.
+fn roomy(hit: El, face: El, x: f32, y: f32) -> El {
+    hit.px(x)
+        .py(y)
+        .mx(-x)
+        .my(-y)
+        .hover_group()
+        .cursor(rune::Cursor::Pointer)
+        .child(face)
+}
+
+/// The hover tint of a [`roomy`] button's face, at the face's size.
+fn hover_tint(k: &Kit, radius: f32) -> El {
+    rune::el()
+        .pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0))
+        .radius(radius)
+        .fill(k.c.hover)
+        .group_opacity(0.0, 1.0)
+        .a11y_hidden()
+}
 
 static FOLD: rune::Icon = rune::Icon {
     name: "rain-fold",
     view: 16.0,
-    body: r#"<path d="m4.5 3.5 3.5 3 3.5-3M4.5 12.5l3.5-3 3.5 3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>"#,
+    body: r#"<path d="M2.5 3v10M13.5 8H6M9 4.5 5.5 8 9 11.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>"#,
 };
 
 /// `16:12` from an ISO timestamp.
@@ -1101,6 +1159,7 @@ pub struct Composer<S> {
     rows: (usize, usize),
     on_submit: Option<SubmitFn<S>>,
     on_cancel: Option<CancelFn<S>>,
+    on_empty: Option<CancelFn<S>>,
     on_mode: Option<ModeFn<S>>,
     on_kind: Option<KindFn<S>>,
     on_blocking: Option<CancelFn<S>>,
@@ -1131,6 +1190,7 @@ impl<S: 'static> Composer<S> {
             rows: (3, 12),
             on_submit: None,
             on_cancel: None,
+            on_empty: None,
             on_mode: None,
             on_kind: None,
             on_blocking: None,
@@ -1201,6 +1261,12 @@ impl<S: 'static> Composer<S> {
         self
     }
 
+    /// Send was pressed with nothing typed; the box takes focus either way.
+    pub fn on_empty(mut self, f: impl Fn(&mut S, &mut Tx) + 'static) -> Self {
+        self.on_empty = Some(Rc::new(f));
+        self
+    }
+
     pub fn on_mode(mut self, f: impl Fn(&mut S, ComposerMode, &mut Tx) + 'static) -> Self {
         self.on_mode = Some(Rc::new(f));
         self
@@ -1248,10 +1314,15 @@ impl<S: 'static> Composer<S> {
         let send = {
             let access = self.access.clone();
             let submit = self.on_submit.clone();
+            let empty = self.on_empty.clone();
             Rc::new(move |s: &mut S, tx: &mut Tx| {
                 let edit = access(s);
                 let body = edit.text.trim().to_owned();
                 if body.is_empty() {
+                    edit.focused = true;
+                    if let Some(f) = &empty {
+                        f(s, tx);
+                    }
                     return;
                 }
                 edit.clear();

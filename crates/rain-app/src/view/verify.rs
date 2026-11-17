@@ -1,6 +1,7 @@
 //! The Verify by hand checklist floating at the reader's bottom left while reading the diff:
 //! tick an item to strike it; the head folds it to a pill with the count.
 
+use rain_core::command::Command;
 use rune::{Cursor, El, col, el, row, text};
 use rune_kit::Kit;
 
@@ -29,7 +30,13 @@ pub(super) fn card(s: &App, k: &Kit) -> Option<El> {
         .gap(8.0)
         .items_center()
         .cursor(Cursor::Pointer)
-        .on_press(|s: &mut App| s.brief.verify_shut = !s.brief.verify_shut)
+        .focusable(true)
+        .help(format!(
+            "{}  {}",
+            if open { "Fold to a pill" } else { "Open the checklist" },
+            Command::ToggleVerify.chord().map(|c| c.display()).unwrap_or_default()
+        ))
+        .on_press(|s: &mut App| s.toggle_verify_card())
         .child(icons::draw(&icons::CHECK, 14.0, r.accent))
         .child(text("Verify by hand").font(TYPE.label).color(k.c.text_base).a11y_hidden())
         .child(
@@ -102,6 +109,7 @@ pub(super) fn card(s: &App, k: &Kit) -> Option<El> {
                     .gap(10.0)
                     .items_start()
                     .cursor(Cursor::Pointer)
+                    .focusable(true)
                     .on_press(move |s: &mut App| s.toggle_verified(&what))
                     .child(mark.mt(1.0).a11y_hidden())
                     .child(label),

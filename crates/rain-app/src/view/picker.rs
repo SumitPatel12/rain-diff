@@ -81,7 +81,7 @@ pub(super) fn picker(s: &App, k: &Kit) -> Option<El> {
                 .child(if viewed {
                     icons::draw(&icons::CHECK, 14.0, r.accent)
                 } else {
-                    el().size(9.0, 9.0).radius(4.5).border(1.5, k.c.text_faint).a11y_hidden()
+                    el().size(9.0, 9.0).radius(4.5).border(1.5, k.c.icon_faint).a11y_hidden()
                 });
         } else {
             let ink = if matches!(e.target, Target::Thread(_)) {

@@ -77,8 +77,8 @@ fn everforest_is_the_redesign_role_set() {
     );
     let c = &l.kit.c;
     assert_eq!(
-        [c.text_base, c.text_muted, c.text_faint, c.text_accent, c.bg_accent].map(hex),
-        ["#d3c6aa", "#9da9a0", "#737d78", "#7fbbb3", "#a7c080"]
+        [c.text_base, c.text_muted, c.text_faint, c.icon_faint, c.text_accent, c.bg_accent].map(hex),
+        ["#d3c6aa", "#9da9a0", "#9da9a0", "#737d78", "#7fbbb3", "#a7c080"]
     );
     assert_eq!(
         [c.success, c.warning, c.danger, c.info].map(|st| [st.fg, st.bg, st.border].map(hex)),
@@ -131,6 +131,55 @@ fn every_scheme_gives_every_role_and_reads() {
             assert!(text >= 4.5, "code on {name} lines: {text:.2} ({scheme:?})");
         }
     }
+}
+
+#[test]
+fn secondary_text_reads_on_every_ground_and_row_state() {
+    use rune::theme::{srgb_decode, srgb_encode};
+    // Windows blend in sRGB, as a browser does.
+    let on = |ink: Color, under: Color| {
+        let m = |b: f32, t: f32| srgb_decode(srgb_encode(b) + (srgb_encode(t) - srgb_encode(b)) * ink.a);
+        Color {
+            r: m(under.r, ink.r),
+            g: m(under.g, ink.g),
+            b: m(under.b, ink.b),
+            a: 1.0,
+        }
+    };
+    let mut low = Vec::new();
+    for scheme in Scheme::ALL {
+        let l = look(scheme);
+        let (c, s, r) = (&l.kit.c, l.s, l.r);
+        let grounds = [
+            ("ground", s.bar),
+            ("panel", s.panel),
+            ("reader", s.reader),
+            ("card head", s.card_head),
+            ("well", s.well),
+            ("raised", r.raised),
+            ("selected row", on(s.selected_row, s.panel)),
+            ("hovered row", on(c.hover, s.panel)),
+            ("hovered menu row", on(c.hover, r.raised)),
+            ("added line", r.add_bg),
+            ("removed line", r.del_bg),
+            ("note", r.note_bg),
+            ("cursor line", r.cursor_line),
+        ];
+        for (name, g) in grounds {
+            for (level, ink) in [("muted", c.text_muted), ("faint", c.text_faint)] {
+                let ratio = contrast(on(ink, g), g);
+                println!("{scheme:?} {level} on {name}: {ratio:.2}");
+                if ratio < 4.5 {
+                    low.push(format!("{scheme:?} {level} on the {name}: {ratio:.2}"));
+                }
+            }
+        }
+        let mark = contrast(on(c.icon_faint, s.panel), s.panel);
+        let muted = contrast(on(c.text_muted, s.panel), s.panel);
+        println!("{scheme:?} faint mark on panel: {mark:.2}, muted {muted:.2}");
+        assert!(mark < muted, "faint marks stay quieter than muted text ({scheme:?})");
+    }
+    assert!(low.is_empty(), "secondary text under 4.5:1: {low:#?}");
 }
 
 #[test]

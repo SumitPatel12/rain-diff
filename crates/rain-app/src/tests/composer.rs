@@ -486,3 +486,116 @@ fn composer_scenes_seed_what_they_show() {
         }
     }
 }
+
+fn act(rt: &mut Runtime<App>, id: &str, a: rain_comments::CardAction) {
+    let id = id.to_owned();
+    rt.update(move |s, tx| s.card_action(&id, a, tx));
+    settle(rt);
+}
+
+#[test]
+fn deleting_your_thread_offers_undo_that_puts_it_back_exactly() {
+    let mut rt = on_a_line();
+    rt.update(|s, _| seed_threads(s));
+    typed(&mut rt, "c");
+    typed(&mut rt, "Mine to delete");
+    press(&mut rt, Key::Enter, ctrl());
+    rt.update(|s, _| {
+        s.mutate(|ss| {
+            let t = ss.threads.pop().unwrap();
+            ss.threads.insert(1, t);
+        })
+    });
+    let before = rt.state.shared.lock().threads.clone();
+    let id = before[1].id.clone();
+    act(&mut rt, &id, rain_comments::CardAction::Delete);
+    assert!(
+        rain_comments::ops::thread(&rt.state.shared.lock(), &id).is_none(),
+        "deleted at once"
+    );
+    assert!(live(&rt, &format!("toast-deleted-{id}-action")), "the toast offers Undo");
+    typed(&mut rt, "u");
+    assert_eq!(rt.state.shared.lock().threads, before, "u restores it, in place");
+    assert_eq!(rt.state.focused_thread.as_deref(), Some(id.as_str()));
+    assert!(rt.state.conversation.toasts.is_empty());
+
+    act(&mut rt, &id, rain_comments::CardAction::Delete);
+    let later = std::time::Instant::now() + crate::app::conversation::UNDO_DELETE_FOR;
+    rt.state.expire_toasts(later);
+    assert!(rt.state.conversation.toasts.is_empty(), "Undo lasts six seconds");
+    typed(&mut rt, "u");
+    assert!(
+        rain_comments::ops::thread(&rt.state.shared.lock(), &id).is_none(),
+        "then u leaves it deleted"
+    );
+}
+
+#[test]
+fn a_reply_draft_survives_esc_and_another_card_and_returns_with_its_thread() {
+    let mut a = app(story(), true);
+    seed_threads(&mut a);
+    let (one, two) = (a.mirror.threads[0].id.clone(), a.mirror.threads[1].id.clone());
+    let mut rt = runtime(a);
+    act(&mut rt, &one, rain_comments::CardAction::OpenReply);
+    rt.update(|s, _| {
+        let _ = s.reply_edit.paste("half a thought");
+    });
+    act(&mut rt, &two, rain_comments::CardAction::OpenReply);
+    assert_eq!(rt.state.reply_to.as_deref(), Some(two.as_str()));
+    assert!(rt.state.reply_edit.text.is_empty(), "the other card's box starts empty");
+    act(&mut rt, &one, rain_comments::CardAction::OpenReply);
+    assert_eq!(rt.state.reply_edit.text, "half a thought", "Reply on another card kept it");
+
+    press(&mut rt, Key::Escape, Mods::default());
+    assert!(rt.state.reply_to.is_none(), "Esc closes the box");
+    act(&mut rt, &one, rain_comments::CardAction::AskReply);
+    assert_eq!(
+        rt.state.reply_edit.text, "@claude half a thought",
+        "Esc kept it; Ask leads with @claude"
+    );
+
+    act(&mut rt, &one, rain_comments::CardAction::CancelReply);
+    act(&mut rt, &one, rain_comments::CardAction::OpenReply);
+    assert_eq!(rt.state.reply_edit.text, "@claude half a thought");
+    act(&mut rt, &one, rain_comments::CardAction::Reply("@claude half a thought".into()));
+    assert!(rt.state.reply_drafts.is_empty(), "sending drops the draft");
+}
+
+#[test]
+fn send_on_an_empty_box_says_why_and_keeps_the_box() {
+    let mut rt = on_a_line();
+    typed(&mut rt, "c");
+    click(&mut rt, "send-btn");
+    assert!(rt.state.composer.is_some(), "nothing sent, the composer stays");
+    assert!(rt.state.composer_edit.focused, "the box takes focus");
+    assert_eq!(rt.state.status, "Nothing to send: type a comment first");
+    assert!(rt.state.shared.lock().threads.is_empty());
+}
+
+#[test]
+fn folded_thread_badges_reach_assistive_tech() {
+    fn walk<'a>(v: &'a serde_json::Value, out: &mut Vec<&'a serde_json::Value>) {
+        out.push(v);
+        for k in v["children"].as_array().into_iter().flatten() {
+            walk(k, out);
+        }
+    }
+    let mut a = app(story(), true);
+    seed_threads(&mut a);
+    let id = a.mirror.threads[0].id.clone();
+    let mut rt = runtime(a);
+    rt.update({
+        let id = id.clone();
+        move |s, tx| s.goto_thread(&id, tx)
+    });
+    act(&mut rt, &id, rain_comments::CardAction::Toggle);
+    assert!(rt.state.is_folded(&id));
+    let tree = rt.accessibility_json();
+    let mut all = Vec::new();
+    walk(&tree, &mut all);
+    let badge = all
+        .iter()
+        .find(|n| n["name"].as_str().is_some_and(|s| s.starts_with("Folded issue")))
+        .unwrap_or_else(|| panic!("no folded badge in the tree"));
+    assert_eq!(badge["role"], "button");
+}

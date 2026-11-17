@@ -71,6 +71,7 @@ pub(super) fn toasts(s: &App, k: &Kit) -> Option<El> {
     for t in &s.conversation.toasts {
         let (close, act, hover) = (t.key.clone(), t.key.clone(), t.key.clone());
         let allow = matches!(t.action, Some(crate::app::conversation::ToastAction::AllowAsk));
+        let undo = matches!(t.action, Some(crate::app::conversation::ToastAction::Restore(..)));
         let mut card = row()
             .key(format!("toast-{}", t.key))
             .role("status")
@@ -86,11 +87,11 @@ pub(super) fn toasts(s: &App, k: &Kit) -> Option<El> {
             .border(1.0, surf.card_border)
             .shadow(12.0, 30.0, r.shadow)
             .on_hover_change(move |s: &mut App, inside: bool, _: &mut Tx| s.hover_toast(&hover, inside))
-            .child(icons::draw(
-                if allow { &icons::PIN } else { &icons::SPARK },
-                16.0,
-                if allow { k.c.text_muted } else { r.note },
-            ))
+            .child(match (allow, undo) {
+                (true, _) => icons::draw(&icons::PIN, 16.0, k.c.text_muted),
+                (_, true) => icons::draw(&icons::CHAT, 16.0, k.c.text_muted),
+                _ => icons::draw(&icons::SPARK, 16.0, r.note),
+            })
             .child(
                 text(t.title.clone())
                     .font(TYPE.small)
@@ -104,6 +105,7 @@ pub(super) fn toasts(s: &App, k: &Kit) -> Option<El> {
                 crate::app::conversation::ToastAction::Thread(_) => "Show",
                 crate::app::conversation::ToastAction::Orphaned => "Show orphaned",
                 crate::app::conversation::ToastAction::AllowAsk => "Allow",
+                crate::app::conversation::ToastAction::Restore(..) => "Undo",
             };
             let b = if allow {
                 k.interactive_with(
@@ -122,7 +124,7 @@ pub(super) fn toasts(s: &App, k: &Kit) -> Option<El> {
                     k.c.contrast_pressed,
                 )
             } else {
-                outline(format!("toast-{}-action", t.key), label, None, 24.0, k)
+                outline(format!("toast-{}-action", t.key), label, undo.then_some("u"), 24.0, k)
             };
             card = card.child(b.on_press_tx(move |s: &mut App, tx: &mut Tx| s.toast_action(&act, tx)));
         }
@@ -401,7 +403,7 @@ fn orphan_actions(s: &App, t: &Thread, k: &Kit) -> El {
         ))
 }
 
-/// `WAITING ON YOU` as `Waiting on you`.
+/// `YOUR TURN` as `Your turn`.
 fn sentence(t: &str) -> String {
     let lower = t.to_lowercase();
     let mut c = lower.chars();
@@ -537,7 +539,7 @@ fn body(s: &App, k: &Kit) -> El {
         }
         list = list.child(section_header(s, section, threads.len(), k));
         if section == Section::Waiting && threads.is_empty() {
-            list = list.child(muted("Nothing waiting on you.", k).px(10.0));
+            list = list.child(muted("No thread is your turn.", k).px(10.0));
         }
         if section == Section::Settled && !s.conversation.settled_open {
             continue;

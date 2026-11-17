@@ -94,6 +94,7 @@ The window is the list on the left and the reader on the right.
 | `w` | next thread waiting on you |
 | `c`, `?`, `r`, `a x d` | comment, question, reply, Agree / Dismiss (reason) / Defer |
 | `C`, `m`, `b`, `T` | Conversation, Map, fold the Brief, Tour |
+| `}`/`{`, `H` | next/previous Map view; fold or open Verify by hand |
 | `s` / `Shift+S` / `l` / `Shift+Esc` | split ↔ unified / stream ↔ one at a time / list ↔ rail / zoom and restore |
 | `f` or `Ctrl+L` / `Ctrl+Shift+L` | filter files / clear the filter |
 | `Ctrl+P` / `Ctrl+K` | picker / palette |

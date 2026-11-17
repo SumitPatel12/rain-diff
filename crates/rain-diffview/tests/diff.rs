@@ -613,6 +613,13 @@ fn line_numbers_select_lines_and_the_plus_comments_on_them() {
             end: 5
         }
     );
+    let plus = find(&rt, "df0.c4/gutter/mk/hover-add/plus");
+    let line = find(&rt, "df0.c4/gutter/nn");
+    assert_eq!(
+        (plus.rect[2], plus.rect[3]),
+        (20.0, line.rect[3]),
+        "the + presses over the line's full height"
+    );
     press(&mut rt, "df0.c4/gutter/mk/hover-add/plus");
     assert_eq!(rt.state.comments, [range]);
     press(&mut rt, "df0.c9/gutter/mk/hover-add/plus");
