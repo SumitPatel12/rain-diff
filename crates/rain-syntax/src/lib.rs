@@ -176,21 +176,35 @@ pub fn syntaxes() -> &'static SyntaxSet {
     SET.get_or_init(two_face::syntax::extra_newlines)
 }
 
-/// Loads the syntax set and theme and runs the common grammars once, ahead of first use;
-/// returns how long that took. syntect compiles a grammar's regexes on first match, which
-/// costs tens of ms per language, so call this off the UI thread at startup.
+/// Loads the syntax set and theme and runs the common grammars [`Mode::Fast`] gives to syntect
+/// once, ahead of first use; returns how long that took. syntect compiles a grammar's regexes on
+/// first match, which costs tens of ms per language, so call this off the UI thread at startup.
 pub fn warm() -> Duration {
     static DONE: OnceLock<()> = OnceLock::new();
     let t = Instant::now();
     DONE.get_or_init(|| {
         theme();
         for (lang, code) in samples::ALL {
-            if let Engine::Syntect(s) = engine(Mode::Rich, Some(lang)) {
+            if let Engine::Syntect(s) = engine(Mode::Fast, Some(lang)) {
                 tokens(s, code);
             }
         }
     });
     t.elapsed()
+}
+
+/// Whether [`Mode::Fast`] colours `lang` without syntect, so it needs no [`warm`].
+pub fn fast_covers(lang: Option<&str>) -> bool {
+    lang.and_then(language_key).is_none_or(|key| fast_engine(&key).is_some())
+}
+
+/// The linear scanner for a language key, if one fits.
+fn fast_engine(key: &str) -> Option<Engine> {
+    match key.to_ascii_lowercase().as_str() {
+        "cs" => Some(Engine::CSharp),
+        "scss" => Some(Engine::Scss),
+        _ => rune_kit::syntax::known(key).then_some(Engine::Builtin),
+    }
 }
 
 const UNCOLOURED: SynColor = SynColor { r: 0, g: 0, b: 0, a: 0 };
@@ -295,11 +309,7 @@ pub fn engine(mode: Mode, lang: Option<&str>) -> Engine {
         return Engine::None;
     };
     let syntect = || find_syntax(&key).map(Engine::Syntect);
-    let fast = || match key.to_ascii_lowercase().as_str() {
-        "cs" => Some(Engine::CSharp),
-        "scss" => Some(Engine::Scss),
-        _ => rune_kit::syntax::known(&key).then_some(Engine::Builtin),
-    };
+    let fast = || fast_engine(&key);
     let found = match mode {
         Mode::Fast => fast().or_else(syntect),
         Mode::Rich => syntect().or_else(fast),

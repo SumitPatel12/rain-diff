@@ -103,6 +103,7 @@ pub fn build_launch(o: &OpenArgs) -> Launch {
         clean: o.clean,
         fixture: o.fixture.as_deref().map(absolute),
         context: Some(o.context),
+        read_only: false,
     }
 }
 
@@ -209,7 +210,8 @@ fn reuse(o: &OpenArgs, session: &str, lock: &rain_server::Lock) -> i32 {
                 .chain(["--port".to_owned(), port.clone()])
                 .collect(),
         );
-        if code != 0 {
+        // Warnings only warn, as they do when the window opens fresh.
+        if code != 0 && code != crate::client::EXIT_WARNINGS {
             return code;
         }
     }
@@ -233,6 +235,9 @@ fn open_window(o: &OpenArgs, rune: &RuneArgs) -> Result<(), String> {
     let file = SessionFile::path(&launch.session);
     // Headless runs (snaps, scripts) read the saved session but never write it or serve routes.
     let live = !rune.headless;
+    if live {
+        rain_app::warm_gpu();
+    }
     let saved = if launch.clean {
         Session::default()
     } else {
@@ -240,13 +245,15 @@ fn open_window(o: &OpenArgs, rune: &RuneArgs) -> Result<(), String> {
     };
     let loaded_version = saved.version;
     let session = prepare_session(o, &launch, saved)?;
-    if live
-        && (launch.clean || session.version != loaded_version)
-        && let Err(e) = SessionFile::save(&file, &session)
-    {
-        eprintln!("Rain: saving {} failed: {e}", file.display());
-    }
+    let changed = launch.clean || session.version != loaded_version;
     let shared = Arc::new(Shared::new(session));
+    // A snapshot, so it can't land after a save of a request that came in first.
+    let save = || {
+        let snap = SessionFile::snapshot(&file, &shared.lock());
+        if let Err(e) = snap.and_then(rain_comments::Snapshot::write) {
+            eprintln!("Rain: saving {} failed: {e}", file.display());
+        }
+    };
     let server = if live {
         let opts = ServerOptions {
             preferred: launch.port,
@@ -254,6 +261,14 @@ fn open_window(o: &OpenArgs, rune: &RuneArgs) -> Result<(), String> {
             repo_folder: self_folder(&launch),
         };
         let handle = start_with(shared.clone(), opts).map_err(|e| format!("cannot start the comment server: {e}"))?;
+        if handle.read_only {
+            eprintln!(
+                "Warning: another window holds session {}; changes here won't be saved",
+                launch.session
+            );
+        } else if changed {
+            save();
+        }
         crate::sessions::write_record(&rain_comments::store::data_dir(), &launch);
         println!("{}", background::handshake_line(handle.port, &handle.url, std::process::id()));
         let _ = std::io::stdout().flush();
@@ -271,8 +286,10 @@ fn open_window(o: &OpenArgs, rune: &RuneArgs) -> Result<(), String> {
     let launch = Launch {
         comments: Vec::new(),
         port: server.as_ref().map(|h| h.port).or(launch.port),
+        read_only: server.as_ref().is_some_and(|h| h.read_only),
         ..launch
     };
+    let read_only = launch.read_only;
     let close_requested = rain_app::run(launch, shared.clone());
     if let Some(handle) = server {
         exit_log::record(if close_requested {
@@ -281,13 +298,13 @@ fn open_window(o: &OpenArgs, rune: &RuneArgs) -> Result<(), String> {
             "window closed: the event loop ended without a close request"
         });
         let port = handle.port;
-        drop(handle);
+        // Saved before the lock goes, so a window opened next reads this save.
+        handle.stop_then(|| {
+            if !read_only {
+                save();
+            }
+        });
         exit_log::record(&format!("comment server on port {port} stopped"));
-        // A snapshot, so an autosave still writing an older one can't land after it.
-        let snap = SessionFile::snapshot(&file, &shared.lock());
-        if let Err(e) = snap.and_then(rain_comments::Snapshot::write) {
-            eprintln!("Rain: saving {} failed: {e}", file.display());
-        }
         exit_log::record("exit 0: normal exit");
     }
     Ok(())

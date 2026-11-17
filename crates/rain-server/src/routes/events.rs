@@ -138,6 +138,7 @@ fn typed(ctx: &Ctx, r: &Req, kinds: &str) -> Reply {
             "version": version,
             "seq": seq,
             "changed": !events.is_empty(),
+            "gap": ctx.shared.events_lost_since(since),
             "events": events,
             "presence": presence::view(ctx),
         }),

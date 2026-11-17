@@ -32,10 +32,24 @@ pub fn diff_content_hash(f: &FileDiff) -> String {
     h.finalize().to_hex().to_string()
 }
 
+/// The first 7 characters of a commit id; char-safe because agents can send any text as a sha.
+pub fn short_sha(sha: &str) -> &str {
+    sha.char_indices().nth(7).map_or(sha, |(i, _)| &sha[..i])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::diff::{FileDiffBuilder, FileStatus};
+
+    #[test]
+    fn short_sha_cuts_on_char_boundaries() {
+        assert_eq!(short_sha("0123456789abcdef"), "0123456");
+        assert_eq!(short_sha("abc"), "abc");
+        assert_eq!(short_sha(""), "");
+        assert_eq!(short_sha("ab\u{3000}cdefgh"), "ab\u{3000}cdef");
+        assert_eq!(short_sha("ééééééééé"), "ééééééé");
+    }
 
     fn file(kind: LineKind, text: &str) -> FileDiff {
         let mut b = FileDiffBuilder::new(0, "a", FileStatus::Modified);

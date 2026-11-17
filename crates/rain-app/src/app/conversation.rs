@@ -122,8 +122,8 @@ pub enum ToastAction {
     Orphaned,
     /// Lets the local command answer questions (asked once).
     AllowAsk,
-    /// Undo: puts a deleted thread back at its index.
-    Restore(Box<Thread>, usize),
+    /// Undo: puts a deleted thread back at its index; the ISO time it was deleted.
+    Restore(Box<Thread>, usize, String),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -415,7 +415,7 @@ impl App {
             Some(ToastAction::AllowAsk) if !self.settings.ask.allowed => {
                 self.apply_ask_item(super::ask::AskItem::Allow);
             }
-            Some(ToastAction::Restore(t, at)) => self.restore_thread(*t, at),
+            Some(ToastAction::Restore(t, at, _)) => self.restore_thread(*t, at),
             Some(ToastAction::AllowAsk) | None => {}
         }
     }
@@ -432,7 +432,13 @@ impl App {
             hovered: false,
         });
         if toasts.len() > MAX_TOASTS {
-            let oldest = toasts.iter().position(|t| !t.sticky()).unwrap_or(0);
+            // A live Undo goes last: dropping it would lose the deleted thread for good.
+            let undo = |t: &AgentToast| matches!(t.action, Some(ToastAction::Restore(..)));
+            let oldest = toasts
+                .iter()
+                .position(|t| !t.sticky() && !undo(t))
+                .or_else(|| toasts.iter().position(|t| !t.sticky()))
+                .unwrap_or(0);
             toasts.remove(oldest);
         }
     }
@@ -477,8 +483,12 @@ impl App {
         let mark = self.keys.as_ptr() as usize;
         if mark != self.conversation.load_mark {
             self.conversation.load_mark = mark;
-            changed |= !self.conversation.toasts.is_empty();
-            self.conversation.toasts.clear();
+            let before = self.conversation.toasts.len();
+            // A thread's id outlives the load, so its Undo stays.
+            self.conversation
+                .toasts
+                .retain(|t| matches!(t.action, Some(ToastAction::Restore(..))));
+            changed |= self.conversation.toasts.len() != before;
             self.conversation.seen_version = u64::MAX;
         }
         if self.conversation.seen_version != self.seen_version {

@@ -4,7 +4,9 @@
 
 use std::rc::Rc;
 
-use rain_core::{Anchor, AnchorState, AnswerStatus, CodeSnapshot, DismissReason, Disposition, Side, Thread, ThreadKind, ThreadState};
+use rain_core::{
+    Anchor, AnchorState, AnswerStatus, CodeSnapshot, DismissReason, Disposition, Side, Thread, ThreadKind, ThreadState, short_sha,
+};
 use rune::{Color, El, Key, KeyEvent, TextEdit, TextStyle, Tx, col, row, text};
 use rune_kit::{Kit, Markdown, TextArea};
 
@@ -283,7 +285,7 @@ pub fn state_text(t: &Thread) -> Option<String> {
     match t.state {
         ThreadState::Open => None,
         ThreadState::Addressed => Some(match t.state_sha.as_deref() {
-            Some(sha) => format!("addressed in {}", &sha[..sha.len().min(7)]),
+            Some(sha) => format!("addressed in {}", short_sha(sha)),
             None => "addressed".to_owned(),
         }),
         ThreadState::Resolved => Some("resolved".to_owned()),
@@ -502,15 +504,16 @@ impl<'t, S: 'static> ThreadCard<'t, S> {
         }
 
         if self.collapsed {
-            let mut head = row()
+            // The press covers who and what; chips and dispositions are its siblings, not inside it.
+            let mut toggle = row()
                 .key("head")
-                .w_full()
                 .h(28.0)
-                .px(8.0)
                 .gap(8.0)
                 .center_y()
+                .grow(1.0)
+                .shrink()
                 .role("button")
-                .label("Expand thread")
+                .label(format!("Expand {tag} by {author}: {summary}"))
                 .expanded(false)
                 .child(text(label::kind_glyph(kind)).font(k.ty.ui_medium).color(ink).a11y_hidden())
                 .child(text(author.clone()).key("author").font(STRONG).color(k.c.text_base))
@@ -525,10 +528,10 @@ impl<'t, S: 'static> ThreadCard<'t, S> {
                         .shrink(),
                 );
             if let Some(l) = &self.location {
-                head = head.help(l.clone());
+                toggle = toggle.help(l.clone());
             }
             if t.messages.len() > 1 {
-                head = head.child(
+                toggle = toggle.child(
                     text(format!("{}↩", t.messages.len() - 1))
                         .key("replies")
                         .font(k.ty.small)
@@ -536,11 +539,19 @@ impl<'t, S: 'static> ThreadCard<'t, S> {
                         .label(format!("{} replies", t.messages.len() - 1)),
                 );
             }
+            let mut head = row()
+                .key("head-row")
+                .w_full()
+                .h(28.0)
+                .px(8.0)
+                .gap(8.0)
+                .center_y()
+                .child(k.interactive(toggle.radius(8.0)).on_press_tx(fire(CardAction::Toggle)));
             head = self.chips(head, k, &fire);
             if (self.focused || self.hovered) && (confirmable(t) || takes_dispositions(t)) {
-                head = head.child(self.dispositions(k, &fire));
+                head = head.child(self.dispositions(k, &fire, !t.is_open()));
             }
-            card = card.child(k.interactive(head.radius(8.0)).on_press_tx(fire(CardAction::Toggle)));
+            card = card.child(head);
             if self.dismissing {
                 card = card.child(dismiss_reasons(k, &fire));
             }
@@ -824,7 +835,7 @@ impl<'t, S: 'static> ThreadCard<'t, S> {
         }
         actions = actions.child(rune::el().grow(1.0).a11y_hidden());
         if confirmable(t) || takes_dispositions(t) {
-            actions = actions.child(self.dispositions(k, &fire));
+            actions = actions.child(self.dispositions(k, &fire, false));
         }
         card.child(actions)
     }
@@ -884,22 +895,25 @@ impl<'t, S: 'static> ThreadCard<'t, S> {
         r
     }
 
-    /// The quiet responses: Confirm/Reopen for a thread that reads as addressed, else
-    /// Agree · Dismiss · Defer (Ask sits with Reply).
-    fn dispositions<F, H>(&self, k: &Kit, fire: &F) -> El
+    /// The quiet responses: Confirm (and Reopen when the row has none and the thread is closed)
+    /// for a thread that reads as addressed, else Agree · Dismiss · Defer (Ask sits with Reply).
+    fn dispositions<F, H>(&self, k: &Kit, fire: &F, with_reopen: bool) -> El
     where
         F: Fn(CardAction) -> H,
         H: Fn(&mut S, &mut Tx) + 'static,
     {
         let t = self.thread;
         if confirmable(t) {
-            return row()
+            let mut r = row()
                 .key("dispositions")
                 .role("group")
                 .label("Addressed?")
                 .gap(4.0)
-                .child(small_button(k, "confirm-btn", "Confirm addressed", Some("a"), true).on_press_tx(fire(CardAction::Confirm)))
-                .child(small_button(k, "reopen-btn", "Reopen", None, false).on_press_tx(fire(CardAction::Reopen)));
+                .child(small_button(k, "confirm-btn", "Confirm addressed", Some("a"), true).on_press_tx(fire(CardAction::Confirm)));
+            if with_reopen {
+                r = r.child(small_button(k, "reopen-btn", "Reopen", None, false).on_press_tx(fire(CardAction::Reopen)));
+            }
+            return r;
         }
         let current = t.disposition;
         row().key("dispositions").role("group").label("Disposition").gap(2.0).children(
@@ -1050,7 +1064,7 @@ where
     };
     let mut head = String::from("last seen");
     if let Some(sha) = sha {
-        head.push_str(&format!(" at {}", &sha[..sha.len().min(7)]));
+        head.push_str(&format!(" at {}", short_sha(sha)));
     }
     if let Some(s) = snap {
         let path = s.path.clone().unwrap_or_else(|| t.file_path.clone());

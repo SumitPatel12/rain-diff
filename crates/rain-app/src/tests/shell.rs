@@ -310,6 +310,17 @@ fn a_pushed_overview_refreshes_the_chapters() {
     assert_eq!(titles(&rt.state.chapters), titles(&want));
 }
 #[test]
+fn a_session_change_keeps_the_overview_it_did_not_touch() {
+    let mut a = app(story(), true);
+    let before = a.mirror.overview.clone();
+    assert!(before.is_some());
+    a.mutate(|s| rain_comments::ops::set_viewed(s, "", "x.cs", "h"));
+    assert_eq!(a.mirror.overview, before);
+    assert_eq!(a.mirror.overview, a.shared.lock().overview, "the session keeps its own");
+    assert!(a.mirror.viewed.iter().any(|v| v.file_path == "x.cs"), "the rest is fresh");
+}
+
+#[test]
 fn palette_runs_a_command_by_name() {
     let mut rt = sized_runtime(app(story(), true), (1920.0, 1080.0));
     assert_eq!(rt.state.settings.layout, ViewLayout::Split, "split is the default");
@@ -420,6 +431,57 @@ fn session_survives_a_restart() {
     assert!(b.is_viewed(0));
     assert_eq!(b.mirror.threads.len(), 2);
     assert_eq!(b.mirror.threads[0].messages.len(), 3);
+}
+
+#[test]
+fn a_read_only_window_never_saves_and_says_so() {
+    let dir = temp_dir();
+    let launch = Launch {
+        session: "held".into(),
+        fixture: Some(story()),
+        read_only: true,
+        ..Launch::default()
+    };
+    let mut a = App::new(launch, Arc::new(Shared::default()), Some(dir.clone()), None);
+    a.load_now();
+    assert!(a.autosave.is_none());
+    assert!(a.status.contains("won't be saved"), "{}", a.status);
+    a.set_viewed(0, true);
+    seed_threads(&mut a);
+    drop(a);
+    assert!(!rain_comments::SessionFile::path_in(&dir, "held").exists());
+}
+
+#[test]
+fn a_session_file_that_cannot_be_read_is_never_autosaved_over() {
+    let dir = temp_dir();
+    let file = rain_comments::SessionFile::path_in(&dir, "locked");
+    std::fs::create_dir_all(&file).unwrap();
+    let launch = Launch {
+        session: "locked".into(),
+        fixture: Some(story()),
+        ..Launch::default()
+    };
+    let mut a = App::new(launch, Arc::new(Shared::default()), Some(dir), None);
+    a.load_now();
+    assert!(a.autosave.is_none(), "nothing may write over what could not be read");
+    assert!(a.status.contains("not saved"), "{}", a.status);
+    assert!(
+        file.is_dir() && !file.with_extension("json.corrupt").exists(),
+        "an IO error is not corruption"
+    );
+}
+
+#[test]
+fn a_failed_reload_keeps_the_reader_and_says_why() {
+    let mut a = app(story(), true);
+    let files = a.keys.len();
+    a.launch.fixture = Some(temp_dir().join("gone.patch"));
+    a.reload();
+    assert_eq!(a.phase, Phase::Ready, "the working reader stays");
+    assert_eq!(a.keys.len(), files);
+    assert!(a.status.starts_with("Reload failed"), "{}", a.status);
+    assert!(a.reloader.toast.as_ref().is_some_and(|(m, _)| m.starts_with("Reload failed")));
 }
 
 #[test]

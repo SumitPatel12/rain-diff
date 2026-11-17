@@ -5,7 +5,7 @@
 
 use rain_comments::{Composer, ThreadCard};
 use rain_core::brief::{BriefDoc, Cite};
-use rain_core::{Side, Thread};
+use rain_core::{Side, Thread, short_sha};
 use rune::{El, ScrollSpec, TextStyle, Tx, col, el, row, text};
 use rune_kit::{Button, ButtonVariant, ControlSize, Kit, Markdown, SegmentedControl};
 
@@ -187,16 +187,12 @@ fn stale_line(s: &App, d: &BriefDoc) -> Option<String> {
     }
     let parts: Vec<String> = st
         .iter()
-        .map(|x| format!("{} {} → {}", x.repo, short(&x.written), short(&x.loaded)))
+        .map(|x| format!("{} {} → {}", x.repo, short_sha(&x.written), short_sha(&x.loaded)))
         .collect();
     Some(format!(
         "The brief was written against other commits ({}); its cites may be off",
         parts.join(", ")
     ))
-}
-
-fn short(sha: &str) -> &str {
-    &sha[..sha.len().min(7)]
 }
 
 /// A card on the well: `Title · subtitle`, then its body.

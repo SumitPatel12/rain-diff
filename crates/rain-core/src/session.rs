@@ -466,6 +466,11 @@ impl Shared {
         lock(&self.events).seq
     }
 
+    /// Some event after `since` has dropped off the ring, so a reader resuming there missed it.
+    pub fn events_lost_since(&self, since: u64) -> bool {
+        lock(&self.events).buf.front().is_some_and(|e| e.seq > since + 1)
+    }
+
     /// Events after `since` whose kind is in `kinds` (every kind when empty), oldest first.
     pub fn events_since(&self, since: u64, kinds: &[EventKind]) -> Vec<Event> {
         lock(&self.events)
@@ -761,6 +766,8 @@ mod tests {
         assert_eq!(all.len(), EVENT_RING_CAP);
         assert_eq!(all[0].seq, 4, "the first three dropped off");
         assert_eq!(shared.event_seq(), 3 + EVENT_RING_CAP as u64);
+        assert!(shared.events_lost_since(0) && shared.events_lost_since(2));
+        assert!(!shared.events_lost_since(3) && !shared.events_lost_since(600));
         let v = serde_json::to_value(&all[0]).unwrap();
         assert_eq!(v, serde_json::json!({"seq":4,"at":"","kind":"viewed"}));
     }

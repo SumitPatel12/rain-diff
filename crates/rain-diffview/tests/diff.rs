@@ -569,6 +569,13 @@ fn dragging_over_code_reports_the_span_by_line_and_column() {
     assert_eq!(span.text, "\tlet a = 1;\n\tlet b = 2;");
 }
 
+fn hover(rt: &mut Runtime<App>, end: &str) {
+    let e = find(rt, end);
+    rt.pointer_move(e.rect[0] + e.rect[2] / 2.0, e.rect[1] + e.rect[3] / 2.0);
+    tick(rt);
+    tick(rt);
+}
+
 fn press(rt: &mut Runtime<App>, end: &str) {
     let e = find(rt, end);
     let (x, y) = (e.rect[0] + e.rect[2] / 2.0, e.rect[1] + e.rect[3] / 2.0);
@@ -577,6 +584,36 @@ fn press(rt: &mut Runtime<App>, end: &str) {
     rt.pointer_down(x, y);
     rt.pointer_up(x, y);
     tick(rt);
+}
+
+#[test]
+fn only_the_hovered_line_mounts_the_plus_and_ask() {
+    for mode in [DiffMode::Unified, DiffMode::Split] {
+        let (old, new) = numbered(20, 5);
+        let mut d = DiffState::new(vec![from_texts("a.rs", &old, &new)]);
+        d.set_mode(mode);
+        let mut rt = runtime(d, (900.0, 900.0));
+        let adds = |rt: &Runtime<App>| -> Vec<String> {
+            rt.elements()
+                .into_iter()
+                .filter(|e| e.path.ends_with("/hover-add/plus") && !e.exiting)
+                .map(|e| e.path)
+                .collect()
+        };
+        let code = |n: u32| match mode {
+            DiffMode::Split => format!("df0.c{n}/new/code"),
+            _ => format!("df0.c{n}/code"),
+        };
+        assert!(adds(&rt).is_empty(), "{mode:?}: no line is hovered: {:?}", adds(&rt));
+        hover(&mut rt, &code(4));
+        let on = adds(&rt);
+        assert_eq!(on.len(), 1, "{mode:?}: {on:?}");
+        assert!(on[0].contains("/df0.c4/"), "{mode:?}: {on:?}");
+        hover(&mut rt, &code(9));
+        let on = adds(&rt);
+        assert_eq!(on.len(), 1, "{mode:?}: {on:?}");
+        assert!(on[0].contains("/df0.c9/"), "{mode:?}: {on:?}");
+    }
 }
 
 #[test]
@@ -613,6 +650,7 @@ fn line_numbers_select_lines_and_the_plus_comments_on_them() {
             end: 5
         }
     );
+    hover(&mut rt, "df0.c4/code");
     let plus = find(&rt, "df0.c4/gutter/mk/hover-add/plus");
     let line = find(&rt, "df0.c4/gutter/nn");
     assert_eq!(
@@ -622,6 +660,7 @@ fn line_numbers_select_lines_and_the_plus_comments_on_them() {
     );
     press(&mut rt, "df0.c4/gutter/mk/hover-add/plus");
     assert_eq!(rt.state.comments, [range]);
+    hover(&mut rt, "df0.c9/code");
     press(&mut rt, "df0.c9/gutter/mk/hover-add/plus");
     assert_eq!(rt.state.comments[1], LineRange::line(0, LineRef::new(Side::New, 9)));
     rt.key(KeyEvent {
@@ -1280,12 +1319,16 @@ fn the_spotlight_dims_rows_outside_it_and_outlines_the_range() {
     let (a, b) = rt.state.diff.spotlight_rows().unwrap();
     assert_eq!(rt.state.diff.row_key(a as usize).as_deref(), Some("df0.n20"));
     assert_eq!(rt.state.diff.row_key(b as usize).as_deref(), Some("df0.c22"));
+    // Dimmed rows sit under a scrim rather than fading as layers.
     let opacity = |k: &str| find(&rt, k).opacity;
     for k in ["df0.n20", "df0.c21", "df0.c22", "df0"] {
         assert!((opacity(k) - 1.0).abs() < 0.01, "{k} is lit: {}", opacity(k));
+        assert!(!has(&rt, &format!("{k}/dim")), "{k} is lit");
     }
     for k in ["df0.c5", "df0.o20", "df0.c23", "df0.c40"] {
-        assert!((opacity(k) - 0.45).abs() < 0.01, "{k} is dimmed: {}", opacity(k));
+        assert!((opacity(k) - 1.0).abs() < 0.01, "{k} takes no layer: {}", opacity(k));
+        let (row, scrim) = (find(&rt, k), find(&rt, &format!("{k}/dim")));
+        assert_eq!(scrim.rect, row.rect, "{k} is dimmed over its whole row");
     }
     let spot = find(&rt, "spot");
     let (first, last) = (find(&rt, "df0.n20"), find(&rt, "df0.c22"));
@@ -1306,7 +1349,7 @@ fn the_spotlight_dims_rows_outside_it_and_outlines_the_range() {
     rt.update(|s, _| s.diff.set_spotlight(None));
     settle(&mut rt);
     assert!(!has(&rt, "spot"));
-    assert!((find(&rt, "df0.c5").opacity - 1.0).abs() < 0.01);
+    assert!(!has(&rt, "df0.c5/dim"));
 }
 
 #[test]

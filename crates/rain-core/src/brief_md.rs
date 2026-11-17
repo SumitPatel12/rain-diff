@@ -232,7 +232,8 @@ fn item_content(raw: &str) -> String {
     let mut out = body.trim_start().to_owned();
     for l in raw.lines().skip(1) {
         out.push('\n');
-        let indent = l.len() - l.trim_start().len();
+        // ASCII only, so the cut can't land inside a wide whitespace character such as U+3000.
+        let indent = l.bytes().take_while(|b| matches!(b, b' ' | b'\t')).count();
         out.push_str(&l[indent.min(col)..]);
     }
     out.trim().to_owned()
@@ -506,6 +507,15 @@ app/src/assets/i18n/*.json
             repo: repo.into(),
             sha: sha.into(),
         }
+    }
+
+    #[test]
+    fn wide_whitespace_indents_never_split_a_character() {
+        assert_eq!(item_content("- a\n \u{3000}b"), "a\n\u{3000}b");
+        assert_eq!(item_content("- a\n\u{3000}\u{3000}b"), "a\n\u{3000}\u{3000}b");
+        assert_eq!(item_content("1. a\n   b"), "a\nb");
+        let md = EXAMPLE.replace("  Enforced:", " \u{3000}Enforced:");
+        assert!(BriefDoc::from_markdown(&md, &[]).is_ok());
     }
 
     fn cite(path: &str, lines: Option<(u32, u32)>) -> Cite {

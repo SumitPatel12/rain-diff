@@ -132,6 +132,17 @@ impl App {
         if !self.folded.remove(id) {
             self.folded.insert(id.to_owned());
         }
+        self.drop_hidden_reply();
+    }
+
+    /// A reply box whose card is gone, folded or collapsed lets go of the keyboard, as Esc does.
+    pub(crate) fn drop_hidden_reply(&mut self) {
+        let Some(id) = &self.reply_to else { return };
+        let shown = ops::thread(&self.mirror, id)
+            .is_some_and(|t| !self.folded.contains(id) && (self.folds_to_gutter(t) || self.expanded.contains(id)));
+        if !shown {
+            self.keep_reply_draft();
+        }
     }
 
     pub fn is_folded(&self, id: &str) -> bool {
@@ -379,30 +390,42 @@ impl App {
         self.status = format!("Nothing to send: type {what} first");
     }
 
-    /// Undo on a deleted thread: puts it back where it was, focused.
+    /// Undo on a deleted thread: puts it back where it was, focused. A question whose answer
+    /// the delete cut off is asked again.
     pub fn restore_thread(&mut self, t: Thread, at: usize) {
         let id = t.id.clone();
+        let asked = t
+            .answer
+            .as_ref()
+            .is_some_and(|a| a.status.pending())
+            .then(|| super::ask::last_question(&t));
         if self.mutate(|s| ops::restore_thread(s, t, at)) {
+            self.push_ui_event(EventKind::State, &id, json!({"state": "restored"}));
+            if let Some(q) = asked {
+                self.ask_agent(&id, &q);
+            }
             self.focused_thread = Some(id);
             self.rebuild_annotations();
             self.status = "Thread restored".into();
         }
     }
 
-    /// `u` while a deleted thread's Undo shows: restores the latest; whether there was one.
-    pub fn undo_delete(&mut self, tx: &mut Tx) -> bool {
-        let Some(key) = self
+    /// `u`: undoes the latest of a delete whose Undo still shows and the last accept.
+    pub fn undo_latest(&mut self, tx: &mut Tx) {
+        let delete = self
             .conversation
             .toasts
             .iter()
-            .rev()
-            .find(|t| matches!(t.action, Some(ToastAction::Restore(..))))
-            .map(|t| t.key.clone())
-        else {
-            return false;
-        };
-        self.toast_action(&key, tx);
-        true
+            .filter_map(|t| match &t.action {
+                Some(ToastAction::Restore(_, _, when)) => Some((when.clone(), t.key.clone())),
+                _ => None,
+            })
+            .max();
+        let accept = self.mirror.accepted.iter().rev().find(|a| !a.undone).map(|a| a.at.clone());
+        match delete {
+            Some((when, key)) if accept.is_none_or(|a| a <= when) => self.toast_action(&key, tx),
+            _ => self.undo_accept(tx),
+        }
     }
 
     pub fn card_action(&mut self, id: &str, action: CardAction, tx: &mut Tx) {
@@ -427,6 +450,7 @@ impl App {
                 if !self.expanded.remove(id) {
                     self.expanded.insert(id.to_owned());
                 }
+                self.drop_hidden_reply();
             }
             CardAction::AskReply => {
                 self.folded.remove(id);
@@ -441,16 +465,21 @@ impl App {
             CardAction::CancelReply => self.keep_reply_draft(),
             CardAction::EmptyReply => self.status = "Nothing to send: type a reply first".into(),
             CardAction::Reply(body) => {
-                self.mutate(|s| ops::reply(s, id, &body, None));
+                let saved = self.mutate(|s| ops::reply(s, id, &body, None)).is_some();
                 self.reply_to = None;
-                self.reply_drafts.remove(id);
                 self.reply_edit = TextEdit::default();
-                self.status = "Reply saved".into();
-                let question = ops::thread(&self.mirror, id).is_some_and(|t| t.kind() == ThreadKind::Question);
-                if question || mentions_claude(&body) {
-                    self.ask_agent(id, &body);
+                if !saved {
+                    self.reply_drafts.insert(id.to_owned(), body);
+                    self.status = "Reply not sent: the thread is gone".into();
                 } else {
-                    self.push_ui_event(EventKind::Reply, id, json!({}));
+                    self.reply_drafts.remove(id);
+                    self.status = "Reply saved".into();
+                    let question = ops::thread(&self.mirror, id).is_some_and(|t| t.kind() == ThreadKind::Question);
+                    if question || mentions_claude(&body) {
+                        self.ask_agent(id, &body);
+                    } else {
+                        self.push_ui_event(EventKind::Reply, id, json!({}));
+                    }
                 }
             }
             CardAction::Disposition(Disposition::Dismiss) => {
@@ -546,10 +575,11 @@ impl App {
                     self.focused_thread = None;
                     self.status = "Thread deleted".into();
                     if let Some((t, at)) = gone {
+                        self.push_ui_event(EventKind::State, id, json!({"state": "deleted"}));
                         self.push_toast(
                             format!("deleted-{id}"),
                             "Thread deleted".into(),
-                            Some(ToastAction::Restore(Box::new(t), at)),
+                            Some(ToastAction::Restore(Box::new(t), at, rain_comments::clock::now_iso())),
                         );
                         tx.wake_after(UNDO_DELETE_FOR + std::time::Duration::from_millis(20));
                     }

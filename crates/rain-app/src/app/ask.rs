@@ -48,6 +48,8 @@ struct Pending {
     thread: String,
     question: String,
     phase: Phase,
+    /// A follow-up asked while this one ran: asked once it ends.
+    again: Option<String>,
 }
 
 /// The launcher's own presence while it runs, and what was there before it.
@@ -143,7 +145,7 @@ fn ordinal(n: usize) -> String {
 }
 
 /// The question a thread asks: its last message from the reviewer.
-fn last_question(t: &Thread) -> String {
+pub(crate) fn last_question(t: &Thread) -> String {
     t.messages
         .iter()
         .rev()
@@ -196,13 +198,22 @@ impl App {
             changed |= self.fail_orphaned_runs();
             changed |= self.resume_waiting(now);
         }
-        for e in self.shared.events_since(self.ask.seq, &[EventKind::Ask]) {
-            self.ask.seq = e.seq;
+        // Head first, then the events up to it, then the session: imports change the session
+        // before they push their events, so every thread an event names is in the mirror.
+        let head = self.shared.event_seq();
+        let asks: Vec<_> = self
+            .shared
+            .events_since(self.ask.seq, &[EventKind::Ask])
+            .into_iter()
+            .filter(|e| e.seq <= head)
+            .collect();
+        self.ask.seq = self.ask.seq.max(head);
+        changed |= self.sync_session();
+        for e in asks {
             let Some(id) = e.thread.clone() else { continue };
             let question = e.data.get("question").and_then(|q| q.as_str()).unwrap_or_default().to_owned();
             changed |= self.take_ask(&id, question, now);
         }
-        self.ask.seq = self.ask.seq.max(self.shared.event_seq());
         let mut i = 0;
         while i < self.ask.pending.len() {
             match self.step(i, now) {
@@ -302,9 +313,10 @@ impl App {
         let Some(t) = ops::thread(&self.mirror, id).cloned() else {
             return false;
         };
-        if let Some(p) = self.ask.pending.iter().find(|p| p.thread == id) {
+        if let Some(p) = self.ask.pending.iter_mut().find(|p| p.thread == id) {
             if matches!(p.phase, Phase::Running { .. }) {
-                return false;
+                p.again = Some(question);
+                return true;
             }
             self.ask.pending.retain(|p| p.thread != id);
         }
@@ -332,6 +344,7 @@ impl App {
             thread: id.to_owned(),
             question,
             phase,
+            again: None,
         });
         true
     }
@@ -368,7 +381,12 @@ impl App {
             };
             let Some(out) = job.try_wait() else { return Some(false) };
             self.finish(&id, out);
-            return None;
+            let q = self.ask.pending[i].again.take()?;
+            let t = ops::thread(&self.mirror, &id)?.clone();
+            self.ask.pending[i].question = if q.trim().is_empty() { last_question(&t) } else { q };
+            self.ask.pending[i].phase = Phase::Waiting;
+            self.set_answer(&id, |a| *a = Answer::default());
+            return Some(true);
         }
         if status == Some(AnswerStatus::Answered) {
             return None;

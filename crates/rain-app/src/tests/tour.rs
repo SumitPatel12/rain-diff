@@ -183,6 +183,20 @@ fn space_three_times_from_step_one_lands_on_step_four_spotlit_in_the_top_third()
 }
 
 #[test]
+fn tour_progress_is_saved_whole_and_a_failed_save_says_so() {
+    let mut rt = runtime(with_brief(app(story(), true)));
+    begin(&mut rt);
+    press(&mut rt, key("n"), Mods::default());
+    let path = rt.state.session_path.clone().unwrap().with_extension("tour.json");
+    let saved: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(saved["step"], 1);
+    std::fs::remove_file(&path).unwrap();
+    std::fs::create_dir_all(&path).unwrap();
+    press(&mut rt, key("n"), Mods::default());
+    assert!(rt.state.status.starts_with("Tour progress not saved"), "{}", rt.state.status);
+}
+
+#[test]
 fn n_and_p_move_without_marking() {
     let mut rt = runtime(with_brief(app(story(), true)));
     begin(&mut rt);

@@ -606,6 +606,15 @@ fn spec() -> AppSpec<App> {
     }
 }
 
+/// Starts making the GPU device and renderer on a thread, for the window [`run`] opens to take
+/// instead of making them on the UI thread. Call it first, before the session loads.
+pub fn warm_gpu() {
+    #[cfg(target_os = "macos")]
+    rune::prewarm_gpu();
+    #[cfg(not(target_os = "macos"))]
+    rune::warm_gpu(Default::default());
+}
+
 /// Opens the window and runs until it closes. Rune's own flags (`--snap`, `--scene`,
 /// `--scale`, `--tree`, ...) come from the process arguments; when `launch` is the default,
 /// Rain's flags are read from the arguments Rune left (see [`launch_from_args`]). True when the

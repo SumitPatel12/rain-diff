@@ -354,6 +354,41 @@ fn live(rt: &Runtime<App>, key: &str) -> bool {
     rt.elements().iter().any(|e| !e.exiting && e.key.as_deref() == Some(key))
 }
 
+#[test]
+fn the_collapsed_head_button_holds_no_other_controls() {
+    let rt = runtime(1);
+    let els: Vec<_> = rt.elements().into_iter().filter(|e| !e.exiting).collect();
+    let head = els.iter().find(|e| e.key.as_deref() == Some("head")).expect("the head");
+    assert_eq!(head.role, "button");
+    let label = head.label.clone().unwrap_or_default();
+    assert!(label.starts_with("Expand") && label.contains("by claude: broken."), "{label}");
+    let inside = format!("{}/", head.path);
+    let nested: Vec<_> = els
+        .iter()
+        .filter(|e| e.path.starts_with(&inside) && e.role == "button")
+        .filter_map(|e| e.key.clone())
+        .collect();
+    assert!(nested.is_empty(), "buttons inside the head button: {nested:?}");
+    assert!(live(&rt, "disp-agree"), "the dispositions still sit on the head row");
+}
+
+#[test]
+fn an_addressed_card_offers_one_reopen() {
+    let mut rt = runtime(1);
+    rt.state.s.threads[0].state = ThreadState::Addressed;
+    for collapsed in [false, true] {
+        rt.state.collapsed = collapsed;
+        rt.invalidate();
+        settle(&mut rt);
+        let n = rt
+            .elements()
+            .iter()
+            .filter(|e| !e.exiting && e.key.as_deref() == Some("reopen-btn"))
+            .count();
+        assert_eq!(n, 1, "collapsed {collapsed}");
+    }
+}
+
 fn text_of(rt: &Runtime<App>, key: &str) -> Option<String> {
     let els = rt.elements();
     let at = els.iter().position(|e| !e.exiting && e.key.as_deref() == Some(key))?;
@@ -445,6 +480,16 @@ fn addressed_threads_offer_confirm_and_a_confirms() {
     assert_eq!(t.disposition, Some(Disposition::Agree), "Confirm agrees");
     assert_eq!(t.state, ThreadState::Addressed);
     assert!(!rain_comments::ui::confirmable(t));
+}
+
+#[test]
+fn a_non_ascii_addressed_sha_renders_without_panicking() {
+    let mut rt = runtime(1);
+    let id = rt.state.s.threads[0].id.clone();
+    ops::set_state(&mut rt.state.s, &id, ThreadState::Addressed, Some("abcdef\u{3000}12"), None);
+    rt.invalidate();
+    settle(&mut rt);
+    assert_eq!(text_of(&rt, "state").as_deref(), Some("addressed in abcdef\u{3000}"));
 }
 
 #[test]

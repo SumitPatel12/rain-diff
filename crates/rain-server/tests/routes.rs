@@ -89,6 +89,15 @@ fn browser_shaped_requests_are_refused() {
         .call();
     assert_eq!(status(rebound), 403);
     assert!(t.shared.lock().threads.is_empty());
+    for h in ["Sec-Fetch-Site", "Sec-Fetch-Mode", "Sec-Fetch-Dest"] {
+        let no_cors = t
+            .agent
+            .get(t.url("/api/events?kinds=&for=agent&timeout=0"))
+            .header(h, "no-cors")
+            .call();
+        assert_eq!(status(no_cors), 403, "{h}");
+    }
+    assert!(t.shared.presence().seen_at.is_none(), "a refused poll is no heartbeat");
 
     for (path, body) in [
         ("/api/notes", r#"{"kind":"story","body":"x"}"#),
@@ -125,6 +134,33 @@ fn browser_shaped_requests_are_refused() {
     assert_eq!(status(ok), 200);
     let via_ip = format!("http://127.0.0.1:{}/api/health", t.server.port);
     assert_eq!(status(t.agent.get(&via_ip).call()), 200);
+}
+
+#[test]
+fn requests_past_the_in_flight_cap_get_a_503_until_a_slot_frees() {
+    let t = serve(ServerOptions::default());
+    let polls: Vec<_> = (0..rain_server::MAX_IN_FLIGHT)
+        .map(|_| {
+            let (agent, url) = (t.agent.clone(), t.url("/api/events?kinds=&timeout=8"));
+            // A probe can hold a slot for an instant, so a poll refused then tries again.
+            std::thread::spawn(move || {
+                loop {
+                    let code = agent.get(&url).call().unwrap().status().as_u16();
+                    if code != 503 {
+                        return code;
+                    }
+                }
+            })
+        })
+        .collect();
+    let deadline = Instant::now() + Duration::from_secs(6);
+    let mut refused = false;
+    while !refused && Instant::now() < deadline {
+        refused = t.get("/api/health").0 == 503;
+    }
+    assert!(refused, "the cap refuses the request past it");
+    assert!(polls.into_iter().all(|p| p.join().unwrap() == 200));
+    assert_eq!(t.get("/api/health").0, 200);
 }
 
 #[test]
@@ -226,6 +262,19 @@ fn post_comments_merges_on_a_stale_base_version() {
 
     let (status, _) = t.send("POST", "/api/comments", r#"{"threads":[{"bad":1}]}"#);
     assert_eq!(status, 400);
+}
+
+#[test]
+fn post_comments_without_threads_is_refused_and_keeps_every_thread() {
+    let t = serve(ServerOptions::default());
+    t.send("POST", "/api/comment-imports", &read("difit/import.json"));
+    for body in ["{}", r#"{"thread":[]}"#, r#"{"baseVersion":1}"#, "[]"] {
+        let (status, r) = t.send("POST", "/api/comments", body);
+        assert_eq!(status, 400, "{body}");
+        assert_eq!(r["error"], "Invalid comment data: missing `threads`", "{body}");
+    }
+    assert_eq!(t.shared.lock().threads.len(), 3);
+    assert_eq!(t.shared.lock().comments_version, 1);
 }
 
 #[test]

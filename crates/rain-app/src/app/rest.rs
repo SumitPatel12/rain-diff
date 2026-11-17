@@ -19,9 +19,11 @@ const MAX_STEP: Duration = Duration::from_secs(60);
 pub(crate) const FLOOD_IN: Duration = Duration::from_secs(9);
 /// The water drains away over this long.
 pub(crate) const DRAIN: Duration = Duration::from_millis(1400);
-/// The rain and the loader's clouds redraw about 30 times a second, the rate their streaks are
+/// The rain and the loader's clouds move about 30 times a second, the rate their streaks are
 /// drawn for.
 const FRAME: Duration = Duration::from_millis(33);
+/// A poll this soon after the last move (a frame the move itself woke) leaves the weather be.
+const FRAME_EARLY: f32 = 0.025;
 /// Raining this long with no input, the rain holds its last frame until the next input.
 pub(crate) const UNWATCHED: Duration = Duration::from_secs(60);
 
@@ -39,8 +41,10 @@ pub struct Rest {
     pub active: Duration,
     /// The frame clock in seconds, which every weather animation is drawn from.
     pub clock: f32,
-    /// The clock the weather was last drawn at.
+    /// The clock the weather was last moved at.
     pub drawn: f32,
+    /// The weather's bound values, moved each frame without a rebuild.
+    pub(crate) motion: crate::view::WeatherMotion,
     /// The count to put back when a preview's rain ends.
     pub preview: Option<Duration>,
     pub checked: Option<Instant>,
@@ -55,6 +59,7 @@ impl Default for Rest {
             active: Duration::ZERO,
             clock: 0.0,
             drawn: -1.0,
+            motion: Default::default(),
             preview: None,
             checked: None,
             weather: Weather::Clear,
@@ -96,11 +101,13 @@ impl App {
             // The rain is drawn from the clock: one frame after another until it is clear.
             _ => tx.wake_after(FRAME),
         }
-        // Redraw only when the clock has moved since the last drawing.
+        // The weather moves in the renderer; the view is rebuilt only when it needs other parts.
         let animating = !calm && (loading || (self.rest.weather != Weather::Clear && !still));
-        let moved = animating && self.rest.clock != self.rest.drawn;
-        self.rest.drawn = self.rest.clock;
-        changed || moved
+        let due = animating && (self.rest.clock - self.rest.drawn) >= FRAME_EARLY;
+        if due {
+            self.rest.drawn = self.rest.clock;
+        }
+        changed || (due && crate::view::weather_moved(self))
     }
 
     /// It has rained `UNWATCHED` since the rain began or the last input, whichever is later:

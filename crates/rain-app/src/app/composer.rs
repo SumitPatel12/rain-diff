@@ -334,7 +334,8 @@ impl App {
     /// an `ask` event carrying the question and where it sits.
     pub(crate) fn ask_agent(&mut self, id: &str, question: &str) {
         let Some(t) = ops::thread(&self.mirror, id).cloned() else { return };
-        if t.kind() == ThreadKind::Question {
+        // A running answer keeps its status; the follow-up waits for it to end.
+        if t.kind() == ThreadKind::Question && !self.ask.running().contains(&id) {
             let tid = id.to_owned();
             self.mutate(|s| {
                 if let Some(t) = s.threads.iter_mut().find(|t| t.id == tid) {

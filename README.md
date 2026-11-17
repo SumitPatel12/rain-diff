@@ -22,7 +22,8 @@ difit's comment routes, so tooling written for difit can read comments back unch
 Rust 1.95.0 (pinned in `rust-toolchain.toml`), Windows + MSVC. Rune is a git dependency pinned to one revision.
 
 ```powershell
-cargo build --release -p rain                          # target\release\Rain.exe
+cargo build --release -p rain                          # target\release\Rain.exe (thin LTO, stripped)
+cargo build --profile quick -p rain                    # target\quick\Rain.exe, faster optimised dev build
 cargo run -p rain -- <target> <base> --merge-base      # review <target> against its merge base with <base>
 cargo run -p rain -- HEAD                              # the last commit
 cargo run -p rain -- .                                 # all uncommitted changes (also: working, staged)
@@ -52,7 +53,8 @@ and backend.
 ## Settings
 
 `%LOCALAPPDATA%\Rain\settings.json`, written by the window (theme, layout and the rest are also in the palette,
-`Ctrl+K`). Sessions live in `%LOCALAPPDATA%\Rain\sessions\`.
+`Ctrl+K`). Sessions live in `%LOCALAPPDATA%\Rain\sessions\`. On macOS the folder is
+`~/Library/Application Support/Rain`.
 
 ```json
 {

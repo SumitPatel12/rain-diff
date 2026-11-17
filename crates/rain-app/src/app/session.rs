@@ -11,11 +11,21 @@ impl App {
     /// Picks up session changes made elsewhere (HTTP imports, overview updates).
     pub(crate) fn sync_session(&mut self) -> bool {
         let fresh = {
-            let s = self.shared.lock();
+            let mut s = self.shared.lock();
             if s.version == self.seen_version {
                 return false;
             }
-            s.clone()
+            // The overview is the biggest member and changes only with its version: while that
+            // stands, the mirror's copy is moved over instead of cloning the session's.
+            if s.overview_version == self.mirror.overview_version && s.overview.is_some() == self.mirror.overview.is_some() {
+                let overview = s.overview.take();
+                let mut fresh = s.clone();
+                s.overview = overview;
+                fresh.overview = self.mirror.overview.take();
+                fresh
+            } else {
+                s.clone()
+            }
         };
         let (version, overview_version) = (fresh.version, fresh.overview_version);
         let threads_changed = fresh.threads != self.mirror.threads || fresh.drafts != self.mirror.drafts;
@@ -104,6 +114,7 @@ impl App {
         {
             self.focused_thread = None;
         }
+        self.drop_hidden_reply();
         if annotations_changed {
             self.rebuild_annotations();
         }

@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{Receiver, channel};
+use std::sync::mpsc::{Receiver, TryRecvError, channel};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -123,14 +123,26 @@ impl Handle {
         if let Some(o) = self.done.take() {
             return o;
         }
-        self.rx.recv().unwrap_or_default()
+        self.rx.recv().unwrap_or_else(|_| runner_died())
+    }
+}
+
+/// The outcome when the thread waiting on the run ended without sending one.
+fn runner_died() -> Outcome {
+    Outcome {
+        stderr: "the runner stopped without an outcome".into(),
+        ..Outcome::default()
     }
 }
 
 impl Job for Handle {
     fn try_wait(&mut self) -> Option<Outcome> {
         if self.done.is_none() {
-            self.done = self.rx.try_recv().ok();
+            self.done = match self.rx.try_recv() {
+                Ok(o) => Some(o),
+                Err(TryRecvError::Empty) => None,
+                Err(TryRecvError::Disconnected) => Some(runner_died()),
+            };
         }
         self.done.clone()
     }
@@ -424,6 +436,21 @@ mod tests {
             [r"C:\Program Files\a.exe", "--port=4123", "--s", "ACME-1"]
         );
         assert!(argv("   ", &subs).is_empty());
+    }
+
+    #[test]
+    fn a_wait_thread_that_dies_reads_as_a_failed_run() {
+        let (tx, rx) = channel::<Outcome>();
+        drop(tx);
+        let mut h = Handle {
+            pid: 0,
+            cancel: Arc::new(AtomicBool::new(false)),
+            rx,
+            done: None,
+        };
+        let o = h.try_wait().expect("a dead runner ends the job");
+        assert!(!o.answered());
+        assert!(o.error().contains("runner stopped"), "{}", o.error());
     }
 
     #[test]

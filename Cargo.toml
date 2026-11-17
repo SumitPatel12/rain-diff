@@ -38,11 +38,11 @@ globset = "0.4"
 regex = "1"
 sha2 = "0.10"
 serde_path_to_error = "0.1"
-syntect = { version = "5.3", default-features = false, features = ["default-onig", "parsing"] }
-two-face = { version = "0.5.1", features = ["syntect-onig"] }
+syntect = { version = "5.3", default-features = false, features = ["parsing", "regex-onig"] }
+two-face = { version = "0.5.1", default-features = false, features = ["syntect-onig"] }
 unicode-width = "0.2"
 pulldown-cmark = { version = "0.13", default-features = false }
-notify-debouncer-full = { version = "0.7", default-features = false }
+notify = "8.2"
 
 rain-core = { path = "crates/rain-core" }
 rain-git = { path = "crates/rain-git" }
@@ -62,5 +62,14 @@ rain-app = { path = "crates/rain-app" }
 debug = false
 
 [profile.release]
+incremental = false
+codegen-units = 1
+lto = "thin"
+strip = true
+
+[profile.quick]
+inherits = "release"
 incremental = true
 codegen-units = 16
+lto = false
+strip = false

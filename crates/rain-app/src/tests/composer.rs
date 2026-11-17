@@ -562,6 +562,119 @@ fn a_reply_draft_survives_esc_and_another_card_and_returns_with_its_thread() {
 }
 
 #[test]
+fn a_reload_keeps_an_open_composer_as_a_draft_and_frees_the_keys() {
+    let mut rt = on_a_line();
+    typed(&mut rt, "c");
+    typed(&mut rt, "typed before the reload");
+    rt.update(|s, _| s.reload());
+    settle(&mut rt);
+    assert!(rt.state.composer.is_none());
+    assert!(!rt.state.typing(), "the keys reach the reader again");
+    let drafts = &rt.state.mirror.drafts;
+    assert_eq!(drafts.len(), 1);
+    assert_eq!(drafts[0].text, "typed before the reload");
+}
+
+/// Your own comment on the cursor's line, with its reply box open and some text in it.
+fn replying_on_your_own() -> (Runtime<App>, String) {
+    let mut rt = on_a_line();
+    typed(&mut rt, "c");
+    typed(&mut rt, "Mine");
+    press(&mut rt, Key::Enter, ctrl());
+    let id = rt.state.mirror.threads.last().unwrap().id.clone();
+    act(&mut rt, &id, rain_comments::CardAction::OpenReply);
+    rt.update(|s, _| {
+        let _ = s.reply_edit.paste("half a reply");
+    });
+    assert!(rt.state.typing());
+    (rt, id)
+}
+
+#[test]
+fn a_reply_box_lets_go_of_the_keys_when_its_card_goes() {
+    let (mut rt, id) = replying_on_your_own();
+    act(&mut rt, &id, rain_comments::CardAction::Delete);
+    assert!(rt.state.reply_to.is_none() && !rt.state.typing(), "delete");
+    assert_eq!(rt.state.reply_drafts.get(&id).map(String::as_str), Some("half a reply"));
+    typed(&mut rt, "u");
+    act(&mut rt, &id, rain_comments::CardAction::OpenReply);
+    assert_eq!(rt.state.reply_edit.text, "half a reply", "the draft comes back with the thread");
+
+    act(&mut rt, &id, rain_comments::CardAction::Toggle);
+    assert!(rt.state.is_folded(&id));
+    assert!(rt.state.reply_to.is_none() && !rt.state.typing(), "fold");
+
+    let (mut rt, id) = replying_on_your_own();
+    {
+        let mut s = rt.state.shared.lock();
+        rain_comments::ops::delete_thread(&mut s, &id);
+    }
+    rt.state.shared.notify();
+    settle(&mut rt);
+    assert!(rt.state.reply_to.is_none() && !rt.state.typing(), "removed by an agent");
+}
+
+#[test]
+fn a_reply_to_a_thread_gone_meanwhile_says_so_and_keeps_the_text() {
+    let (mut rt, id) = replying_on_your_own();
+    rt.update({
+        let id = id.clone();
+        move |s, tx| {
+            {
+                let mut ss = s.shared.lock();
+                rain_comments::ops::delete_thread(&mut ss, &id);
+            }
+            s.card_action(&id, rain_comments::CardAction::Reply("half a reply".into()), tx);
+        }
+    });
+    assert!(rt.state.status.contains("not sent"), "{}", rt.state.status);
+    assert_eq!(rt.state.reply_drafts.get(&id).map(String::as_str), Some("half a reply"));
+    assert!(!rt.state.typing());
+}
+
+#[test]
+fn u_undoes_whichever_came_last_and_newer_toasts_keep_the_undo() {
+    let (mut rt, id) = replying_on_your_own();
+    rt.update(|s, _| s.keep_reply_draft());
+    act(&mut rt, &id, rain_comments::CardAction::Delete);
+    for i in 0..4 {
+        rt.update(move |s, _| s.push_toast(format!("note-{i}"), "Claude replied".into(), None));
+    }
+    assert!(
+        rt.state.conversation.toasts.iter().any(|t| t.key == format!("deleted-{id}")),
+        "newer toasts don't push the Undo out"
+    );
+    rt.update(|s, _| {
+        s.mutate(|ss| {
+            ss.accepted.push(rain_core::AcceptedGroup {
+                group: rain_core::Group::Must,
+                reason: "accepted".into(),
+                at: rain_comments::clock::now_iso(),
+                ..Default::default()
+            });
+            ss.version += 1;
+        })
+    });
+    typed(&mut rt, "u");
+    assert!(
+        rt.state.mirror.accepted.last().unwrap().undone,
+        "the accept came last, so u undoes it"
+    );
+    assert!(rain_comments::ops::thread(&rt.state.mirror, &id).is_none());
+    typed(&mut rt, "u");
+    assert!(rain_comments::ops::thread(&rt.state.mirror, &id).is_some(), "then the delete");
+    let states: Vec<String> = rt
+        .state
+        .shared
+        .events_since(0, &[EventKind::State])
+        .iter()
+        .filter(|e| e.thread.as_deref() == Some(id.as_str()))
+        .map(|e| e.data["state"].as_str().unwrap_or_default().to_owned())
+        .collect();
+    assert_eq!(states, ["deleted", "restored"], "agents hear both");
+}
+
+#[test]
 fn send_on_an_empty_box_says_why_and_keeps_the_box() {
     let mut rt = on_a_line();
     typed(&mut rt, "c");

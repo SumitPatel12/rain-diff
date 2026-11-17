@@ -211,6 +211,21 @@ fn typed_events_wake_on_a_user_reply_but_not_on_claudes_own() {
 }
 
 #[test]
+fn typed_events_report_a_gap_once_the_ring_dropped_some() {
+    let t = serve(ServerOptions::default());
+    t.import();
+    let (_, now) = t.get("/api/events?kinds=&since=0&timeout=0");
+    assert_eq!(now["gap"], false, "{now}");
+    for _ in 0..rain_core::session::EVENT_RING_CAP {
+        t.shared.push_event(rain_core::Event::default());
+    }
+    let (_, lost) = t.get("/api/events?kinds=&since=0&timeout=0");
+    assert_eq!(lost["gap"], true);
+    let (_, kept) = t.get(&format!("/api/events?kinds=&since={}&timeout=0", lost["seq"]));
+    assert_eq!(kept["gap"], false);
+}
+
+#[test]
 fn presence_round_trips_into_health() {
     let t = serve(ServerOptions::default());
     let (_, h) = t.get("/api/health");
@@ -342,6 +357,68 @@ fn lock_file_names_the_running_server_and_goes_with_it() {
     drop(t);
     assert!(!path.exists(), "dropping the server removes its lock");
     assert!(lock.is_stale(), "nothing answers on the port any more");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A live process that isn't this one.
+fn sleeper() -> std::process::Child {
+    let mut c = if cfg!(windows) {
+        let mut c = std::process::Command::new("cmd");
+        c.args(["/c", "pause"]);
+        c
+    } else {
+        std::process::Command::new("cat")
+    };
+    c.stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .spawn()
+        .unwrap()
+}
+
+#[test]
+fn a_window_that_finds_a_live_lock_serves_but_never_saves() {
+    let dir = std::env::temp_dir().join(format!("rain-server-held-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let session = dir.join("fresh").join("HELD.json");
+    let lock_file = session.with_extension("lock");
+    let one = r#"{"type":"thread","filePath":"a.cs","position":{"side":"new","line":1},"body":"x"}"#;
+
+    let first = serve(ServerOptions {
+        session_file: Some(session.clone()),
+        ..ServerOptions::default()
+    });
+    assert!(!first.server.read_only);
+    assert_eq!(read_lock(&lock_file).map(|l| l.pid), Some(std::process::id()), "made its folder");
+    drop(first);
+
+    // A busy window: its port takes connections but doesn't answer in time.
+    let busy = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let mut other = sleeper();
+    let held = json!({ "port": busy.local_addr().unwrap().port(), "pid": other.id(), "startedAt": "t" });
+    std::fs::write(&lock_file, held.to_string()).unwrap();
+    let t = serve(ServerOptions {
+        session_file: Some(session.clone()),
+        ..ServerOptions::default()
+    });
+    assert!(t.server.read_only && t.server.lock.is_none());
+    t.send("POST", "/api/comment-imports", one);
+    assert_eq!(t.shared.lock().threads.len(), 1);
+    assert!(!session.exists(), "never saved over the other window's session");
+    drop(t);
+    assert_eq!(read_lock(&lock_file).map(|l| l.pid), Some(other.id()), "its lock is left alone");
+
+    other.kill().unwrap();
+    other.wait().unwrap();
+    let t = serve(ServerOptions {
+        session_file: Some(session.clone()),
+        ..ServerOptions::default()
+    });
+    assert!(!t.server.read_only, "a silent port whose process has exited is stale");
+    assert_eq!(read_lock(&lock_file).map(|l| l.pid), Some(std::process::id()));
+    t.send("POST", "/api/comment-imports", one);
+    assert!(session.exists());
+    drop(t);
+    drop(busy);
     let _ = std::fs::remove_dir_all(&dir);
 }
 

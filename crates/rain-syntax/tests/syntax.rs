@@ -130,6 +130,21 @@ fn web_and_dotnet_languages_resolve() {
 }
 
 #[test]
+fn only_languages_without_a_fast_scanner_need_the_warm_up() {
+    for lang in ["ts", "a/b.tsx", "cs", "scss", "sql", "rs", "json"] {
+        assert!(rain_syntax::fast_covers(Some(lang)), "{lang}");
+    }
+    for lang in ["ps1", "docs/README.md", "Dockerfile"] {
+        assert!(!rain_syntax::fast_covers(Some(lang)), "{lang}");
+    }
+    assert!(rain_syntax::fast_covers(None));
+    for (lang, _) in samples::ALL {
+        let syntect = matches!(engine(Mode::Fast, Some(lang)), Engine::Syntect(_));
+        assert_eq!(rain_syntax::fast_covers(Some(lang)), !syntect, "{lang}");
+    }
+}
+
+#[test]
 fn fast_scanners_take_the_languages_they_know() {
     for lang in ["ts", "tsx", "js", "json", "html", "cshtml", "csproj", "css", "yml", "sql", "rs"] {
         assert!(matches!(engine(Mode::Fast, Some(lang)), Engine::Builtin), "{lang}");

@@ -1,2 +1,2 @@
 [alias]
-xtask = "run --release -q -p xtask --"
+xtask = "run --profile quick -q -p xtask --"

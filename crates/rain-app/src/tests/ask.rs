@@ -537,6 +537,74 @@ fn a_question_left_queued_by_a_closed_window_is_asked_again_on_open() {
 }
 
 #[test]
+fn an_ask_imported_before_the_mirror_caught_up_is_still_answered() {
+    let (mut a, ctl) = setup();
+    let first = a.mirror.threads[0].clone();
+    let extra = ops::ThreadExtra {
+        kind: Some(ThreadKind::Question),
+        ..ops::ThreadExtra::default()
+    };
+    let id = {
+        let mut s = a.shared.lock();
+        ops::add_thread_with(&mut s, &first.repo, &first.file_path, first.anchor, "Imported?", None, None, extra)
+    };
+    a.shared.push_event(rain_core::Event {
+        kind: EventKind::Ask,
+        thread: Some(id.clone()),
+        data: serde_json::json!({ "question": "Imported?" }),
+        ..rain_core::Event::default()
+    });
+    assert!(ops::thread(&a.mirror, &id).is_none(), "the window has not seen the import yet");
+    a.ask_tick_at(Instant::now());
+    assert_eq!(ctl.borrow().reqs.len(), 1, "the ask is not used up before its thread is known");
+    assert_eq!(status(&a, &id).status, AnswerStatus::Answering);
+}
+
+#[test]
+fn undoing_the_delete_of_a_question_being_answered_asks_it_again() {
+    let (mut a, ctl) = setup();
+    let id = ask(&mut a, "Why?");
+    let now = Instant::now();
+    a.ask_tick_at(now);
+    let mut tx = Tx::default();
+    a.card_action(&id, CardAction::Delete, &mut tx);
+    a.ask_tick_at(now + Duration::from_secs(1));
+    assert!(ctl.borrow().cancelled[0], "the delete ends the run");
+    a.undo_latest(&mut tx);
+    assert!(ops::thread(&a.mirror, &id).is_some());
+    a.ask_tick_at(now + Duration::from_secs(2));
+    assert_eq!(ctl.borrow().reqs.len(), 2, "restored, it is asked again");
+    assert_eq!(status(&a, &id).status, AnswerStatus::Answering);
+}
+
+#[test]
+fn a_follow_up_sent_while_the_answer_runs_is_asked_after_it() {
+    let (mut a, ctl) = setup();
+    let id = ask(&mut a, "Why?");
+    let now = Instant::now();
+    a.ask_tick_at(now);
+    let mut tx = Tx::default();
+    a.card_action(&id, CardAction::Reply("And the second case?".into()), &mut tx);
+    assert_eq!(
+        status(&a, &id).status,
+        AnswerStatus::Answering,
+        "the running answer keeps its status"
+    );
+    a.ask_tick_at(now + Duration::from_secs(1));
+    assert_eq!(ctl.borrow().reqs.len(), 1, "one run at a time per thread");
+    answer(&ctl, 0, ok("Because."));
+    a.ask_tick_at(now + Duration::from_secs(2));
+    assert_eq!(ctl.borrow().reqs.len(), 2, "the follow-up runs next");
+    assert!(ctl.borrow().reqs[1].stdin.contains("And the second case?"));
+    assert_eq!(status(&a, &id).status, AnswerStatus::Answering);
+    answer(&ctl, 1, ok("Also because."));
+    a.ask_tick_at(now + Duration::from_secs(3));
+    let t = thread(&a, &id);
+    assert_eq!(t.messages.last().unwrap().body, "Also because.");
+    assert_eq!(t.answer.unwrap().status, AnswerStatus::Answered);
+}
+
+#[test]
 fn palette_rows_toggle_prefer_time_out_and_set_the_command() {
     let mut a = app(story(), true);
     let rows = crate::palette::filtered(&a, "ask command: my-agent --ask {repos}");

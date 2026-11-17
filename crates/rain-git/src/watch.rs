@@ -8,16 +8,15 @@ use std::sync::mpsc::{RecvTimeoutError, channel};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use notify_debouncer_full::notify::{RecommendedWatcher, RecursiveMode};
-use notify_debouncer_full::{DebounceEventResult, Debouncer, RecommendedCache, new_debouncer};
+use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 
 use crate::GitError;
 use crate::repo::git_dirs;
 
-/// The debouncer's tick.
+/// A burst of changes is over once this long passes without another.
+pub const QUIET: Duration = Duration::from_millis(750);
+/// How often a change held by a pause checks for `resume`.
 pub const TICK: Duration = Duration::from_millis(250);
-/// Quiet ticks before a burst is flushed.
-pub const QUIET_TICKS: u32 = 3;
 /// The callback runs at least this often, so a missed or starved event still surfaces.
 pub const CAP: Duration = Duration::from_secs(60);
 
@@ -25,7 +24,7 @@ const NAMES: [&str; 4] = ["HEAD", "index", "packed-refs", "ORIG_HEAD"];
 
 /// A running watch; dropping it stops the watcher and its thread.
 pub struct GitWatch {
-    debouncer: Option<Debouncer<RecommendedWatcher, RecommendedCache>>,
+    watcher: Option<RecommendedWatcher>,
     paused: Arc<AtomicBool>,
     stop: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
@@ -45,11 +44,9 @@ impl GitWatch {
 impl Drop for GitWatch {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::SeqCst);
-        if let Some(d) = self.debouncer.take() {
-            d.stop_nonblocking();
-        }
-        // Stopping the debouncer drops its sender, which wakes the thread to see `stop` (at the
-        // latest at its next wake); nothing waits for it.
+        // Dropping the watcher drops its sender, which wakes the thread to see `stop`; nothing
+        // waits for it.
+        drop(self.watcher.take());
         drop(self.thread.take());
     }
 }
@@ -63,17 +60,16 @@ fn relevant(path: &Path, refs: &Path) -> bool {
     NAMES.contains(&name)
 }
 
-/// Calls `on_change` on a background thread after `HEAD`, a ref or the index changed (debounced:
-/// [`QUIET_TICKS`] quiet [`TICK`]s), and at least every [`CAP`].
+/// Calls `on_change` on a background thread after `HEAD`, a ref or the index changed (once
+/// [`QUIET`] passes without another change), and at least every [`CAP`]. Idle, nothing wakes
+/// between changes but the cap.
 pub fn watch_git(repo: &Path, on_change: impl Fn() + Send + 'static) -> Result<GitWatch, GitError> {
     let (git_dir, common) = git_dirs(repo)?;
     let refs = common.join("refs");
     let (tx, rx) = channel::<()>();
     let filter_refs = refs.clone();
-    let mut debouncer = new_debouncer(TICK * QUIET_TICKS, Some(TICK), move |res: DebounceEventResult| {
-        if let Ok(events) = res
-            && events.iter().any(|e| e.paths.iter().any(|p| relevant(p, &filter_refs)))
-        {
+    let mut watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
+        if res.is_ok_and(|e| e.paths.iter().any(|p| relevant(p, &filter_refs))) {
             let _ = tx.send(());
         }
     })
@@ -86,27 +82,32 @@ pub fn watch_git(repo: &Path, on_change: impl Fn() + Send + 'static) -> Result<G
         roots.push((common, RecursiveMode::NonRecursive));
     }
     for (p, mode) in roots {
-        debouncer.watch(&p, mode).map_err(|e| watch_error(repo, e))?;
+        watcher.watch(&p, mode).map_err(|e| watch_error(repo, e))?;
     }
     let stop = Arc::new(AtomicBool::new(false));
     let paused = Arc::new(AtomicBool::new(false));
     let (stop2, paused2) = (stop.clone(), paused.clone());
     let thread = std::thread::Builder::new().name("rain-git-watch".into()).spawn(move || {
-        let mut pending = false;
+        // `burst`: a change arrived and the quiet after it hasn't passed yet.
+        let (mut burst, mut pending) = (false, false);
         let mut last = Instant::now();
         loop {
             // Idle, it sleeps until the cap; a change held by a pause is retried every tick so
             // `resume` takes effect promptly.
-            let wait = if pending { TICK } else { CAP.saturating_sub(last.elapsed()) };
-            let hit = match rx.recv_timeout(wait) {
-                Ok(()) => true,
-                Err(RecvTimeoutError::Timeout) => false,
-                Err(RecvTimeoutError::Disconnected) => return,
+            let wait = match (burst, pending) {
+                (true, _) => QUIET,
+                (false, true) => TICK,
+                (false, false) => CAP.saturating_sub(last.elapsed()),
             };
+            match rx.recv_timeout(wait) {
+                Ok(()) => burst = true,
+                Err(RecvTimeoutError::Timeout) => pending |= std::mem::take(&mut burst),
+                Err(RecvTimeoutError::Disconnected) => return,
+            }
             if stop2.load(Ordering::SeqCst) {
                 return;
             }
-            pending |= hit || last.elapsed() >= CAP;
+            pending |= last.elapsed() >= CAP;
             if pending && !paused2.load(Ordering::SeqCst) {
                 pending = false;
                 last = Instant::now();
@@ -115,7 +116,7 @@ pub fn watch_git(repo: &Path, on_change: impl Fn() + Send + 'static) -> Result<G
         }
     })?;
     Ok(GitWatch {
-        debouncer: Some(debouncer),
+        watcher: Some(watcher),
         paused,
         stop,
         thread: Some(thread),

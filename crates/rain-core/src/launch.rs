@@ -41,4 +41,6 @@ pub struct Launch {
     pub fixture: Option<PathBuf>,
     /// Context lines around each change; `None` is git's default of 3.
     pub context: Option<u32>,
+    /// Another window holds the session: show it, never save it.
+    pub read_only: bool,
 }

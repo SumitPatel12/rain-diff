@@ -211,25 +211,86 @@ fn toggle_filter(s: &mut App, item: &Item, tx: &mut Tx) {
     }
 }
 
+/// What [`entries`] reads, so they are rebuilt only when it changes.
+type Source = (u64, u32, ViewLayout, Theme, rain_tree::TreeFilter);
+
+/// [`entries`] with their labels lowercased, kept while what they show stands; and the last
+/// query's matches, which a query typed on from it only narrows.
+#[derive(Default)]
+pub struct Cache {
+    source: Option<Source>,
+    entries: Vec<Entry>,
+    lower: Vec<String>,
+    last: Option<(String, Vec<(i32, usize)>)>,
+}
+
+impl Cache {
+    fn refresh(&mut self, s: &App) {
+        let source = (
+            s.seen_version,
+            s.reloader.installs(),
+            s.settings.layout,
+            s.settings.theme,
+            s.tree.filter.clone(),
+        );
+        if self.source.as_ref() == Some(&source) {
+            return;
+        }
+        self.entries = entries(s);
+        self.lower = self.entries.iter().map(|e| e.label.to_lowercase()).collect();
+        self.source = Some(source);
+        self.last = None;
+    }
+
+    /// `(score, index)` of every entry matching `q`, in entry order.
+    fn matches(&mut self, q: &str) -> Vec<(i32, usize)> {
+        let from = match &self.last {
+            Some((last, hits)) if last == q => return hits.clone(),
+            // Every char of the shorter query is in the longer one, in order.
+            Some((last, hits)) if q.starts_with(last.as_str()) => Some(hits.iter().map(|&(_, i)| i).collect::<Vec<_>>()),
+            _ => None,
+        };
+        let lower = &self.lower;
+        let hit = |i: usize| score(q, &lower[i]).map(|sc| (sc, i));
+        let hits: Vec<(i32, usize)> = match from {
+            Some(from) => from.into_iter().filter_map(hit).collect(),
+            None => (0..lower.len()).filter_map(hit).collect(),
+        };
+        self.last = Some((q.to_owned(), hits.clone()));
+        hits
+    }
+}
+
 /// Entries matching `query`, best first (ties keep commands before files).
 pub fn filtered(s: &App, query: &str) -> Vec<Entry> {
     let q = query.trim().to_lowercase();
-    let ask_rows = ask::palette_rows(s, query).into_iter().map(|(item, label, hint)| Entry {
-        item: Item::Ask(item),
-        label,
-        hint,
-        kind: "Setting",
-    });
-    let mut scored: Vec<(i32, usize, Entry)> = entries(s)
+    let mut cache = s.palette.cache.borrow_mut();
+    cache.refresh(s);
+    let n = cache.entries.len();
+    let ask_rows: Vec<Entry> = ask::palette_rows(s, query)
         .into_iter()
-        .chain(ask_rows)
-        .enumerate()
-        .filter_map(|(i, e)| score(&q, &e.label.to_lowercase()).map(|sc| (sc, i, e)))
+        .map(|(item, label, hint)| Entry {
+            item: Item::Ask(item),
+            label,
+            hint,
+            kind: "Setting",
+        })
         .collect();
+    let mut scored = cache.matches(&q);
+    scored.extend(
+        ask_rows
+            .iter()
+            .enumerate()
+            .filter_map(|(j, e)| score(&q, &e.label.to_lowercase()).map(|sc| (sc, n + j))),
+    );
     if !q.is_empty() {
         scored.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
     }
-    scored.into_iter().take(MAX_ROWS).map(|(_, _, e)| e).collect()
+    scored
+        .into_iter()
+        .take(MAX_ROWS)
+        .map(|(_, i)| if i < n { cache.entries[i].clone() } else { ask_rows[i - n].clone() })
+        .collect()
 }
 
 /// Runs the selected row and closes the palette.
@@ -258,6 +319,30 @@ pub fn run_selected(s: &mut App, tx: &mut Tx) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn typing_on_finds_what_a_fresh_search_finds_and_changes_show() {
+        let mut a = crate::tests::app(crate::tests::story(), true);
+        let fresh = |a: &App, q: &str| -> Vec<(i32, usize)> {
+            entries(a)
+                .iter()
+                .enumerate()
+                .filter_map(|(i, e)| score(q, &e.label.to_lowercase()).map(|sc| (sc, i)))
+                .collect()
+        };
+        for q in ["v", "vo", "vou", "vouc", "vo", "x", "", "s t"] {
+            let cached = {
+                let mut c = a.palette.cache.borrow_mut();
+                c.refresh(&a);
+                c.matches(q)
+            };
+            assert_eq!(cached, fresh(&a, q), "{q:?}");
+        }
+        let hint = |a: &App| filtered(a, "layout: unified").first().map(|e| e.hint.clone());
+        assert_eq!(hint(&a).as_deref(), Some(""));
+        a.settings.layout = ViewLayout::Unified;
+        assert_eq!(hint(&a).as_deref(), Some("on"), "a setting change rebuilds the rows");
+    }
 
     #[test]
     fn subsequence_scores_prefer_runs_and_word_starts() {

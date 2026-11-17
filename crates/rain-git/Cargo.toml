@@ -8,4 +8,4 @@ license.workspace = true
 rain-core = { workspace = true }
 regex = { workspace = true }
 sha2 = { workspace = true }
-notify-debouncer-full = { workspace = true }
+notify = { workspace = true }

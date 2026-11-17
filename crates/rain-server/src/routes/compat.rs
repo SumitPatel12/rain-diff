@@ -149,7 +149,7 @@ fn post_comments(ctx: &Ctx, body: &str) -> Reply {
         None if v.get("comments").is_some() => {
             return error(400, "Invalid comment data: legacy `comments` payloads are not supported");
         }
-        None => Vec::new(),
+        None => return error(400, "Invalid comment data: missing `threads`"),
     };
     let base = v.get("baseVersion").and_then(Value::as_u64);
     let mut s = ctx.shared.lock();

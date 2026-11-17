@@ -74,7 +74,7 @@ Repeat 5–8 until `review get` shows a round with the verdict you need.
 
 - Base URL `http://localhost:<port>`. `POST`/`PUT` need `Content-Type: application/json`
   (`PUT /api/brief` also takes `text/markdown`, §4.1).
-- No `Origin` header (browser requests get **403** `Browser requests are not accepted`), and the
+- No `Origin` or `Sec-Fetch-*` header (browser requests get **403** `Browser requests are not accepted`), and the
   `Host` must be `localhost`, `127.0.0.1` or `[::1]` with the port (else **403**
   `Unexpected Host header`). A non-JSON `POST`/`PUT` gets **415**
   `Content-Type must be application/json`.
@@ -221,7 +221,8 @@ never come back through comment readback.
 - HTTP: `POST /api/comment-imports[?repo=server]` →
   `{"success":true,"changed":true,"count":1,"importId":"<sha256>","warnings":[]}` (the CLI prints
   `{"success","importId","count","warnings"}`). The same file, side, line and body twice is not added
-  again. 400 `Invalid comment import data`.
+  again. 400 `Invalid comment import data`. Warnings (an import that didn't anchor or apply) print
+  as `Error: <text>` after the JSON and exit **3**, for `comment add` and `comment reply` alike.
 
 ### 5.2 Comments on the Brief, the Map and notes
 Artifact threads use a virtual `filePath` and a `target`:
@@ -271,7 +272,7 @@ then the fenced snapshot (`>` marks the anchored lines), or `Code:` with the sna
 By id, or by the exact line (`--line`) or range (`--lines`) a thread hangs on (`--side old` for
 deleted lines; `--repo` makes `--file` repo-relative). HTTP: `POST /api/comment-imports` with
 `{"type":"reply","threadId":"k3x9f2","body":"…","author":"claude"}`. No match: the reply JSON, then
-`Error: No thread with id k3x9f2.` and exit 1. Your reply on a **question** marks its answer
+`Error: No thread with id k3x9f2.` and exit 3. Your reply on a **question** marks its answer
 `answered`.
 
 ### 5.5 Settle — `rain comment set-state`, `rain comment resolve`
@@ -324,7 +325,8 @@ Map threads follow the node id, then its label (`moved(label)`); note threads fo
 - Exit **0** with events; exit **2** when the timeout passed with none (JSON still printed,
   `"changed":false`; keep its `seq`); exit 1 on errors.
 - HTTP: `GET /api/events?kinds=reply,ask[&since=<seq>][&for=agent][&author=claude][&timeout=]` →
-  `{"version","seq","changed","events":[{"seq","at","kind","author"?,"thread"?,"data"?}],"presence"}`.
+  `{"version","seq","changed","gap","events":[{"seq","at","kind","author"?,"thread"?,"data"?}],"presence"}`.
+  `"gap":true` means events after `since` fell off the ring: re-read `comment get` before going on.
   `--format text`: `seq N: K event(s)`, then `#<seq> <kind> <thread> by <author> <data>` per line.
 
 Loop:
@@ -483,7 +485,8 @@ what they have viewed (hunk-level).
 - Node kinds: `service`, `app`, `module`, `function`, `route`, `job`, `queue`, `datastore`, `cache`, `external`, `ui`, `config`, `test`, `package`, `other`.
 - Edge kinds: `call`, `http`, `rpc`, `event`, `queue`, `data`, `dependency`, `render`, `other`.
 - `POST /api/comments` (`{"threads":[…],"baseVersion"}`) replaces all threads, merging when
-  `baseVersion` is stale — difit's editor route; agents should prefer the imports above.
+  `baseVersion` is stale — difit's editor route; agents should prefer the imports above. A body
+  without `threads` is refused (400), so it can't wipe the threads.
 - `rain version` prints the version.
 
 Versions (counters that only go up): `version` in `health` and the round-2 `events` = the session;

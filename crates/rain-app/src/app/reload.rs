@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use rain_comments::ops;
-use rain_core::{AnchorState, HunkViewed, Side, ViewedRecord};
+use rain_core::{AnchorState, HunkViewed, Side, ViewedRecord, short_sha};
 use rain_diffview::LineRef;
 use rain_git::{GitWatch, TargetKind};
 use rune::Tx;
@@ -31,7 +31,7 @@ pub struct Stale {
 
 impl Stale {
     pub fn message(&self) -> String {
-        let short = &self.sha[..self.sha.len().min(7)];
+        let short = short_sha(&self.sha);
         match self.commits {
             Some(1) => format!("1 new commit on {} ({short})", self.branch),
             Some(n) => format!("{n} new commits on {} ({short})", self.branch),
@@ -92,6 +92,8 @@ pub struct ReloadState {
     watched: Arc<Mutex<Vec<Watched>>>,
     /// A finished check: `Some(None)` = up to date again.
     found: Arc<Mutex<Option<Option<Stale>>>>,
+    /// Each repo's last check since the last install, by folder: a watch checks its own repo.
+    checked: Arc<Mutex<HashMap<PathBuf, Option<Stale>>>>,
     pub banner: Option<Stale>,
     pub toast: Option<(String, Instant)>,
     pub counts: Option<ReloadCounts>,
@@ -259,6 +261,7 @@ impl App {
         self.reloader.watch_started = true;
         let watched = self.reloader.watched.clone();
         let found = self.reloader.found.clone();
+        let checked = self.reloader.checked.clone();
         let watches = self.reloader.watches.clone();
         let dirs: Vec<PathBuf> = watched
             .lock()
@@ -266,7 +269,12 @@ impl App {
             .unwrap_or_default();
         let _ = std::thread::Builder::new().name("rain-watch-start".into()).spawn(move || {
             for dir in dirs {
-                if let Some(w) = watch_repo(&dir, watched.clone(), found.clone(), wake.clone())
+                let check = Check {
+                    watched: watched.clone(),
+                    found: found.clone(),
+                    checked: checked.clone(),
+                };
+                if let Some(w) = watch_repo(&dir, check, wake.clone())
                     && let Ok(mut all) = watches.lock()
                 {
                     all.push(w);
@@ -297,6 +305,9 @@ impl App {
             .collect();
         if let Ok(mut w) = self.reloader.watched.lock() {
             *w = list;
+        }
+        if let Ok(mut c) = self.reloader.checked.lock() {
+            c.clear();
         }
     }
 
@@ -343,16 +354,20 @@ impl App {
     }
 }
 
-/// One repo's watch; its check compares every watched repo's target with what was loaded.
-fn watch_repo(
-    dir: &std::path::Path,
+/// What a repo's watch reads and writes.
+#[derive(Clone)]
+struct Check {
     watched: Arc<Mutex<Vec<Watched>>>,
     found: Arc<Mutex<Option<Option<Stale>>>>,
-    wake: Arc<dyn Fn() + Send + Sync>,
-) -> Option<GitWatch> {
-    let check = move || {
-        let list = watched.lock().map(|w| w.clone()).unwrap_or_default();
-        let stale = list.iter().find_map(|r| {
+    checked: Arc<Mutex<HashMap<PathBuf, Option<Stale>>>>,
+}
+
+impl Check {
+    /// Compares `dir`'s targets with what was loaded, then reports the first stale repo of every
+    /// repo's last check, in the watched order.
+    fn run(&self, dir: &std::path::Path) {
+        let list = self.watched.lock().map(|w| w.clone()).unwrap_or_default();
+        let mine = list.iter().filter(|r| r.dir == dir).find_map(|r| {
             let m = rain_git::target_moved(&r.dir, &r.target, &r.loaded, &r.head).ok()??;
             Some(Stale {
                 repo: r.id.clone(),
@@ -361,9 +376,20 @@ fn watch_repo(
                 sha: m.to,
             })
         });
-        if let Ok(mut f) = found.lock() {
+        let Ok(mut checked) = self.checked.lock() else { return };
+        checked.insert(dir.to_owned(), mine);
+        let stale = list.iter().find_map(|r| checked.get(&r.dir).cloned().flatten());
+        if let Ok(mut f) = self.found.lock() {
             *f = Some(stale);
         }
+    }
+}
+
+/// One repo's watch; its check looks at that repo only.
+fn watch_repo(dir: &std::path::Path, check: Check, wake: Arc<dyn Fn() + Send + Sync>) -> Option<GitWatch> {
+    let own = dir.to_owned();
+    let check = move || {
+        check.run(&own);
         wake();
     };
     match rain_git::watch_git(dir, check) {
@@ -404,4 +430,46 @@ fn reload_counts(
         }
     }
     c
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use super::*;
+
+    fn watched(id: &str, dir: &str) -> Watched {
+        Watched {
+            id: id.into(),
+            dir: dir.into(),
+            target: "HEAD".into(),
+            loaded: "0".repeat(40),
+            head: String::new(),
+        }
+    }
+
+    #[test]
+    fn a_repos_check_keeps_the_others_last_results() {
+        let missing = std::env::temp_dir().join("rain-no-such-repo");
+        let a = missing.join("a").to_string_lossy().into_owned();
+        let b = missing.join("b").to_string_lossy().into_owned();
+        let check = Check {
+            watched: Arc::new(Mutex::new(vec![watched("a", &a), watched("b", &b)])),
+            found: Arc::default(),
+            checked: Arc::default(),
+        };
+        let stale_b = Stale {
+            repo: "b".into(),
+            branch: "main".into(),
+            commits: Some(2),
+            sha: "f".repeat(40),
+        };
+        check.checked.lock().unwrap().insert(PathBuf::from(&b), Some(stale_b.clone()));
+        check.run(Path::new(&a));
+        assert_eq!(*check.found.lock().unwrap(), Some(Some(stale_b)), "a's check doesn't re-run b's");
+        assert_eq!(check.checked.lock().unwrap().get(&PathBuf::from(&a)), Some(&None));
+        check.checked.lock().unwrap().clear();
+        check.run(Path::new(&a));
+        assert_eq!(*check.found.lock().unwrap(), Some(None));
+    }
 }

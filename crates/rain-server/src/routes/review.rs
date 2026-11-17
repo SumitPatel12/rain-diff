@@ -123,6 +123,7 @@ mod tests {
             session_file: None,
             repo_folder: None,
             lock: None,
+            in_flight: Default::default(),
         }
     }
 

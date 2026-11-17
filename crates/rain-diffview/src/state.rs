@@ -389,6 +389,8 @@ pub struct DiffState {
     /// The side text selection copies, which follows the pointer.
     copy_side: Side,
     hovered: Vec<(Side, String)>,
+    /// The line under the pointer (its row key, and its side in split), whose `+` and `?` mount.
+    hover_line: Option<(String, Option<Side>)>,
     highlighter: Highlighter,
     chunks: RefCell<ChunkCache>,
     /// The widest line of any file, in columns.
@@ -475,6 +477,7 @@ impl DiffState {
             cursor: None,
             copy_side: Side::New,
             hovered: Vec::new(),
+            hover_line: None,
             highlighter: Highlighter::builtin(),
             chunks: RefCell::new(ChunkCache::default()),
             columns: 0,
@@ -1112,6 +1115,22 @@ impl DiffState {
             self.hovered.retain(|(_, c)| c != cell);
         }
         self.copy_side != was
+    }
+
+    /// The pointer entered a line (a split half): true when that moved the mounted `+` and `?`.
+    /// Leaving keeps them (hidden), and a text selection holds them: a rebuild then can garble its copy.
+    pub(crate) fn hover_line(&mut self, key: &str, side: Option<Side>, inside: bool) -> bool {
+        let here = self.hover_line.as_ref().is_some_and(|(k, s)| k == key && *s == side);
+        if !inside || here || self.span.is_some() {
+            return false;
+        }
+        self.hover_line = Some((key.to_owned(), side));
+        true
+    }
+
+    /// The hovered line's side when the row keyed `key` is hovered (`Some(None)` in unified).
+    pub(crate) fn hovered_line(&self, key: &str) -> Option<Option<Side>> {
+        self.hover_line.as_ref().filter(|(k, _)| k == key).map(|(_, s)| *s)
     }
 
     /// The span a text selection over the code covers: from its first selected code text to its

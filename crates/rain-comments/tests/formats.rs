@@ -3,8 +3,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use rain_comments::{
-    SessionFile, anchor_label, apply, autosave, comments_json, comments_json_string, comments_output, from_difit_json, import, ops,
-    post_threads,
+    Autosave, SessionFile, anchor_label, apply, autosave, comments_json, comments_json_string, comments_output, from_difit_json, import,
+    ops, post_threads,
 };
 use rain_core::{Anchor, CodeSnapshot, DiffSet, Disposition, FileDiffBuilder, FileStatus, LineKind, RepoInfo, Session, Shared, Side};
 
@@ -280,6 +280,40 @@ fn autosave_saves_during_a_steady_stream_of_changes() {
     }
     assert!(path.exists(), "touches every 20 ms must not postpone the save forever");
     drop(saver);
+}
+
+#[test]
+fn a_place_touch_waits_to_ride_along_but_still_saves_and_flushes() {
+    let dir = scratch("autosave-later");
+    let path = dir.join("s.json");
+    let shared = Arc::new(Shared::new(Session::default()));
+    let saver = autosave(shared.clone(), path.clone(), Duration::from_millis(30));
+    ops::set_viewed(&mut shared.lock(), "", "a", "h1");
+    saver.touch_later();
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(!path.exists(), "a place-only change waits longer than the debounce");
+    let start = std::time::Instant::now();
+    while start.elapsed() < Autosave::LATER * 2 && !path.exists() {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert!(path.exists(), "it saves within Autosave::LATER");
+    std::fs::remove_file(&path).unwrap();
+    ops::set_viewed(&mut shared.lock(), "", "b", "h2");
+    saver.touch_later();
+    drop(saver);
+    assert_eq!(SessionFile::load(&path).unwrap().viewed.len(), 2, "closing saves it at once");
+}
+
+#[test]
+fn the_session_file_is_compact_json() {
+    let dir = scratch("compact");
+    let path = dir.join("s.json");
+    let mut s = Session::default();
+    ops::set_viewed(&mut s, "", "a", "h1");
+    SessionFile::save(&path, &s).unwrap();
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert!(!text.contains('\n'), "{text}");
+    assert_eq!(SessionFile::load(&path).unwrap().viewed.len(), 1);
 }
 
 #[test]

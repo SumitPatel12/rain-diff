@@ -6,6 +6,8 @@
 
 use std::collections::BTreeSet;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 
 use rain_core::brief::Cite;
 use rain_core::{FileDiff, Side, Thread, ThreadState};
@@ -132,6 +134,15 @@ pub struct TourState {
     /// The key list the anchors were checked against; a new allocation means a load installed.
     load_mark: usize,
     loaded: Option<PathBuf>,
+    saves: Arc<TourSaves>,
+}
+
+/// Tour writes off the UI thread: the newest wins, and a failure waits for the next poll.
+#[derive(Default)]
+struct TourSaves {
+    issued: AtomicU64,
+    written: Mutex<u64>,
+    error: Mutex<Option<String>>,
 }
 
 impl Default for TourState {
@@ -150,6 +161,7 @@ impl Default for TourState {
             spot: None,
             load_mark: 0,
             loaded: None,
+            saves: Arc::default(),
         }
     }
 }
@@ -740,6 +752,10 @@ impl App {
     pub(crate) fn tour_tick(&mut self, tx: &mut Tx) -> bool {
         let mark = self.keys.as_ptr() as usize;
         let mut changed = false;
+        if let Some(e) = self.tour_save_error() {
+            self.status = e;
+            changed = true;
+        }
         if mark != self.tour.load_mark {
             self.tour.load_mark = mark;
             if !self.tour.anchors.is_empty() {
@@ -858,12 +874,32 @@ impl App {
             revealed: self.tour.revealed.iter().copied().collect(),
             anchors: self.tour.anchors.clone(),
         };
-        if let Ok(b) = serde_json::to_vec_pretty(&saved) {
-            if let Some(d) = p.parent() {
-                let _ = std::fs::create_dir_all(d);
+        let Ok(bytes) = serde_json::to_vec_pretty(&saved) else { return };
+        let saves = self.tour.saves.clone();
+        let seq = saves.issued.fetch_add(1, Ordering::Relaxed) + 1;
+        let write = move || {
+            let mut written = saves.written.lock().unwrap_or_else(|e| e.into_inner());
+            if seq <= *written {
+                return;
             }
-            let _ = std::fs::write(&p, b);
+            *written = seq;
+            let err = rain_comments::store::write_atomic(&p, &bytes).err();
+            *saves.error.lock().unwrap_or_else(|e| e.into_inner()) = err.map(|e| format!("Tour progress not saved: {e}"));
+        };
+        match self.wake.clone() {
+            Some(wake) => {
+                let _ = std::thread::Builder::new().name("rain-tour-save".into()).spawn(move || {
+                    write();
+                    wake();
+                });
+            }
+            None => write(),
         }
+    }
+
+    /// A tour save that failed since the last look, for the status line.
+    fn tour_save_error(&self) -> Option<String> {
+        self.tour.saves.error.lock().unwrap_or_else(|e| e.into_inner()).take()
     }
 
     // ----- scenes -----

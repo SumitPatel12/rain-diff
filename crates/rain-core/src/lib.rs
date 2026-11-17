@@ -21,7 +21,7 @@ pub use comments::{
     ImportBody, Message, Orphan, OrphanReason, Target, TargetKind, Thread, ThreadKind, ThreadState, ViewedRecord,
 };
 pub use diff::{DiffSet, FileDiff, FileDiffBuilder, FileStatus, Hunk, LineKind, LineRec, RepoInfo, Side};
-pub use hash::diff_content_hash;
+pub use hash::{diff_content_hash, short_sha};
 pub use launch::{Launch, RepoLaunch};
 pub use notes::{Note, NoteKind};
 pub use overview::OverviewDocument;

@@ -130,7 +130,7 @@ impl App {
         self.reloader.touched_place = Some(line_key);
         self.reloader.place_unsaved = false;
         if let Some(a) = &self.autosave {
-            a.touch();
+            a.touch_later();
         }
     }
 

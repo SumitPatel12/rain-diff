@@ -487,6 +487,33 @@ fn working_tree_diff_includes_untracked_files_as_added() {
 }
 
 #[test]
+fn untracked_files_too_big_or_locked_list_without_contents() {
+    let s = scratch("untracked-big");
+    write(&s.0, "huge.log", &vec![b'x'; rain_git::UNTRACKED_MAX_BYTES as usize + 1]);
+    write(&s.0, "small.txt", b"ok\n");
+    #[cfg(windows)]
+    let _held = {
+        use std::os::windows::fs::OpenOptionsExt;
+        write(&s.0, "locked.log", b"busy\n");
+        std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(0)
+            .open(s.0.join("locked.log"))
+            .unwrap()
+    };
+    let files = rain_git::untracked(&s.0, 0).unwrap();
+    let huge = find(&files, "huge.log");
+    assert!(huge.contents_unavailable && !huge.binary && huge.lines.is_empty());
+    assert_eq!(huge.status, FileStatus::Added);
+    assert_eq!(find(&files, "small.txt").line_text(0), "ok");
+    #[cfg(windows)]
+    assert!(
+        find(&files, "locked.log").contents_unavailable,
+        "a locked file doesn't fail the diff"
+    );
+}
+
+#[test]
 fn staged_and_unstaged_targets_diff_the_index() {
     let s = scratch("staged");
     write(&s.0, "src/ws.cs", b"staged\n");

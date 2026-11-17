@@ -712,7 +712,7 @@ impl<S: 'static> View<S> {
         let r = st.rows[i];
         let key = st.key_of(r);
         let dim = st.dimmed(i);
-        let lit = |e: El| if dim { e.opacity(DIM) } else { e };
+        let lit = |e: El| if dim { e.child(self.dim_scrim()) } else { e };
         match r {
             Row::File(f) => lit(self.file_row(s, st, f as usize)),
             Row::Note(f) => memo(&key, (self.look.version, st.rev, st.view_width().to_bits(), dim), || {
@@ -734,10 +734,24 @@ impl<S: 'static> View<S> {
                     self.marks(st, i, r),
                     self.d.calm,
                     dim,
+                    st.hovered_line(&key),
                 );
                 memo(&key, version, || lit(self.line(s, st, i, &key, false)))
             }
         }
+    }
+
+    /// A row outside the spotlight under the reader's ground at `1 - DIM`: the look of the row at
+    /// `DIM` opacity, without a layer per row. Sticky, so it paints over the sticky gutter too.
+    fn dim_scrim(&self) -> El {
+        el().key("dim")
+            .absolute(0.0, 0.0)
+            .w_full()
+            .h_full()
+            .fill(self.look.bg.alpha(1.0 - DIM))
+            .sticky_left(0.0)
+            .inert()
+            .a11y_hidden()
     }
 
     fn annotated(&self, st: &DiffState, r: Row) -> bool {
@@ -861,16 +875,37 @@ impl<S: 'static> View<S> {
             .child(c.children(all.map(|a| note(build(s, a), a))))
     }
 
-    /// The marks column: the app's mark, else the hover's `+` and `?`. Assistive tech reaches
-    /// both; an empty cell stays hidden from it.
-    fn marks_cell(&self, f: usize, at: Option<LineRef>, mark: Option<El>) -> El {
+    /// Whether lines carry the hover's `+` and `?`.
+    fn adds(&self) -> bool {
+        self.d.on_comment.is_some() || self.d.on_ask.is_some()
+    }
+
+    /// Tracks the pointer over a line (`side` for a split half), so only that line and the
+    /// cursor's mount the `+` and `?`.
+    fn track_hover(&self, e: El, key: &str, side: Option<Side>) -> El {
+        if !self.adds() {
+            return e;
+        }
+        let (get, key) = (self.d.get_mut.clone(), key.to_owned());
+        e.on_hover_change(move |s: &mut S, inside, tx: &mut Tx| {
+            if !get(s).hover_line(&key, side, inside) {
+                tx.live_only();
+            }
+        })
+    }
+
+    /// The marks column: the app's mark, else the hover's `+` and `?`, mounted only on the
+    /// hovered and cursor lines (`show`), so assistive tech meets one pair, on the line in hand.
+    /// An empty cell stays hidden from it.
+    fn marks_cell(&self, f: usize, at: Option<LineRef>, mark: Option<El>, show: bool) -> El {
         let l = &self.look;
         let cell = row().key("mk").w(MARKS).h(l.m.line).center();
         if let Some(m) = mark {
             return cell.child(m);
         }
         if let Some(at) = at
-            && (self.d.on_comment.is_some() || self.d.on_ask.is_some())
+            && show
+            && self.adds()
         {
             // Each button presses over the line's full height and half the pair's width.
             let mut add = row().key("hover-add").absolute(1.0, 0.0).h(l.m.line).group_opacity(0.0, 1.0);
@@ -952,12 +987,13 @@ impl<S: 'static> View<S> {
         let hover_side = if c.kind == LineKind::Removed { Side::Old } else { Side::New };
         // The marks, numbers and sign hold to the viewport's left edge while the code scrolls
         // sideways under them, on the line's own opaque fill.
+        let show = marks.cursor || st.hovered_line(key).is_some();
         let mut gutter = row()
             .key("gutter")
             .self_stretch()
             .items_start()
             .fill(fill)
-            .child(self.marks_cell(f, c.anchor(), mark));
+            .child(self.marks_cell(f, c.anchor(), mark, show));
         let numbers = match one {
             Some(side) => {
                 let n = if side == Side::Old { c.old } else { c.new };
@@ -993,7 +1029,7 @@ impl<S: 'static> View<S> {
         if marks.cursor {
             r = r.child(self.cursor_bar());
         }
-        r
+        self.track_hover(r, key, None)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1029,13 +1065,14 @@ impl<S: 'static> View<S> {
             let copy = st.copy_side() == side;
             let label = cell.label();
             let at = n.map(|n| LineRef::new(side, n));
+            let show = marks.cursor || st.hovered_line(key) == Some(Some(side));
             h = h
                 .fill(fill)
                 .hover(l.hover)
                 .hover_group()
                 .role("listitem")
                 .label(label)
-                .child(self.marks_cell(f, at, mark))
+                .child(self.marks_cell(f, at, mark, show))
                 .child(self.number(st, i, f, n, side, selected, marks.cursor, digits).key("n"))
                 .child(self.sign(if calm { LineKind::Context } else { kind }, SIGN.1))
                 .child(self.code(st, f, &cell, copy, side, key).key("code"));
@@ -1045,7 +1082,7 @@ impl<S: 'static> View<S> {
             if marks.cursor && (side == Side::New || kind == LineKind::Removed) {
                 h = h.child(self.cursor_bar());
             }
-            h
+            self.track_hover(h, key, Some(side))
         };
         let divider = col().key("divider").w(1.0).self_stretch().fill(self.look.border);
         row()

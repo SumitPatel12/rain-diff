@@ -29,6 +29,30 @@ pub struct ReviewState {
     /// Why the last Submit was refused.
     pub refused: Option<String>,
     pub lens: Option<Lens>,
+    /// The round whose lens git is still working out.
+    lens_pending: Option<u32>,
+}
+
+/// Per repo index, git's line map of each of its files since a round.
+pub type LineMaps = BTreeMap<usize, Vec<Vec<[u32; 4]>>>;
+
+/// One repo's `line_maps` call, owned so it can run on another thread.
+pub(crate) struct LensJob {
+    repo: usize,
+    dir: std::path::PathBuf,
+    resolved: rain_git::Resolved,
+    from: String,
+    paths: Vec<String>,
+}
+
+fn run_lens_jobs(jobs: Vec<LensJob>) -> LineMaps {
+    jobs.into_iter()
+        .filter_map(|j| {
+            let paths: Vec<&str> = j.paths.iter().map(String::as_str).collect();
+            let maps = rain_git::line_maps(&j.dir, &j.resolved, Side::New, &j.from, &paths).ok()?;
+            Some((j.repo, maps))
+        })
+        .collect()
 }
 
 /// One line of the dialog's checklist.
@@ -168,7 +192,7 @@ impl App {
             let now = self.repos.first().map_or("", |r| r.resolved_target.as_str());
             self.review.refused = Some(format!(
                 "The diff was reloaded (now at {}) since you opened this. Look at what changed, then finish again.",
-                &now[..now.len().min(7)]
+                rain_core::short_sha(now)
             ));
             return false;
         }
@@ -197,6 +221,7 @@ impl App {
     /// Narrows the reader to the hunks changed after round `n` (`None`: every hunk).
     pub fn set_lens(&mut self, n: Option<u32>, tx: &mut Tx) {
         let Some(n) = n else {
+            self.review.lens_pending = None;
             if self.review.lens.take().is_some() {
                 self.filter.subset = None;
                 self.rebuild_annotations();
@@ -207,7 +232,49 @@ impl App {
             }
             return;
         };
-        if !self.build_lens(n) {
+        self.request_lens(n, true, tx);
+    }
+
+    /// Asks git what changed since round `n`, off the UI thread when the window runs; the lens
+    /// goes up in [`App::finish_lens`]. `announce` scrolls to it and says what it shows.
+    fn request_lens(&mut self, n: u32, announce: bool, tx: &mut Tx) {
+        let Some(round) = self.mirror.rounds.iter().find(|r| r.n == n).cloned() else {
+            return;
+        };
+        let jobs = self.lens_jobs(&round);
+        self.review.lens_pending = Some(n);
+        match (self.texts_tx.clone(), self.wake.clone()) {
+            (Some(sender), Some(wake)) if !jobs.is_empty() => {
+                let installs = self.reloader.installs();
+                self.status = format!("Finding what changed since round {n}");
+                let _ = std::thread::Builder::new().name("rain-lens".into()).spawn(move || {
+                    let maps = run_lens_jobs(jobs);
+                    let _ = sender.send(crate::load::Msg::Lens {
+                        round: n,
+                        installs,
+                        announce,
+                        maps,
+                    });
+                    wake();
+                });
+            }
+            _ => {
+                let maps = run_lens_jobs(jobs);
+                self.finish_lens(n, maps, announce, tx);
+            }
+        }
+    }
+
+    /// Puts up the lens git answered for, unless the user moved on or a reload replaced the diff.
+    pub(crate) fn lens_answered(&mut self, round: u32, installs: u32, announce: bool, maps: LineMaps, tx: &mut Tx) {
+        if self.review.lens_pending == Some(round) && installs == self.reloader.installs() {
+            self.finish_lens(round, maps, announce, tx);
+        }
+    }
+
+    fn finish_lens(&mut self, n: u32, maps: LineMaps, announce: bool, tx: &mut Tx) {
+        self.review.lens_pending = None;
+        if !self.install_lens(n, &maps) || !announce {
             return;
         }
         self.active_mut().scroll_to_file(0, tx);
@@ -219,12 +286,21 @@ impl App {
         );
     }
 
-    /// Builds the lens subset for round `n`; false (with a status) when nothing changed since.
+    /// Builds the lens subset for round `n` on this thread (scenes); false (with a status) when
+    /// nothing changed since.
     pub fn build_lens(&mut self, n: u32) -> bool {
+        let Some(round) = self.mirror.rounds.iter().find(|r| r.n == n) else {
+            return false;
+        };
+        let maps = run_lens_jobs(self.lens_jobs(round));
+        self.install_lens(n, &maps)
+    }
+
+    fn install_lens(&mut self, n: u32, maps: &LineMaps) -> bool {
         let Some(round) = self.mirror.rounds.iter().find(|r| r.n == n).cloned() else {
             return false;
         };
-        let picks = self.changed_since_round(&round);
+        let picks = self.changed_since_round(&round, maps);
         let files: Vec<usize> = picks.keys().copied().collect();
         let hunks = picks.values().map(Vec::len).sum();
         if files.is_empty() {
@@ -249,24 +325,43 @@ impl App {
         true
     }
 
-    /// Per file, the hunks changed after `round`: by git between the round's target and the
-    /// loaded one where the repo has both, else hunks whose text the round's viewed marks lack.
-    fn changed_since_round(&self, round: &ReviewRound) -> BTreeMap<usize, Vec<usize>> {
-        let mut out = BTreeMap::new();
+    /// The full-list files of repo `r`, in list order.
+    fn repo_files(&self, r: usize) -> Vec<usize> {
+        (0..self.keys.len()).filter(|&g| self.diff.files()[g].repo as usize == r).collect()
+    }
+
+    /// The git line maps the lens needs: one per repo with both the round's and the loaded target.
+    fn lens_jobs(&self, round: &ReviewRound) -> Vec<LensJob> {
+        let mut jobs = Vec::new();
         for (r, repo) in self.repos.iter().enumerate() {
-            let files: Vec<usize> = (0..self.keys.len()).filter(|&g| self.diff.files()[g].repo as usize == r).collect();
             let from = round
                 .shas
                 .iter()
                 .find(|s| s.id == repo.id || round.shas.len() == 1)
-                .map(|s| s.target.as_str());
-            let maps = match (from, self.resolved.get(r).and_then(Option::as_ref)) {
-                (Some(from), Some(res)) if !from.is_empty() => {
-                    let paths: Vec<&str> = files.iter().map(|&g| self.diff.files()[g].path.as_str()).collect();
-                    rain_git::line_maps(&repo.dir, res, Side::New, from, &paths).ok()
+                .map(|s| s.target.clone());
+            if let (Some(from), Some(Some(res))) = (from, self.resolved.get(r)) {
+                if from.is_empty() {
+                    continue;
                 }
-                _ => None,
-            };
+                jobs.push(LensJob {
+                    repo: r,
+                    dir: repo.dir.clone(),
+                    resolved: res.clone(),
+                    from,
+                    paths: self.repo_files(r).iter().map(|&g| self.diff.files()[g].path.clone()).collect(),
+                });
+            }
+        }
+        jobs
+    }
+
+    /// Per file, the hunks changed after `round`: by git between the round's target and the
+    /// loaded one where `maps` has the repo, else hunks whose text the round's viewed marks lack.
+    fn changed_since_round(&self, round: &ReviewRound, line_maps: &LineMaps) -> BTreeMap<usize, Vec<usize>> {
+        let mut out = BTreeMap::new();
+        for r in 0..self.repos.len() {
+            let files = self.repo_files(r);
+            let maps = line_maps.get(&r);
             for (i, &g) in files.iter().enumerate() {
                 let f = &self.diff.files()[g];
                 let picked: Vec<usize> = match &maps {
@@ -296,8 +391,8 @@ impl App {
 
     /// Rebuilds the lens after a reload replaced the diff.
     pub(crate) fn reapply_lens(&mut self) {
-        if let Some(l) = self.review.lens.take() {
-            self.build_lens(l.round);
+        if let Some(n) = self.review.lens.take().map(|l| l.round).or(self.review.lens_pending) {
+            self.request_lens(n, false, &mut Tx::default());
         }
     }
 

@@ -52,6 +52,13 @@ pub enum Msg {
         old: Option<Arc<str>>,
         new: Option<Arc<str>>,
     },
+    /// Git's answer for the since-round lens, for the install it was asked under.
+    Lens {
+        round: u32,
+        installs: u32,
+        announce: bool,
+        maps: crate::app::LineMaps,
+    },
 }
 
 /// Reads both sides of a file whole (what `git show` would print), for [`Msg::Texts`].
@@ -468,10 +475,19 @@ pub fn spawn(launch: Launch, shared: Arc<Shared>, tx: std::sync::mpsc::Sender<Ms
                 .unwrap_or("unknown panic");
             Err(format!("loading failed: {why}"))
         });
+        let warm = needs_warm(&data);
         send(Msg::Done(Box::new(data)));
-        rain_syntax::warm();
+        if warm {
+            rain_syntax::warm();
+        }
         send(Msg::Warm);
     });
+}
+
+/// Whether a loaded file is coloured by syntect, which is worth warming before colour goes on.
+fn needs_warm(data: &Result<Data, String>) -> bool {
+    data.as_ref()
+        .is_ok_and(|d| d.files.iter().any(|f| !rain_syntax::fast_covers(rain_diffview::language(&f.path))))
 }
 
 /// Where the session file lives for `launch`: the named session, else the fixture's or first

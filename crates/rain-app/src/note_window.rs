@@ -71,12 +71,19 @@ pub(crate) fn register(app: &mut rune::App<App>, main: AppHandle<App>) {
         min_size: Some((420.0, 220.0)),
         ..AppSpec::new("Rain · Intent", (640.0, 420.0), NoteWindow::default, view)
     };
-    let spec = WindowSpec::new("note", spec).options(WindowOptions {
+    let spec = WindowSpec::from_app("note", rune::App::new(spec).on_close(on_close)).options(WindowOptions {
         visible: false,
         ..WindowOptions::default()
     });
     let window = app.window(spec);
     let _ = HANDLES.set(Handles { window, main });
+}
+
+/// Esc, the close button or Bring back: the note shows inline again.
+fn on_close(_: &mut NoteWindow, _: &mut Tx) {
+    if let Some(h) = HANDLES.get() {
+        h.main.update(|s: &mut App, _| s.popped_note = None);
+    }
 }
 
 fn on_key(_: &mut NoteWindow, ev: &KeyEvent, tx: &mut Tx) -> bool {

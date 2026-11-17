@@ -428,20 +428,47 @@ pub fn diff(repo: &Path, repo_index: u16, r: &Resolved, opts: &DiffOpts) -> Resu
     Ok(diff_patch(repo, repo_index, r, opts)?.files)
 }
 
-/// Untracked, non-ignored files as Added diffs read from disk (the index is left alone).
+/// Untracked files bigger than this aren't read: they list as "contents unavailable", the way
+/// git treats files over `core.bigFileThreshold` as binary.
+pub const UNTRACKED_MAX_BYTES: u64 = 16 * 1024 * 1024;
+
+/// Untracked, non-ignored files as Added diffs read from disk (the index is left alone). One that
+/// can't be read (locked, access denied) or is over [`UNTRACKED_MAX_BYTES`] lists with no contents.
 pub fn untracked(repo: &Path, repo_index: u16) -> Result<Vec<FileDiff>, GitError> {
     let out = cmd::run(repo, &["ls-files", "--others", "--exclude-standard", "-z"])?;
     let mut files = Vec::new();
     // A trailing '/' is a nested repository, not a file.
     for raw in out.split(|&b| b == 0).filter(|p| !p.is_empty() && !p.ends_with(b"/")) {
         let path = String::from_utf8_lossy(raw).into_owned();
-        match std::fs::read(repo.join(&path)) {
-            Ok(bytes) => files.push(added_file(repo_index, path, &bytes)),
+        match read_capped(&repo.join(&path)) {
+            Ok(Some(bytes)) => files.push(added_file(repo_index, path, &bytes)),
+            Ok(None) => files.push(unavailable_file(repo_index, path)),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => return Err(e.into()),
+            Err(e) => {
+                eprintln!("Rain: untracked {path} can't be read: {e}");
+                files.push(unavailable_file(repo_index, path));
+            }
         }
     }
     Ok(files)
+}
+
+/// The file's bytes, or `None` when it is over [`UNTRACKED_MAX_BYTES`].
+fn read_capped(path: &Path) -> std::io::Result<Option<Vec<u8>>> {
+    use std::io::Read;
+    let f = std::fs::File::open(path)?;
+    if f.metadata()?.len() > UNTRACKED_MAX_BYTES {
+        return Ok(None);
+    }
+    let mut bytes = Vec::new();
+    f.take(UNTRACKED_MAX_BYTES + 1).read_to_end(&mut bytes)?;
+    Ok((bytes.len() as u64 <= UNTRACKED_MAX_BYTES).then_some(bytes))
+}
+
+fn unavailable_file(repo_index: u16, path: String) -> FileDiff {
+    let mut b = FileDiffBuilder::new(repo_index, path, FileStatus::Added);
+    b.file_mut().contents_unavailable = true;
+    b.finish()
 }
 
 /// A whole file as one all-Added hunk; binary (a NUL in the first 8 KiB) has no lines.

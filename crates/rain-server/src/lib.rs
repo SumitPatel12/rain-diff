@@ -6,6 +6,7 @@ use std::io::{self, Read};
 use std::net::TcpListener;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use rain_core::{Session, Shared};
 use serde::Serialize;
@@ -14,7 +15,7 @@ use tiny_http::{Header, Method, Request, Response, Server};
 
 mod routes;
 
-pub use routes::lock::{Lock, lock_path, read_lock};
+pub use routes::lock::{Lock, lock_path, pid_alive, read_lock};
 pub use routes::overview::{overview_state, parse_links, set_overview};
 
 /// difit's default port; taken ports are skipped upwards.
@@ -25,6 +26,9 @@ pub const BODY_LIMIT: u64 = 50 * 1024 * 1024;
 /// `GET /api/events` waits this many seconds by default, and at most the max.
 pub const EVENTS_TIMEOUT: u64 = 25;
 pub const EVENTS_MAX_TIMEOUT: u64 = 60;
+/// Requests served at once (each on its own thread, long polls included); more get a 503, so a
+/// runaway client can't pile up threads and request bodies.
+pub const MAX_IN_FLIGHT: usize = 32;
 
 #[derive(Clone, Debug, Default)]
 pub struct ServerOptions {
@@ -44,7 +48,20 @@ pub struct ServerHandle {
     pub url: String,
     /// `sessions/<id>.lock` while the server runs; `None` for an in-memory session.
     pub lock: Option<PathBuf>,
+    /// Another live window holds the session's lock, so this one serves it but never saves it.
+    pub read_only: bool,
     servers: Vec<Arc<Server>>,
+}
+
+impl ServerHandle {
+    /// Stops serving, runs `last` (the final save), then lets go of the lock, so a window opened
+    /// next can't read the session file before that save lands.
+    pub fn stop_then(self, last: impl FnOnce()) {
+        for s in &self.servers {
+            s.unblock();
+        }
+        last();
+    }
 }
 
 impl Drop for ServerHandle {
@@ -73,36 +90,41 @@ pub fn start(shared: Arc<Shared>, preferred: Option<u16>) -> io::Result<ServerHa
 pub fn start_with(shared: Arc<Shared>, opts: ServerOptions) -> io::Result<ServerHandle> {
     let (servers, port) = bind(opts.preferred)?;
     let mut lock = opts.session_file.as_deref().map(lock_path);
-    if let Some(path) = &lock {
-        match routes::lock::read_lock(path).filter(|l| l.pid != std::process::id() && !l.is_stale()) {
-            Some(live) => {
-                eprintln!(
-                    "Rain: another window (pid {}, port {}) holds {}; this one leaves its lock alone",
-                    live.pid,
-                    live.port,
-                    path.display()
-                );
-                lock = None;
-            }
-            None => routes::lock::write(path, port),
-        }
+    let mut session_file = opts.session_file;
+    let mut read_only = false;
+    if let Some(path) = &lock
+        && let Err(live) = routes::lock::acquire(path, port)
+    {
+        eprintln!(
+            "Rain: another window (pid {}, port {}) holds {}; this one won't save the session",
+            live.pid,
+            live.port,
+            path.display()
+        );
+        lock = None;
+        session_file = None;
+        read_only = true;
     }
     let ctx = Arc::new(Ctx {
         port,
         shared,
-        session_file: opts.session_file,
+        session_file,
         repo_folder: opts.repo_folder,
         lock: lock.clone(),
+        in_flight: AtomicUsize::new(0),
     });
     for server in &servers {
         let server = server.clone();
         let ctx = ctx.clone();
         std::thread::Builder::new().name(format!("rain-http-{port}")).spawn(move || {
             for req in server.incoming_requests() {
-                let ctx = ctx.clone();
+                let Some(slot) = Slot::take(&ctx) else {
+                    respond(req, error(503, "Too many requests at once"));
+                    continue;
+                };
                 let _ = std::thread::Builder::new()
                     .name("rain-http-req".into())
-                    .spawn(move || handle(&ctx, req));
+                    .spawn(move || handle(&slot.0, req));
             }
         })?;
     }
@@ -110,6 +132,7 @@ pub fn start_with(shared: Arc<Shared>, opts: ServerOptions) -> io::Result<Server
         port,
         url: format!("http://localhost:{port}"),
         lock,
+        read_only,
         servers,
     })
 }
@@ -118,11 +141,123 @@ fn boxed(e: Box<dyn std::error::Error + Send + Sync>) -> io::Error {
     io::Error::other(e.to_string())
 }
 
-/// Another process listens on the wildcard address. Checked first because Windows lets a
-/// loopback bind succeed next to someone else's wildcard listener (Node binds `::`).
+/// Another process holds the wildcard address. Checked first because Windows lets a loopback
+/// bind succeed next to someone else's wildcard listener (Node binds `::`).
 fn wildcard_taken(port: u16, v6: bool) -> bool {
-    let taken = |addr: &str| TcpListener::bind(addr).is_err_and(|e| e.kind() == io::ErrorKind::AddrInUse);
-    taken(&format!("0.0.0.0:{port}")) || (v6 && taken(&format!("[::]:{port}")))
+    probe::wildcard_in_use(port, false) || (v6 && probe::wildcard_in_use(port, true))
+}
+
+/// Binds the wildcard address without listening, so Windows Firewall never sees a listener (and
+/// never prompts) and nothing is reachable from the network, even briefly.
+#[cfg(windows)]
+mod probe {
+    type Socket = usize;
+    const INVALID_SOCKET: Socket = !0;
+    const AF_INET: u16 = 2;
+    const AF_INET6: u16 = 23;
+    const SOCK_STREAM: i32 = 1;
+    const IPPROTO_TCP: i32 = 6;
+    const WSAEADDRINUSE: i32 = 10048;
+
+    #[repr(C)]
+    struct In4 {
+        family: u16,
+        port: u16,
+        addr: [u8; 4],
+        zero: [u8; 8],
+    }
+
+    #[repr(C)]
+    struct In6 {
+        family: u16,
+        port: u16,
+        flow: u32,
+        addr: [u8; 16],
+        scope: u32,
+    }
+
+    #[link(name = "ws2_32")]
+    unsafe extern "system" {
+        fn socket(af: i32, ty: i32, protocol: i32) -> Socket;
+        fn bind(s: Socket, name: *const u8, len: i32) -> i32;
+        fn closesocket(s: Socket) -> i32;
+        fn WSAGetLastError() -> i32;
+    }
+
+    /// Winsock is already started: `bind` opens a std socket on `[::1]` before probing.
+    pub(super) fn wildcard_in_use(port: u16, v6: bool) -> bool {
+        match bind_wildcard(port, v6) {
+            Ok(s) => {
+                // SAFETY: `s` is a socket this function owns.
+                unsafe { closesocket(s) };
+                false
+            }
+            Err(e) => e == WSAEADDRINUSE,
+        }
+    }
+
+    /// A TCP socket bound to the wildcard address and `port`, not listening; the caller closes it.
+    pub(super) fn bind_wildcard(port: u16, v6: bool) -> Result<Socket, i32> {
+        let family = if v6 { AF_INET6 } else { AF_INET };
+        let v4 = In4 {
+            family,
+            port: port.to_be(),
+            addr: [0; 4],
+            zero: [0; 8],
+        };
+        let v6addr = In6 {
+            family,
+            port: port.to_be(),
+            flow: 0,
+            addr: [0; 16],
+            scope: 0,
+        };
+        // SAFETY: the socket is checked, bound to a live local address of the stated size, and
+        // closed on failure.
+        unsafe {
+            let s = socket(i32::from(family), SOCK_STREAM, IPPROTO_TCP);
+            if s == INVALID_SOCKET {
+                return Err(WSAGetLastError());
+            }
+            let r = if v6 {
+                bind(s, (&raw const v6addr).cast(), size_of::<In6>() as i32)
+            } else {
+                bind(s, (&raw const v4).cast(), size_of::<In4>() as i32)
+            };
+            if r != 0 {
+                let e = WSAGetLastError();
+                closesocket(s);
+                return Err(e);
+            }
+            Ok(s)
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn a_bound_wildcard_port_reads_as_in_use() {
+            let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+            let held = bind_wildcard(port, false).unwrap();
+            assert!(wildcard_in_use(port, false));
+            // SAFETY: `held` is the socket bound above.
+            unsafe { closesocket(held) };
+            assert!(!wildcard_in_use(port, false));
+        }
+    }
+}
+
+#[cfg(not(windows))]
+mod probe {
+    use std::io;
+    use std::net::TcpListener;
+
+    pub(super) fn wildcard_in_use(port: u16, v6: bool) -> bool {
+        let addr = if v6 { format!("[::]:{port}") } else { format!("0.0.0.0:{port}") };
+        TcpListener::bind(addr).is_err_and(|e| e.kind() == io::ErrorKind::AddrInUse)
+    }
 }
 
 fn bind(preferred: Option<u16>) -> io::Result<(Vec<Arc<Server>>, u16)> {
@@ -166,6 +301,26 @@ pub(crate) struct Ctx {
     session_file: Option<PathBuf>,
     pub(crate) repo_folder: Option<String>,
     pub(crate) lock: Option<PathBuf>,
+    in_flight: AtomicUsize,
+}
+
+/// One of [`MAX_IN_FLIGHT`] request threads; given back on drop.
+struct Slot(Arc<Ctx>);
+
+impl Slot {
+    fn take(ctx: &Arc<Ctx>) -> Option<Slot> {
+        if ctx.in_flight.fetch_add(1, Ordering::AcqRel) >= MAX_IN_FLIGHT {
+            ctx.in_flight.fetch_sub(1, Ordering::AcqRel);
+            return None;
+        }
+        Some(Slot(ctx.clone()))
+    }
+}
+
+impl Drop for Slot {
+    fn drop(&mut self) {
+        self.0.in_flight.fetch_sub(1, Ordering::AcqRel);
+    }
 }
 
 impl Ctx {
@@ -240,7 +395,9 @@ fn header<'a>(req: &'a Request, name: &'static str) -> Option<&'a str> {
 /// Only local non-browser clients may talk to the session: comments read back from here become an
 /// agent's instructions, so a web page (cross-origin form post, DNS rebinding) must not reach it.
 fn refuse_foreign(req: &Request, port: u16) -> Option<Reply> {
-    if header(req, "Origin").is_some() {
+    // Browsers send Sec-Fetch-* on no-cors GETs (`<img src>`), which carry no Origin.
+    let browser = ["Origin", "Sec-Fetch-Site", "Sec-Fetch-Mode", "Sec-Fetch-Dest"];
+    if browser.iter().any(|h| header(req, h).is_some()) {
         return Some(error(403, "Browser requests are not accepted"));
     }
     let host_ok = header(req, "Host").is_some_and(|h| {

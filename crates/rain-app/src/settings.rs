@@ -241,12 +241,25 @@ impl Settings {
     pub fn parse(bytes: &[u8]) -> Result<Settings, serde_json::Error> {
         let raw: serde_json::Value = serde_json::from_slice(bytes)?;
         let mut s: Settings = serde_json::from_value(raw.clone())?;
+        s.clamp();
         let Some(obj) = raw.as_object() else { return Ok(s) };
         if !obj.contains_key("layout") && obj.get("splitView") == Some(&serde_json::Value::Bool(false)) {
             s.layout = ViewLayout::Unified;
         }
         s.migrated = LEGACY_KEYS.iter().any(|k| obj.contains_key(*k));
         Ok(s)
+    }
+
+    /// Keeps hand-edited durations where `Duration` and `Instant` arithmetic can't overflow.
+    fn clamp(&mut self) {
+        const DAY_SECS: u64 = 86_400;
+        let b = &mut self.break_reminder;
+        b.minutes = b.minutes.clamp(0.05, 1440.0);
+        b.snooze_minutes = b.snooze_minutes.clamp(0.05, 1440.0);
+        let a = &mut self.ask;
+        a.timeout_sec = a.timeout_sec.clamp(1, DAY_SECS);
+        a.handoff_sec = a.handoff_sec.min(DAY_SECS);
+        a.max_concurrent = a.max_concurrent.clamp(1, 64);
     }
 
     pub fn save(&self, path: &Path) -> std::io::Result<()> {
@@ -332,6 +345,19 @@ mod tests {
         assert_eq!(s.ask.command, DEFAULT_ASK_COMMAND);
         let out = serde_json::to_string(&s).unwrap();
         assert!(out.contains(r#""timeoutSec":30"#) && out.contains(r#""maxConcurrent":1"#), "{out}");
+    }
+
+    #[test]
+    fn huge_hand_edited_durations_are_clamped_on_load() {
+        let s = Settings::parse(
+            br#"{"breakReminder": {"minutes": 1e300, "snoozeMinutes": -5},
+                 "ask": {"timeoutSec": 18446744073709551615, "handoffSec": 18446744073709551615, "maxConcurrent": 0}}"#,
+        )
+        .unwrap();
+        assert_eq!((s.break_reminder.minutes, s.break_reminder.snooze_minutes), (1440.0, 0.05));
+        assert_eq!((s.ask.timeout_sec, s.ask.handoff_sec, s.ask.max_concurrent), (86_400, 86_400, 1));
+        let _ = std::time::Instant::now() + std::time::Duration::from_secs(s.ask.handoff_sec);
+        let _ = std::time::Duration::from_secs_f64(s.break_reminder.minutes * 60.0);
     }
 
     #[test]

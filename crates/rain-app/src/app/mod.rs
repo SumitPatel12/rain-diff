@@ -66,7 +66,7 @@ pub use picker::PickerState;
 pub use reload::{ReloadCounts, ReloadState, Stale};
 #[cfg(test)]
 pub(crate) use remote::APPLY_CALLS;
-pub use review::{ReviewState, VERDICTS, verdict_label};
+pub use review::{LineMaps, ReviewState, VERDICTS, verdict_label};
 pub use ruler::RulerState;
 pub(crate) use session::{comment_counts, file_of_thread};
 pub use tour::{FoundBy, TourStage, TourState};
@@ -97,6 +97,7 @@ pub struct PaletteState {
     pub open: bool,
     pub edit: TextEdit,
     pub sel: usize,
+    pub cache: std::cell::RefCell<crate::palette::Cache>,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -206,17 +207,16 @@ impl App {
         }
         let id = load::session_id(&launch);
         let session_path = session_dir.map(|d| rain_comments::SessionFile::path_in(&d, &id));
+        let mut session_error = None;
         if let Some(path) = &session_path {
             let mut s = shared.lock();
             if s.id.is_empty() && s.threads.is_empty() && s.viewed.is_empty() {
                 let loaded = if launch.clean {
                     Session::default()
                 } else {
-                    // Moved aside, not dropped: autosave would otherwise write the empty session over it.
-                    rain_comments::SessionFile::load(path).unwrap_or_else(|e| {
-                        let kept = path.with_extension("json.corrupt");
-                        eprintln!("Rain: {} is unreadable ({e}); kept as {}", path.display(), kept.display());
-                        let _ = std::fs::rename(path, &kept);
+                    load_session(path).unwrap_or_else(|e| {
+                        eprintln!("Rain: {e}");
+                        session_error = Some(e);
                         Session::default()
                     })
                 };
@@ -232,7 +232,13 @@ impl App {
         }
         let autosave = session_path
             .clone()
+            .filter(|_| !launch.read_only && session_error.is_none())
             .map(|p| rain_comments::autosave(shared.clone(), p, std::time::Duration::from_millis(400)));
+        let status = if launch.read_only {
+            "Another Rain window has this session open: changes here won't be saved".to_owned()
+        } else {
+            session_error.or(settings_error).unwrap_or_default()
+        };
         let goto = launch.goto.clone();
         if settings.migrated
             && let Some(p) = &settings_path
@@ -297,7 +303,7 @@ impl App {
             diff_width: f32::MAX,
             window_width: 0.0,
             window_size: None,
-            status: settings_error.unwrap_or_default(),
+            status,
             warm: false,
             hl_palette: None,
             seen_scheme: Cell::new(Scheme::Dark),
@@ -337,11 +343,23 @@ impl App {
     pub fn load_now(&mut self) {
         match load::load(&self.launch, &self.shared, &|_| {}) {
             Ok(d) => self.install(d),
-            Err(e) => self.phase = Phase::Error(e),
+            Err(e) => self.load_failed(e),
         }
         rain_syntax::warm();
         self.warm = true;
         self.hl_palette = None;
+    }
+
+    /// A first load that fails shows the error screen; a reload keeps the reader and says why.
+    fn load_failed(&mut self, e: String) {
+        if self.phase != Phase::Ready {
+            self.phase = Phase::Error(e);
+            return;
+        }
+        let msg = format!("Reload failed: {}", e.lines().next().unwrap_or_default());
+        self.reloader.counts = None;
+        self.reloader.toast = Some((msg.clone(), Instant::now()));
+        self.status = msg;
     }
 
     pub fn reload(&mut self) {
@@ -355,6 +373,10 @@ impl App {
     pub fn install(&mut self, d: Data) {
         let before = self.before_install();
         let keep = self.current_key();
+        // Its file index points into the old diff: keep the text as Esc does, before the swap.
+        if self.composer.is_some() {
+            self.cancel_composer();
+        }
         self.repos = d.repos;
         self.resolved = d.resolved;
         self.keys = d.keys;
@@ -370,11 +392,11 @@ impl App {
         self.diff = diff;
         self.install_excerpt_source();
         self.filter.subset = None;
-        self.composer = None;
         self.mirror = self.shared.lock().clone();
         self.seen_version = self.mirror.version;
         self.seen_overview_version = self.mirror.overview_version;
         self.recompute_viewed();
+        self.drop_hidden_reply();
         self.rebuild_overview_views();
         self.install_brief_facts(&d.triage);
         self.settle_reader_tab();
@@ -470,13 +492,19 @@ impl App {
                             // The diff lands at once: fading its rows in costs 25-50 ms a frame.
                             tx.instant();
                         }
-                        Err(e) => self.phase = Phase::Error(e),
+                        Err(e) => self.load_failed(e),
                     },
                     Msg::Warm => {
                         self.warm = true;
                         self.hl_palette = None;
                     }
                     texts @ Msg::Texts { .. } => self.install_texts(texts),
+                    Msg::Lens {
+                        round,
+                        installs,
+                        announce,
+                        maps,
+                    } => self.lens_answered(round, installs, announce, maps, tx),
                 }
             }
         }
@@ -746,6 +774,8 @@ impl App {
         self.palette.edit = TextEdit::default();
         self.palette.edit.focused = true;
         self.palette.sel = 0;
+        // Rebuilt on opening, for whatever changed while it was closed.
+        *self.palette.cache.borrow_mut() = crate::palette::Cache::default();
     }
 
     pub fn close_palette(&mut self) {
@@ -861,11 +891,7 @@ impl App {
             Command::ViewedAndNext => self.viewed_and_next(tx),
             Command::ToggleViewed => self.toggle_viewed_current(),
             Command::MarkGroupViewed => self.accept_group(tx),
-            Command::UndoAccept => {
-                if !self.undo_delete(tx) {
-                    self.undo_accept(tx);
-                }
-            }
+            Command::UndoAccept => self.undo_latest(tx),
             Command::ToggleSplit => self.toggle_split(),
             Command::LayoutAuto => self.set_layout(ViewLayout::Auto),
             Command::ToggleReaderMode => self.toggle_reader_mode(tx),
@@ -934,5 +960,36 @@ impl App {
             || self.tree.filter_edit.focused
             || self.review.summary.focused
             || (self.picker.edit.focused && self.layout.is_open(Overlay::Picker))
+    }
+}
+
+/// The saved session at `path`; a corrupt one is moved aside first. `Err` means the file is
+/// still there unread, so nothing may autosave over it.
+fn load_session(path: &std::path::Path) -> Result<Session, String> {
+    let mut tries = 0;
+    let err = loop {
+        match rain_comments::SessionFile::load(path) {
+            Ok(s) => return Ok(s),
+            // Sharing violations from antivirus or another saver pass.
+            Err(e) if tries < 5 && matches!(e.raw_os_error(), Some(5 | 32)) => {
+                tries += 1;
+                std::thread::sleep(std::time::Duration::from_millis(20 * tries));
+            }
+            Err(e) => break e,
+        }
+    };
+    if err.kind() != std::io::ErrorKind::InvalidData {
+        return Err(format!("{} could not be read ({err}); changes are not saved", path.display()));
+    }
+    let kept = path.with_extension("json.corrupt");
+    match std::fs::rename(path, &kept) {
+        Ok(()) => {
+            eprintln!("Rain: {} is unreadable ({err}); kept as {}", path.display(), kept.display());
+            Ok(Session::default())
+        }
+        Err(e) => Err(format!(
+            "{} is unreadable ({err}) and could not be moved aside ({e}); changes are not saved",
+            path.display()
+        )),
     }
 }

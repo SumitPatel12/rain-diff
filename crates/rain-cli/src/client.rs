@@ -326,18 +326,21 @@ fn comment_reply(
         Err(e) => return report(Err(e)),
     };
     let v: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
-    let warnings: Vec<String> = v
-        .get("warnings")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|w| w.as_str().map(str::to_owned))
-        .collect();
     println!("{text}");
-    for w in &warnings {
+    warnings_exit(&v)
+}
+
+/// `comment add` and `comment reply` exit with this when the server took the request but some
+/// imports didn't apply (its `warnings`).
+pub const EXIT_WARNINGS: i32 = 3;
+
+/// Prints each import warning as an error; [`EXIT_WARNINGS`] when there were any, else 0.
+fn warnings_exit(reply: &Value) -> i32 {
+    let warnings = reply["warnings"].as_array().map_or(&[][..], Vec::as_slice);
+    for w in warnings.iter().filter_map(Value::as_str) {
         eprintln!("Error: {w}");
     }
-    i32::from(!warnings.is_empty())
+    if warnings.is_empty() { 0 } else { EXIT_WARNINGS }
 }
 
 /// `GET /api/events`: prints the change and exits 0, or exits 2 when the wait timed out.
@@ -522,7 +525,7 @@ fn comment_add(a: &CommentAdd, port: u16) -> i32 {
                 v.get("warnings").cloned().unwrap_or(json!([])),
             );
             println!("{out}");
-            0
+            warnings_exit(&v)
         }
         Ok((_, text)) => {
             eprintln!("Error: {}", error_of(&text).unwrap_or_else(|| "Failed to add comments".into()));
@@ -1171,13 +1174,14 @@ fn close(port: u16, timeout: Duration) -> i32 {
     if let Err(e) = http.json("POST", "/api/close", Some("{}".into()), "Failed to close") {
         return report(Err(e));
     }
+    // The process, not just the port: the window writes its final save after it stops serving.
     let gone = || {
-        rain_server::Lock {
+        let lock = rain_server::Lock {
             port,
             pid,
             started_at: String::new(),
-        }
-        .is_stale()
+        };
+        lock.is_stale() && !rain_server::pid_alive(pid)
     };
     let started = Instant::now();
     let mut nudged = false;
@@ -1291,6 +1295,13 @@ mod tests {
             "Cannot read nope/missing.md"
         );
         let _ = std::fs::remove_file(f);
+    }
+
+    #[test]
+    fn import_warnings_exit_alike_for_add_and_reply() {
+        assert_eq!(warnings_exit(&json!({ "success": true, "warnings": [] })), 0);
+        assert_eq!(warnings_exit(&json!({ "success": true })), 0);
+        assert_eq!(warnings_exit(&json!({ "warnings": ["No thread with id k3."] })), EXIT_WARNINGS);
     }
 
     #[test]

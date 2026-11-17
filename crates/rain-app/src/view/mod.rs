@@ -47,6 +47,7 @@ pub(crate) fn toolbar_title(s: &App) -> String {
 #[cfg(test)]
 pub(crate) use overview::{cite_target, demote_headings, inline_cites, link_cites, parse_cite};
 pub(crate) use peek::code as peek_code;
+pub(crate) use weather::{Motion as WeatherMotion, moved as weather_moved};
 
 pub fn scheme_of(s: &App, cx: &Cx<App>) -> Scheme {
     s.settings.theme.scheme(cx.system_dark())
