@@ -15,7 +15,8 @@ review rounds in a session file. It is built for reviewing alongside a coding ag
 
 An agent drives a running window over HTTP or the CLI; see [docs/agent.md](docs/agent.md). Rain also serves
 difit's comment routes, so tooling written for difit can read comments back unchanged
-([docs/compat.md](docs/compat.md)).
+([docs/compat.md](docs/compat.md)). A ready-to-copy Claude Code skill that drives Rain lives in
+[skills/rain/](skills/rain/).
 
 ## Build and run
 
