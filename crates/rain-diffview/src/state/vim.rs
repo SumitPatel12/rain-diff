@@ -219,6 +219,13 @@ impl DiffState {
         self.sync_visual();
     }
 
+    /// A click on row `r`'s code on `side`, `col` display columns in: the cursor goes there.
+    pub(crate) fn click_code(&mut self, r: u32, side: Side, col: u32, tx: &mut Tx) {
+        let byte = self.row_text(r, side).map_or(0, |t| Want::Col(col).byte_in(t));
+        self.land(r, side, byte, false, tx);
+        self.want = Want::Here;
+    }
+
     pub(super) fn land_at_want(&mut self, r: u32, side: Side, tx: &mut Tx) {
         let col = self.row_text(r, side).map_or(0, |t| self.want.byte_in(t));
         self.land(r, side, col, true, tx);

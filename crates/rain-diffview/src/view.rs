@@ -1121,7 +1121,7 @@ impl<S: 'static> View<S> {
             .label(label)
             .child(gutter)
             .child(
-                self.code(st, f, &c, copy, hover_side, key, marks.block_on(None), marks.vis_on(None))
+                self.code(st, i, f, &c, copy, hover_side, key, marks.block_on(None), marks.vis_on(None))
                     .key("code"),
             );
         if marks.cursor {
@@ -1174,8 +1174,18 @@ impl<S: 'static> View<S> {
                 .child(self.number(st, i, f, n, side, selected, marks.cursor, digits).key("n"))
                 .child(self.sign(if calm { LineKind::Context } else { kind }, SIGN.1))
                 .child(
-                    self.code(st, f, &cell, copy, side, key, marks.block_on(Some(side)), marks.vis_on(Some(side)))
-                        .key("code"),
+                    self.code(
+                        st,
+                        i,
+                        f,
+                        &cell,
+                        copy,
+                        side,
+                        key,
+                        marks.block_on(Some(side)),
+                        marks.vis_on(Some(side)),
+                    )
+                    .key("code"),
                 );
             if marks.range[side as usize] {
                 h = h.child(self.range_bar().absolute(MARKS + l.number_w(digits) - RANGE_BAR, 0.0));
@@ -1275,6 +1285,7 @@ impl<S: 'static> View<S> {
     fn code(
         &self,
         st: &DiffState,
+        i: usize,
         f: usize,
         c: &Cell<'_>,
         copy: bool,
@@ -1296,6 +1307,7 @@ impl<S: 'static> View<S> {
             text: l.text,
             bg: l.bg,
         };
+        let has_block = block.is_some();
         let m = LineMarks {
             spans: st.span_marks(f, LineRef::new(src, n)),
             found,
@@ -1303,6 +1315,26 @@ impl<S: 'static> View<S> {
             block,
         };
         let (shown, spans, pads, lit) = drawn(c.text, spans, m, st.wraps(), &paint);
+        let cell_w = rune::text::advance("0", l.font);
+        // The highlight under the block has round corners; a square behind it fills them.
+        let square = (has_block && !st.wraps())
+            .then(|| lit.last().map(TextHighlight::range))
+            .flatten()
+            .map(|r| {
+                let head = &shown[..r.start];
+                let x = if head.len() <= 4096 {
+                    rune::text::advance(head, l.font)
+                } else {
+                    cell_w * head.chars().count() as f32
+                };
+                let w = rune::text::advance(&shown[r], l.font).max(cell_w);
+                el().key("block")
+                    .absolute(x, 0.0)
+                    .w(w)
+                    .h(l.font.line_height)
+                    .fill(l.text)
+                    .a11y_hidden()
+            });
         let mut t = rich(shown, spans).font(l.font).color(l.text).key("text");
         t = if st.wraps() { t.w_full() } else { t.single_line() };
         if !lit.is_empty() {
@@ -1312,19 +1344,33 @@ impl<S: 'static> View<S> {
             t = t.selectable(true).selection_color(l.selection);
             t = pads.into_iter().fold(t, |t, r| t.uncopied(r));
         }
+        let t = match square {
+            Some(b) => el().key("cell").child(b).child(t),
+            None => t,
+        };
         let (get, cell) = (self.d.get_mut.clone(), format!("{row_key}.{}", side as u8));
-        let mut code =
-            col()
-                .grow(1.0)
-                .min_w(0.0)
-                .pl(CODE_PAD.0)
-                .pr(CODE_PAD.1)
-                .child(t)
-                .on_hover_change(move |s: &mut S, inside, tx: &mut Tx| {
-                    if !get(s).hover_text(side, &cell, inside) {
-                        tx.live_only();
-                    }
-                });
+        let (aim, click) = (self.d.get_mut.clone(), self.d.get_mut.clone());
+        let row_at = i as u32;
+        let mut code = col()
+            .grow(1.0)
+            .min_w(0.0)
+            .pl(CODE_PAD.0)
+            .pr(CODE_PAD.1)
+            .child(t)
+            .on_pointer_move_local(move |s: &mut S, p, tx: &mut Tx| {
+                aim(s).pointer_x = p.x - CODE_PAD.0;
+                tx.live_only();
+            })
+            .on_press_tx(move |s: &mut S, tx: &mut Tx| {
+                let st = click(s);
+                let col = (st.pointer_x / cell_w).max(0.0) as u32;
+                st.click_code(row_at, side, col, tx);
+            })
+            .on_hover_change(move |s: &mut S, inside, tx: &mut Tx| {
+                if !get(s).hover_text(side, &cell, inside) {
+                    tx.live_only();
+                }
+            });
         if c.no_newline {
             code = code.child(
                 text("No newline at end of file")

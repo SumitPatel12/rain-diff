@@ -393,6 +393,8 @@ pub struct DiffState {
     cursor: Option<(usize, LineRef)>,
     /// The cursor's byte in its line, kept on a grapheme's start as the line is read.
     col: usize,
+    /// The pointer's x over a line's code, for a click to put the cursor under it.
+    pub(crate) pointer_x: f32,
     /// The column `j` and `k` aim for (Vim's curswant).
     want: Want,
     /// A count or the first key of `gg`, `yy`, `f{c}`.
@@ -492,6 +494,7 @@ impl DiffState {
             span: None,
             cursor: None,
             col: 0,
+            pointer_x: 0.0,
             want: Want::Here,
             pending: Pending::default(),
             last_find: None,
