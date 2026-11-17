@@ -41,19 +41,29 @@ fn put_cursor(rt: &mut Runtime<App>, g: usize, side: Side, line: u32) {
 }
 
 #[test]
-fn y_copies_the_cursor_location_and_maps_old_lines_to_new() {
+fn shift_y_copies_the_cursor_location_and_maps_old_lines_to_new() {
     let (_dir, a) = scratch();
     let g = file_index(&a, "a.cs");
     let mut rt = runtime(a);
     let clipboard = rune::clipboard::memory();
     rt.use_clipboard(&clipboard);
+    let shift_y = |rt: &mut Runtime<App>| {
+        press(
+            rt,
+            Key::Text("Y".into()),
+            Mods {
+                shift: true,
+                ..Mods::default()
+            },
+        )
+    };
     put_cursor(&mut rt, g, Side::New, 40);
-    typed(&mut rt, "y");
+    shift_y(&mut rt);
     assert_eq!(clipboard.text().as_deref().map(String::as_str), Some("a.cs:40"));
     assert_eq!(rt.state.status, "Copied a.cs:40");
 
     put_cursor(&mut rt, g, Side::Old, 40);
-    typed(&mut rt, "y");
+    shift_y(&mut rt);
     assert_eq!(rt.state.status, "Copied a.cs:40", "the removed line maps to where it went");
 
     rt.update(|s, tx| {
@@ -61,7 +71,7 @@ fn y_copies_the_cursor_location_and_maps_old_lines_to_new() {
         s.active_mut().set_cursor(None);
     });
     settle(&mut rt);
-    typed(&mut rt, "y");
+    shift_y(&mut rt);
     assert_eq!(rt.state.status, "Copied a.cs", "no cursor: the file");
 }
 
@@ -168,13 +178,13 @@ fn split_reads_unified_below_the_minimum_columns_a_side_and_comes_back_when_wide
 fn hiding_the_list_widens_the_reader_and_is_remembered() {
     let mut rt = sized_runtime(app(story(), true), (1920.0, 1080.0));
     let before = rt.state.diff_width;
-    typed(&mut rt, "l");
+    press(&mut rt, Key::Text("b".into()), ctrl());
     assert!(!rt.state.sidebar.is_open());
     assert!(rt.find("rail").is_none(), "no rail: the reader takes the whole row");
     assert!(rt.state.diff_width > before + 200.0, "{before} -> {}", rt.state.diff_width);
     let path = rt.state.settings_path.clone().unwrap();
     assert!(!Settings::load(&path).list_open, "saved");
-    typed(&mut rt, "l");
+    press(&mut rt, Key::Text("b".into()), ctrl());
     assert!(rt.state.sidebar.is_open());
     assert!(rt.find("rail").is_none());
 }

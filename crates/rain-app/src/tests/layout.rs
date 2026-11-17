@@ -46,11 +46,11 @@ fn zoomed_keys_switch_tabs_and_open_files_and_map_as_overlays() {
     rt.update(|s, _| s.toggle_zoom());
     settle(&mut rt);
     assert!(rt.find("tab-strip").is_none(), "zoom hides the tabs");
-    typed(&mut rt, "b");
+    typed(&mut rt, "o");
     assert_eq!(rt.state.reader_tab(), crate::app::ReaderTab::Overview);
-    assert!(rt.find("overview").is_some(), "b still switches to the Overview");
+    assert!(rt.find("overview").is_some(), "o still switches to the Overview");
     assert!(rt.find("story-notes").is_some());
-    typed(&mut rt, "l");
+    press(&mut rt, Key::Text("b".into()), ctrl());
     assert!(rt.state.layout.is_open(Overlay::Files));
     assert!(rt.find("overlay-files").is_some());
     assert!(!rt.state.sidebar.is_open(), "the list itself stays hidden");

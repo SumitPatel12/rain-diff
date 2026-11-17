@@ -1,4 +1,4 @@
-//! The Conversation overlay (sections, filters, orphans), the agent's presence, `w`, and the
+//! The Conversation overlay (sections, filters, orphans), the agent's presence, `i`, and the
 //! toasts that say what the agent did.
 
 use std::collections::BTreeMap;
@@ -173,7 +173,7 @@ pub struct ConversationState {
     seen_version: u64,
     /// The key list the last poll saw; a new allocation means a load installed.
     load_mark: usize,
-    /// `w` passed the last waiting item; the next `w` starts over.
+    /// `i` passed the last waiting item; the next `i` starts over.
     w_wrapped: bool,
     /// The cursor a remote highlight left; moving it clears the spotlight.
     spot_cursor: Option<(usize, LineRef)>,
@@ -240,7 +240,7 @@ impl App {
     /// `C`: the Conversation overlay.
     pub fn toggle_conversation(&mut self, _tx: &mut Tx) {
         if self.toggle_overlay(Overlay::Conversation) {
-            self.status = "Conversation · w next waiting · Esc closes".into();
+            self.status = "Conversation · i next waiting · Esc closes".into();
         }
     }
 
@@ -256,7 +256,7 @@ impl App {
         out
     }
 
-    /// What `w` walks: waiting threads, then `addressed?`, then open questions.
+    /// What `i` walks: waiting threads, then `addressed?`, then open questions.
     pub fn waiting_walk(&self) -> Vec<String> {
         let mut all: Vec<&Thread> = self.mirror.threads.iter().collect();
         all.sort_by_key(|t| (self.file_of_thread(t).unwrap_or(usize::MAX), t.anchor.lines().0));
@@ -267,8 +267,8 @@ impl App {
         ids
     }
 
-    /// `w`: the next item waiting on you after the focused one; past the last it says so and
-    /// the next `w` starts over.
+    /// `i`: the next item waiting on you after the focused one; past the last it says so and
+    /// the next `i` starts over.
     pub fn next_waiting(&mut self, tx: &mut Tx) {
         let walk = self.waiting_walk();
         if walk.is_empty() {
@@ -283,7 +283,7 @@ impl App {
         self.conversation.w_wrapped = false;
         let Some(id) = walk.get(at).cloned() else {
             self.conversation.w_wrapped = true;
-            self.status = format!("That was the last of {} waiting on you · w starts over", walk.len());
+            self.status = format!("That was the last of {} waiting on you · i starts over", walk.len());
             return;
         };
         self.show_thread(&id, tx);
@@ -838,7 +838,7 @@ mod tests {
     }
 
     #[test]
-    fn w_walks_waiting_then_addressed_then_questions_and_says_when_done() {
+    fn i_walks_waiting_then_addressed_then_questions_and_says_when_done() {
         let (a, ids) = seeded();
         let mut rt = runtime(a);
         let want = [&ids[&Section::Waiting], &ids[&Section::Addressed], &ids[&Section::Yours]];
@@ -855,7 +855,7 @@ mod tests {
         }
         assert!(rt.state.status.starts_with("3/3 · "), "{}", rt.state.status);
         w(&mut rt);
-        assert_eq!(rt.state.status, "That was the last of 3 waiting on you · w starts over");
+        assert_eq!(rt.state.status, "That was the last of 3 waiting on you · i starts over");
         w(&mut rt);
         assert_eq!(rt.state.focused_thread.as_deref(), Some(want[0].as_str()));
 

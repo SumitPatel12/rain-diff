@@ -11,7 +11,7 @@ pub(crate) fn sr(k: &Kit) -> (Surfaces, Roles) {
     (surfaces_of(k), roles_of(k))
 }
 
-/// A key cap: `Space`, `]`, `w` (11/16 faint on the well, hairline ring).
+/// A key cap: `Space`, `]`, `i` (11/16 faint on the well, hairline ring).
 pub(crate) fn kbd(t: impl Into<String>, k: &Kit) -> El {
     let s = surfaces_of(k);
     let t = t.into();

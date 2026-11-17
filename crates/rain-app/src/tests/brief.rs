@@ -77,11 +77,11 @@ fn the_overview_shows_every_section_under_headings_and_b_switches_to_the_changes
     ] {
         assert!(headings.iter().any(|x| x == h), "{h} in {headings:?}");
     }
-    typed(&mut rt, "b");
+    typed(&mut rt, "o");
     assert_eq!(rt.state.reader_tab(), ReaderTab::Changes);
     assert!(rt.find("brief-sec-how.2").is_none());
     assert!(rt.find("diff-col").is_some(), "Changes shows the diff, no Brief above it");
-    typed(&mut rt, "b");
+    typed(&mut rt, "o");
     assert!(rt.find("brief-sec-how.2").is_some());
 }
 

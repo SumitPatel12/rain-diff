@@ -11,6 +11,7 @@
 extern crate self as rain_diffview;
 
 mod model;
+mod motion;
 #[doc(hidden)]
 pub mod myers;
 mod state;
@@ -22,6 +23,7 @@ mod testing;
 
 pub use model::{hunk_header, language};
 pub use state::{
-    Align, Annotation, DiffMode, DiffState, EXPAND_STEP, Expand, Layout, LineRange, LineRef, Metrics, Opened, SpanSelection, Spot,
+    Align, Annotation, DiffMode, DiffState, EXPAND_STEP, Expand, Layout, LineRange, LineRef, Metrics, Opened, SpanSelection, Spot, Vim,
+    VimKey, Visual,
 };
-pub use view::{DiffColors, DiffView, SCROLL_KEY};
+pub use view::{DiffColors, DiffView, SCROLL_KEY, line_builds};

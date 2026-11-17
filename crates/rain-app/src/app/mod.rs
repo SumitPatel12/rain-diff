@@ -26,6 +26,7 @@ mod ruler;
 mod session;
 mod tour;
 mod verify;
+pub(crate) mod vim;
 mod wholefile;
 
 use std::cell::Cell;

@@ -262,7 +262,8 @@ impl Chord {
     }
 }
 
-static KEYMAP: [(Chord, Command); 47] = [
+/// Leaves `h l w b e W B 0 ^ $ g G f t ; , v V y` and digits to Vim (`DiffState::vim`).
+static KEYMAP: [(Chord, Command); 46] = [
     (Chord::key("j"), Command::CursorDown),
     (Chord::key("k"), Command::CursorUp),
     (Chord::key("n"), Command::NextHunk),
@@ -273,19 +274,18 @@ static KEYMAP: [(Chord, Command); 47] = [
     (Chord::shift("k"), Command::PrevSection),
     (Chord::alt("Left"), Command::Back),
     (Chord::alt("Right"), Command::Forward),
-    (Chord::key("w"), Command::NextWaiting),
+    (Chord::key("i"), Command::NextWaiting),
     (Chord::key("Space"), Command::ViewedAndNext),
-    (Chord::key("v"), Command::ToggleViewed),
-    (Chord::shift("v"), Command::MarkGroupViewed),
+    (Chord::shift("Space"), Command::ToggleViewed),
+    (Chord::shift("a"), Command::MarkGroupViewed),
     (Chord::key("u"), Command::UndoAccept),
     (Chord::key("s"), Command::ToggleSplit),
     (Chord::shift("s"), Command::ToggleReaderMode),
-    (Chord::key("l"), Command::ToggleList),
+    (Chord::ctrl("b"), Command::ToggleList),
     (Chord::shift("Escape"), Command::Zoom),
-    (Chord::key("e"), Command::ToggleWholeFile),
+    (Chord::key("z"), Command::ToggleWholeFile),
     (Chord::shift("e"), Command::ExpandAllContext),
     (Chord::ctrl("l"), Command::FilterFiles),
-    (Chord::key("f"), Command::FilterFiles),
     (Chord::ctrl_shift("l"), Command::ClearFilter),
     (Chord::ctrl("p"), Command::Picker),
     (Chord::ctrl("k"), Command::Palette),
@@ -300,15 +300,15 @@ static KEYMAP: [(Chord, Command); 47] = [
     (Chord::key("m"), Command::Map),
     (Chord::key("}"), Command::NextMapView),
     (Chord::key("{"), Command::PrevMapView),
-    (Chord::key("b"), Command::Brief),
+    (Chord::key("o"), Command::Brief),
     (Chord::shift("t"), Command::Tour),
     (Chord::shift("h"), Command::ToggleVerify),
     (Chord::shift("f"), Command::FinishReview),
     (Chord::key("F1"), Command::KeySheet),
     (Chord::ctrl("o"), Command::OpenInEditor),
-    (Chord::key("y"), Command::CopyLocation),
+    (Chord::shift("y"), Command::CopyLocation),
     (Chord::shift("r"), Command::Reload),
-    (Chord::ctrl("d"), Command::ToggleDensity),
+    (Chord::ctrl_shift("d"), Command::ToggleDensity),
     (Chord::key("Escape"), Command::Escape),
 ];
 
@@ -346,11 +346,7 @@ mod tests {
             assert!(!c.label().is_empty());
             assert!(!c.is_legacy());
             let n = keymap().iter().filter(|(_, x)| *x == c).count();
-            let want = match c {
-                c if Command::PALETTE_ONLY.contains(&c) => 0,
-                Command::FilterFiles => 2,
-                _ => 1,
-            };
+            let want = if Command::PALETTE_ONLY.contains(&c) { 0 } else { 1 };
             assert_eq!(n, want, "{c:?} has {n} chords");
         }
         for c in Command::LEGACY {
@@ -362,8 +358,6 @@ mod tests {
 
     #[test]
     fn removed_round_two_chords_are_gone() {
-        assert_eq!(lookup("i", false, false), None);
-        assert_eq!(lookup("o", false, false), None);
         assert_eq!(lookup("Tab", false, false), None);
         assert_eq!(lookup("t", false, false), None);
         assert_eq!(lookup("C", false, true), Some(Command::Conversation));
@@ -378,9 +372,9 @@ mod tests {
         assert_eq!(lookup("c", false, false), Some(Command::Comment));
         assert_eq!(lookup("?", false, true), Some(Command::Ask));
         assert_eq!(lookup("?", false, false), Some(Command::Ask));
-        assert_eq!(lookup("w", false, false), Some(Command::NextWaiting));
+        assert_eq!(lookup("i", false, false), Some(Command::NextWaiting));
         assert_eq!(lookup("m", false, false), Some(Command::Map));
-        assert_eq!(lookup("b", false, false), Some(Command::Brief));
+        assert_eq!(lookup("o", false, false), Some(Command::Brief));
         assert_eq!(lookup("T", false, false), Some(Command::Tour));
         assert_eq!(lookup("}", false, true), Some(Command::NextMapView));
         assert_eq!(lookup("{", false, true), Some(Command::PrevMapView));
@@ -388,12 +382,11 @@ mod tests {
         assert_eq!(lookup("h", false, false), None);
         assert_eq!(lookup("S", false, true), Some(Command::ToggleReaderMode));
         assert_eq!(lookup("s", false, false), Some(Command::ToggleSplit));
-        assert_eq!(lookup("l", false, false), Some(Command::ToggleList));
-        assert_eq!(lookup("f", false, false), Some(Command::FilterFiles));
+        assert_eq!(lookup("b", true, false), Some(Command::ToggleList));
         assert_eq!(lookup("l", true, false), Some(Command::FilterFiles));
         assert_eq!(lookup("p", true, false), Some(Command::Picker));
         assert_eq!(lookup("u", false, false), Some(Command::UndoAccept));
-        assert_eq!(lookup("V", false, true), Some(Command::MarkGroupViewed));
+        assert_eq!(lookup("A", false, true), Some(Command::MarkGroupViewed));
         assert_eq!(lookup("Escape", false, true), Some(Command::Zoom));
         assert_eq!(lookup("Escape", false, false), Some(Command::Escape));
         assert_eq!(lookup("F1", false, false), Some(Command::KeySheet));
@@ -404,6 +397,37 @@ mod tests {
         assert_eq!(lookup("k", true, false), Some(Command::Palette));
         assert_eq!(lookup("Space", false, false), Some(Command::ViewedAndNext));
         assert_eq!(lookup("q", false, false), None);
+    }
+
+    #[test]
+    fn vim_keys_are_free_and_the_commands_they_displaced_moved() {
+        for k in [
+            "h", "l", "w", "b", "e", "W", "B", "g", "G", "f", "t", "v", "V", "y", "$", "^", ";", ",", "0", "5",
+        ] {
+            let shift = k.chars().all(|c| c.is_ascii_uppercase());
+            assert_eq!(lookup(k, false, shift), None, "{k} is Vim's");
+        }
+        assert_eq!(lookup("u", true, false), None, "Ctrl+U is Vim's");
+        assert_eq!(lookup("d", true, false), None, "Ctrl+D is Vim's");
+        for (key, ctrl, shift, cmd) in [
+            ("i", false, false, Command::NextWaiting),
+            ("o", false, false, Command::Brief),
+            ("z", false, false, Command::ToggleWholeFile),
+            ("b", true, false, Command::ToggleList),
+            ("l", true, false, Command::FilterFiles),
+            ("d", true, true, Command::ToggleDensity),
+            ("Space", false, true, Command::ToggleViewed),
+            ("A", false, true, Command::MarkGroupViewed),
+            ("Y", false, true, Command::CopyLocation),
+        ] {
+            assert_eq!(lookup(key, ctrl, shift), Some(cmd), "{key}");
+            assert_eq!(cmd.chord().map(|c| (c.ctrl, c.shift)), Some((ctrl, shift)), "{cmd:?}");
+        }
+        assert_eq!(Command::ToggleViewed.chord().unwrap().display(), "Shift+Space");
+        assert_eq!(Command::ToggleDensity.chord().unwrap().display(), "Ctrl+Shift+D");
+        assert_eq!(Command::ToggleList.chord().unwrap().display(), "Ctrl+B");
+        assert_eq!(Command::CopyLocation.chord().unwrap().display(), "Y");
+        assert_eq!(Command::MarkGroupViewed.chord().unwrap().display(), "A");
     }
 
     #[test]

@@ -39,7 +39,7 @@ the `comments-json` golden test). The full agent contract is [agent.md](agent.md
 | `GET /api/overview` | `coverage` filled from the window's diff (was always empty); adds `coverageByRepo: [coverage…]` and `diffLoaded`; `selfRepo` is null in a multi-repo window unless `--self` names one |
 | CLI | `overview render <file> --out <dir> [--size WxH]`: every view to PNGs, dark and light, headless |
 
-Window keys added with extras: `y` copies `<repoId>/<path>:<line>` (one-repo windows: `<path>:<line>`), `Ctrl+O`
+Window keys added with extras: `Shift+Y` copies `<repoId>/<path>:<line>` (one-repo windows: `<path>:<line>`), `Ctrl+O`
 (and the file header's Open button) opens the file at the cursor line with the `editor` setting (default
 `code --goto "{path}:{line}"`; it replaces the old `$EDITOR` lookup).
 

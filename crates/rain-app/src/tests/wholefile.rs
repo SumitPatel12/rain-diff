@@ -83,7 +83,7 @@ fn on_file(rt: &mut Runtime<App>, f: usize, line: u32) {
 }
 
 #[test]
-fn e_shows_the_current_file_whole_and_e_again_folds_it_and_drops_the_texts() {
+fn z_shows_the_current_file_whole_and_z_again_folds_it_and_drops_the_texts() {
     let dir = whole_repo();
     let mut rt = unified(&dir);
     let a = file(&rt, "a.cs");
@@ -92,18 +92,18 @@ fn e_shows_the_current_file_whole_and_e_again_folds_it_and_drops_the_texts() {
     assert!(!rt.state.diff.expandable(a));
     assert_eq!(
         help_of(&mut rt, &format!("whole-{a}")).as_deref(),
-        Some("Show the whole file with changes inline  e")
+        Some("Show the whole file with changes inline  z")
     );
 
-    typed(&mut rt, "e");
+    typed(&mut rt, "z");
     assert!(rt.state.diff.whole(a));
     assert!(rt.state.diff.expandable(a), "both blobs were read");
     assert_eq!(rows_of(&rt, a), 1 + 80 + 1, "header, every new line and the removed one");
     assert!(rows_of(&rt, a) > folded);
     assert_eq!(rt.state.current(), Some(a), "the cursor's file stays the current one");
-    assert_eq!(help_of(&mut rt, &format!("whole-{a}")).as_deref(), Some("Show only the changes  e"));
+    assert_eq!(help_of(&mut rt, &format!("whole-{a}")).as_deref(), Some("Show only the changes  z"));
 
-    typed(&mut rt, "e");
+    typed(&mut rt, "z");
     assert!(!rt.state.diff.whole(a));
     assert!(!rt.state.diff.expandable(a), "texts dropped to free memory");
     assert_eq!(rows_of(&rt, a), folded);
@@ -135,7 +135,7 @@ fn a_whole_file_stays_whole_while_reading_on() {
     let mut rt = unified(&dir);
     let a = file(&rt, "a.cs");
     on_file(&mut rt, a, 40);
-    typed(&mut rt, "e");
+    typed(&mut rt, "z");
     typed(&mut rt, "]");
     typed(&mut rt, "n");
     press(&mut rt, Key::Text(" ".into()), Mods::default());
@@ -224,18 +224,21 @@ fn added_and_deleted_files_are_already_whole() {
         settle(&mut rt);
         assert_eq!(rt.state.current(), Some(f));
         let before = rows_of(&rt, f);
-        typed(&mut rt, "e");
+        typed(&mut rt, "z");
         assert_eq!(rt.state.status, "Already the whole file");
         assert!(!rt.state.diff.whole(f));
         assert_eq!(rows_of(&rt, f), before);
-        assert_eq!(help_of(&mut rt, &format!("whole-{f}")).as_deref(), Some("Already the whole file"));
+        assert_eq!(
+            help_of(&mut rt, &format!("whole-{f}")).as_deref(),
+            Some("Already the whole file  z")
+        );
     }
 }
 
 #[test]
 fn a_fixture_has_no_whole_files() {
     let mut rt = runtime(app(workspace("fixtures/m.patch"), false));
-    typed(&mut rt, "e");
+    typed(&mut rt, "z");
     assert_eq!(rt.state.status, "Whole file needs a git repo (fixture)");
     assert!(!rt.state.diff.whole(0));
     typed(&mut rt, "E");
@@ -259,7 +262,7 @@ fn a_filtered_view_and_the_full_diff_open_the_file_together() {
     settle(&mut rt);
     on_file(&mut rt, 1, 40);
     assert_eq!(rt.state.current(), Some(a));
-    typed(&mut rt, "e");
+    typed(&mut rt, "z");
     assert!(rt.state.active().whole(1) && rt.state.active().expandable(1));
     assert!(rt.state.diff.whole(a) && rt.state.diff.expandable(a), "the full diff follows");
     assert_eq!(rows_of(&rt, 1), 82);
@@ -267,7 +270,7 @@ fn a_filtered_view_and_the_full_diff_open_the_file_together() {
         std::sync::Arc::ptr_eq(&rt.state.active().files()[1], &rt.state.diff.files()[a]),
         "the subset shares the full diff's copy instead of cloning the file"
     );
-    typed(&mut rt, "e");
+    typed(&mut rt, "z");
     assert!(!rt.state.active().whole(1) && !rt.state.diff.whole(a));
     assert!(!rt.state.active().expandable(1) && !rt.state.diff.expandable(a));
 }
@@ -280,7 +283,7 @@ fn a_whole_file_and_opened_ranges_survive_a_new_filter_subset() {
     rt.update(|s, _| s.filter.subset = Some(crate::app::Subset::new(s, vec![a, b], None)));
     settle(&mut rt);
     on_file(&mut rt, 0, 40);
-    typed(&mut rt, "e");
+    typed(&mut rt, "z");
     assert_eq!(rows_of(&rt, 0), 82);
     rt.update(|s, _| {
         s.active_mut().request_expand(1, 0, rain_diffview::Expand::All);
@@ -367,7 +370,7 @@ fn whole_file_timings() {
         rt.state.diff.files()[f].lines.len(),
         rt.state.diff.row_count()
     );
-    typed(&mut rt, "e");
+    typed(&mut rt, "z");
     let t = std::time::Instant::now();
     rt.update(|s, tx| s.expand_all_context(tx));
     println!(
@@ -396,7 +399,7 @@ fn split_shows_the_whole_file_too() {
     assert_eq!(rt.state.effective_mode(), rain_diffview::DiffMode::Split);
     let a = file(&rt, "a.cs");
     on_file(&mut rt, a, 40);
-    typed(&mut rt, "e");
+    typed(&mut rt, "z");
     assert!(rt.state.diff.whole(a));
     assert_eq!(rows_of(&rt, a), 1 + 80, "the changed line pairs into one row");
 }

@@ -176,7 +176,7 @@ impl App {
         }
     }
 
-    /// `l`: shows or hides the list. Zoom keeps it hidden.
+    /// `Ctrl+B`: shows or hides the list. Zoom keeps it hidden.
     pub fn toggle_list(&mut self) {
         if self.layout.is_zoomed() {
             self.toggle_overlay(Overlay::Files);
@@ -188,7 +188,7 @@ impl App {
         self.apply_split();
     }
 
-    /// Whether the list is hidden by `l` rather than by zoom.
+    /// Whether the list is hidden by `Ctrl+B` rather than by zoom.
     pub fn rail(&self) -> bool {
         !self.sidebar.is_open() && !self.layout.is_zoomed()
     }
@@ -222,7 +222,7 @@ impl App {
             ViewLayout::Split => (
                 DiffMode::Unified,
                 Some(format!(
-                    "Each side would get {cols} columns; split needs {SPLIT_MIN_COLUMNS}. Widen the window, hide the list (l) or zoom (Shift+Esc)"
+                    "Each side would get {cols} columns; split needs {SPLIT_MIN_COLUMNS}. Widen the window, hide the list (Ctrl+B) or zoom (Shift+Esc)"
                 )),
             ),
         }
@@ -234,7 +234,7 @@ impl App {
     }
 }
 
-pub const ZOOMED: &str = "Zoomed · f files · C conversation · m map · b overview · Shift+Esc restore";
+pub const ZOOMED: &str = "Zoomed · Ctrl+L files · C conversation · m map · o overview · Shift+Esc restore";
 
 /// The list pane as the settings describe it.
 pub(crate) fn list_pane(width: f32, open: bool) -> PaneState {

@@ -3,7 +3,7 @@
 
 use rain_core::command::Command;
 use rain_core::{FileTag, Note, NoteKind};
-use rain_diffview::LineRef;
+use rain_diffview::{LineRef, VimKey};
 use rune::Tx;
 
 use crate::app::App;
@@ -23,7 +23,35 @@ pub enum Item {
     Layout(ViewLayout),
     Theme(Theme),
     Ask(AskItem),
+    /// A row of [`VIM`].
+    Vim(usize),
 }
+
+/// Vim's keys in the reader, listed with the commands so the key sheet shows them; a row runs
+/// its keys (`f` and `t` then wait for the character).
+pub const VIM: [(&str, &str, &[VimKey]); 21] = [
+    ("Vim: left", "h", &[VimKey::Char('h')]),
+    ("Vim: right", "l", &[VimKey::Char('l')]),
+    ("Vim: next word", "w", &[VimKey::Char('w')]),
+    ("Vim: previous word", "b", &[VimKey::Char('b')]),
+    ("Vim: end of word", "e", &[VimKey::Char('e')]),
+    ("Vim: next WORD", "W", &[VimKey::Char('W')]),
+    ("Vim: previous WORD", "B", &[VimKey::Char('B')]),
+    ("Vim: line start", "0", &[VimKey::Char('0')]),
+    ("Vim: first non-blank", "^", &[VimKey::Char('^')]),
+    ("Vim: line end", "$", &[VimKey::Char('$')]),
+    ("Vim: first line of the file", "gg", &[VimKey::Char('g'), VimKey::Char('g')]),
+    ("Vim: last line of the file", "G", &[VimKey::Char('G')]),
+    ("Vim: find a character in the line", "f", &[VimKey::Char('f')]),
+    ("Vim: till a character in the line", "t", &[VimKey::Char('t')]),
+    ("Vim: repeat the find / backwards", "; ,", &[VimKey::Char(';')]),
+    ("Vim: half a page down", "Ctrl+D", &[VimKey::HalfDown]),
+    ("Vim: half a page up", "Ctrl+U", &[VimKey::HalfUp]),
+    ("Vim: visual", "v", &[VimKey::Char('v')]),
+    ("Vim: visual lines", "V", &[VimKey::Char('V')]),
+    ("Vim: yank the line", "yy", &[VimKey::Char('y'), VimKey::Char('y')]),
+    ("Vim: count, as in 3w or 5j", "1-9", &[]),
+];
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Entry {
@@ -78,6 +106,12 @@ pub fn entries(s: &App) -> Vec<Entry> {
             kind: "Command",
         })
         .collect();
+    out.extend(VIM.iter().enumerate().map(|(i, (label, keys, _))| Entry {
+        item: Item::Vim(i),
+        label: (*label).to_owned(),
+        hint: (*keys).to_owned(),
+        kind: "Motion",
+    }));
     out.extend([ViewLayout::Split, ViewLayout::Unified].iter().map(|l| Entry {
         item: Item::Layout(*l),
         label: format!("Layout: {}", l.label().to_lowercase()),
@@ -313,6 +347,11 @@ pub fn run_selected(s: &mut App, tx: &mut Tx) {
         Item::Layout(l) => s.set_layout(l),
         Item::Theme(t) => s.set_theme(t),
         Item::Ask(a) => s.apply_ask_item(a),
+        Item::Vim(i) => {
+            for &k in VIM[i].2 {
+                s.vim_run(k, tx);
+            }
+        }
     }
 }
 

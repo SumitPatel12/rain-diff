@@ -20,6 +20,7 @@ mod shell;
 mod theme;
 mod tour;
 mod verify;
+mod vim;
 mod wholefile;
 
 use std::path::PathBuf;

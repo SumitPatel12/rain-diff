@@ -258,11 +258,11 @@ fn header(s: &App, sec: u8, l: &Listing, k: &Kit) -> El {
     h
 }
 
-/// `Accept N`: marks the group viewed without reading (Shift+V; u undoes).
+/// `Accept N`: marks the group viewed without reading (Shift+A; u undoes).
 fn accept_button(g: Group, n: usize, k: &Kit) -> El {
     outline(format!("accept-{}", slug(g)), format!("Accept {n}"), None, 22.0, k)
         .help(format!(
-            "Mark {n} {} files viewed without reading  Shift+V on a file in the group",
+            "Mark {n} {} files viewed without reading  Shift+A on a file in the group",
             g.label().to_lowercase()
         ))
         .on_press_tx(move |s: &mut App, tx: &mut Tx| s.accept(g, tx))
@@ -376,7 +376,11 @@ fn file_row(s: &App, g: usize, key: String, look: &RowLook) -> El {
             .role("checkbox")
             .label(if viewed { "Viewed" } else { "Mark viewed" })
             .checked(viewed)
-            .help(if viewed { "Viewed · press to unmark  v" } else { "Mark viewed  v" })
+            .help(if viewed {
+                "Viewed · press to unmark  Shift+Space"
+            } else {
+                "Mark viewed  Shift+Space"
+            })
             .size(20.0, 20.0)
             .center()
             .radius(radius::KEY)

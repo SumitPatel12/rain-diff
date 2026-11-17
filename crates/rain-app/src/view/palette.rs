@@ -1,5 +1,5 @@
 //! The command palette (`Ctrl+K`): a raised card over a scrim, its query on top, rows grouped
-//! under their kind (Commands, Settings, Filters, Notes, Chapters, Threads, Files) with the key
+//! under their kind (Commands, Motions, Settings, Filters, Notes, Chapters, Threads, Files) with the key
 //! or place at the end, and the keys at its foot.
 
 use rune::{El, Key, KeyEvent, ScrollSpec, Tx, col, el, row, text};
@@ -40,7 +40,7 @@ fn palette_key(s: &mut App, ev: &KeyEvent, tx: &mut Tx) -> bool {
 /// `Command` as the group's title, `Commands`.
 fn group_title(kind: &str) -> String {
     match kind {
-        "File" | "Note" | "Chapter" | "Thread" | "Command" | "Setting" | "Filter" => format!("{kind}s"),
+        "File" | "Note" | "Chapter" | "Thread" | "Command" | "Setting" | "Filter" | "Motion" => format!("{kind}s"),
         k => k.to_owned(),
     }
 }
@@ -95,7 +95,7 @@ pub(super) fn palette_overlay(s: &App, k: &Kit) -> El {
         }
         line = line.child(el().grow(1.0).a11y_hidden());
         if !on && !e.hint.is_empty() {
-            let mono = e.kind == "Command";
+            let mono = e.kind == "Command" || e.kind == "Motion";
             line = line.child(
                 text(e.hint.clone())
                     .font(if mono { TYPE.micro_mono } else { TYPE.small })

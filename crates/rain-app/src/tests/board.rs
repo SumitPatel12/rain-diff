@@ -119,13 +119,13 @@ fn accept_marks_the_group_logs_why_spares_the_real_line_and_undoes() {
 }
 
 #[test]
-fn shift_v_accepts_the_current_files_group_and_refuses_real_changes() {
+fn shift_a_accepts_the_current_files_group_and_refuses_real_changes() {
     let mut rt = runtime(groups_app());
     let first = rt.state.current().unwrap();
     assert!(rt.state.group_of(first).is_change());
     press(
         &mut rt,
-        Key::Text("V".into()),
+        Key::Text("A".into()),
         Mods {
             shift: true,
             ..Mods::default()
@@ -150,7 +150,7 @@ fn shift_v_accepts_the_current_files_group_and_refuses_real_changes() {
     assert_eq!(rt.state.current(), Some(lock));
     press(
         &mut rt,
-        Key::Text("V".into()),
+        Key::Text("A".into()),
         Mods {
             shift: true,
             ..Mods::default()

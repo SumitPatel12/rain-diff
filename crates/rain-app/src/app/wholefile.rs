@@ -28,7 +28,7 @@ const READERS: usize = 4;
 type Job = (PathBuf, Resolved, Arc<FileDiff>, String);
 
 impl App {
-    /// `e`: shows the current file whole, or folds it back.
+    /// `z`: shows the current file whole, or folds it back.
     pub fn toggle_whole_file(&mut self, tx: &mut Tx) {
         if let Some(g) = self.current() {
             self.toggle_whole(g, tx);

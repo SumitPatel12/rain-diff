@@ -9,3 +9,4 @@ blake3 = { workspace = true }
 rain-core = { workspace = true }
 rune = { workspace = true }
 rune-kit = { workspace = true }
+unicode-segmentation = { workspace = true }

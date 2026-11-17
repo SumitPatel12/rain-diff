@@ -120,7 +120,7 @@ impl App {
         self.brief.tab = Some(tab);
     }
 
-    /// `b`: Overview ↔ Changes.
+    /// `o`: Overview ↔ Changes.
     pub fn toggle_reader_tab(&mut self) {
         let next = match self.reader_tab() {
             ReaderTab::Overview => ReaderTab::Changes,
@@ -128,8 +128,8 @@ impl App {
         };
         self.set_reader_tab(next);
         self.status = match next {
-            ReaderTab::Overview => "Overview · b back to the changes".into(),
-            ReaderTab::Changes => "Changes · b back to the overview".into(),
+            ReaderTab::Overview => "Overview · o back to the changes".into(),
+            ReaderTab::Changes => "Changes · o back to the overview".into(),
         };
     }
 

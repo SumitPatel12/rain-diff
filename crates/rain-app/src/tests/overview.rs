@@ -1,4 +1,4 @@
-//! The Overview and Changes tabs: which one a session opens on, `b` and the palette, jumps that
+//! The Overview and Changes tabs: which one a session opens on, `o` and the palette, jumps that
 //! switch to Changes, and the Markdown a section body renders (demoted headings, cite links).
 
 use rain_core::Side;
@@ -71,24 +71,24 @@ fn story_notes_alone_open_the_overview_and_a_reload_keeps_the_tab() {
     again.load_now();
     assert_eq!(again.reader_tab(), ReaderTab::Overview, "a session with a story note opens on it");
     let mut rt = opened_with_brief();
-    typed(&mut rt, "b");
+    typed(&mut rt, "o");
     assert_eq!(rt.state.reader_tab(), ReaderTab::Changes);
     rt.update(|s, _| s.reload());
     settle(&mut rt);
     assert_eq!(rt.state.reader_tab(), ReaderTab::Changes, "a reload keeps Changes");
-    typed(&mut rt, "b");
+    typed(&mut rt, "o");
     rt.update(|s, _| s.reload());
     settle(&mut rt);
     assert_eq!(rt.state.reader_tab(), ReaderTab::Overview, "and keeps the Overview");
 }
 
 #[test]
-fn b_toggles_and_the_palette_goes_to_either_tab() {
+fn o_toggles_and_the_palette_goes_to_either_tab() {
     let mut rt = opened_with_brief();
-    typed(&mut rt, "b");
+    typed(&mut rt, "o");
     assert_eq!(rt.state.reader_tab(), ReaderTab::Changes);
     assert!(rt.find("diff-col").is_some());
-    typed(&mut rt, "b");
+    typed(&mut rt, "o");
     assert_eq!(rt.state.reader_tab(), ReaderTab::Overview);
     rt.update(|s, tx| {
         s.run(Command::GoChanges, tx);

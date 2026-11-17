@@ -41,6 +41,7 @@ serde_path_to_error = "0.1"
 syntect = { version = "5.3", default-features = false, features = ["parsing", "regex-onig"] }
 two-face = { version = "0.5.1", default-features = false, features = ["syntect-onig"] }
 unicode-width = "0.2"
+unicode-segmentation = "1.13"
 pulldown-cmark = { version = "0.13", default-features = false }
 notify = "8.2"
 

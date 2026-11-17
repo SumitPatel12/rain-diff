@@ -64,6 +64,9 @@ pub fn on_key(s: &mut App, ev: &KeyEvent, tx: &mut Tx) -> bool {
     if let Some(done) = s.tour_key(ev, tx) {
         return done;
     }
+    if let Some(done) = s.vim_key(ev, tx) {
+        return done;
+    }
     match cmd {
         Some(c) => s.run(c, tx),
         None => false,

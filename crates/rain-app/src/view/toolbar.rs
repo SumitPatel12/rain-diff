@@ -327,9 +327,9 @@ pub(super) fn top_bar(s: &App, look: &Look, layer: &mut Vec<El>) -> El {
     let toggle = Ghost::new("list-toggle")
         .icon(&icons::SIDEBAR)
         .help(if list_open {
-            "Hide the file list  l"
+            "Hide the file list  Ctrl+B"
         } else {
-            "Show the file list  l"
+            "Show the file list  Ctrl+B"
         })
         .build(k)
         .expanded(list_open)

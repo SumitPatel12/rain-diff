@@ -1,4 +1,4 @@
-//! Open in editor (Ctrl+O, the file header's Open button) and copy location (`y`).
+//! Open in editor (Ctrl+O, the file header's Open button) and copy location (`Shift+Y`).
 
 use std::io;
 use std::path::PathBuf;

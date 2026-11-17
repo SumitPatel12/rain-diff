@@ -12,12 +12,16 @@ use crate::app::App;
 use crate::settings::ViewLayout;
 use crate::theme::{Look, TYPE, radius, space};
 
-/// `File 7 of 23` for the reader's file, by the walk order; `Overview` on that tab; `Zoomed`.
+/// `-- VISUAL --` in visual mode; `File 7 of 23` for the reader's file, by the walk order;
+/// `Overview` on that tab; `Zoomed`.
 fn place(s: &App) -> Option<String> {
     match &s.phase {
         crate::app::Phase::Loading(_) => return Some("Loading".into()),
         crate::app::Phase::Error(_) => return Some("Could not load".into()),
         crate::app::Phase::Ready => {}
+    }
+    if let Some(v) = s.active().visual() {
+        return Some(if v.line { "-- VISUAL LINE --" } else { "-- VISUAL --" }.into());
     }
     if s.layout.is_open(crate::app::Overlay::Tour) && s.tour.stage == crate::app::TourStage::Step {
         let n = s.tour_views().len();
@@ -71,6 +75,11 @@ fn chord(c: Command) -> String {
 pub(crate) fn hint_pairs(s: &App) -> Vec<(String, String)> {
     let pairs: Vec<(Command, &str)> = if s.phase != crate::app::Phase::Ready {
         return vec![("Shift+R".into(), "reload".into()), ("Ctrl+K".into(), "palette".into())];
+    } else if s.active().visual().is_some() && s.composer.is_none() {
+        return vec![
+            ("y".into(), "yank · c comment · ? ask".into()),
+            ("Esc".into(), "leave visual".into()),
+        ];
     } else if s.brief.peek.open.is_some() {
         return vec![("Enter".into(), "open in reader".into()), ("Esc".into(), "close peek".into())];
     } else if s.layout.is_open(crate::app::Overlay::Tour) && s.tour.stage == crate::app::TourStage::Step && s.composer.is_none() {
@@ -79,7 +88,7 @@ pub(crate) fn hint_pairs(s: &App) -> Vec<(String, String)> {
             ("Esc".into(), "leave the tour".into()),
         ];
     } else if s.layout.is_open(crate::app::Overlay::Conversation) && s.composer.is_none() && s.reply_to.is_none() {
-        return vec![("w".into(), "next waiting".into()), ("a".into(), "confirm".into())];
+        return vec![("i".into(), "next waiting".into()), ("a".into(), "confirm".into())];
     } else if s.composer.is_none() && s.active().span_selection().is_some() && s.selection_toolbar_shown() {
         return vec![("c".into(), "comment on the selection".into()), ("?".into(), "ask about it".into())];
     } else if s.layout.is_open(crate::app::Overlay::Map) && s.has_map() && s.composer.is_none() {
@@ -88,7 +97,7 @@ pub(crate) fn hint_pairs(s: &App) -> Vec<(String, String)> {
         return vec![("Enter".into(), "next".into()), ("Shift+Enter".into(), "previous".into())];
     } else if s.layout.is_zoomed() && s.composer.is_none() && s.reply_to.is_none() {
         return vec![
-            ("f".into(), "files · C conversation · m map · b overview".into()),
+            ("Ctrl+L".into(), "files · C conversation · m map · o overview".into()),
             ("Shift+Esc".into(), "restore".into()),
         ];
     } else if s.composer.is_some() || s.reply_to.is_some() {
@@ -242,8 +251,8 @@ pub(super) fn status_bar(s: &App, look: &Look, layer: &mut Vec<El>) -> El {
                 row()
                     .key("status-waiting")
                     .role("button")
-                    .label(format!("{waiting} waiting on you: next (w)"))
-                    .help("Next thread waiting on you  w")
+                    .label(format!("{waiting} waiting on you: next (i)"))
+                    .help("Next thread waiting on you  i")
                     .h(22.0)
                     .px(6.0)
                     .gap(6.0)

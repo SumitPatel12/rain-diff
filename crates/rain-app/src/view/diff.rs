@@ -44,6 +44,7 @@ pub(super) fn diff_view(s: &App, k: &Kit) -> El {
     let kl = k.clone();
     let v = DiffView::new(|s: &App| s.active(), |s: &mut App| s.active_mut())
         .calm_added_files(true)
+        .block_cursor(!s.typing())
         .colors(colors(k))
         .annotation(move |s: &App, a: &Annotation| annotation(s, a, &ka))
         .gutter_mark(move |s: &App, here: &[&Annotation]| gutter_mark(s, here, &km))
@@ -73,7 +74,7 @@ fn viewed_toggle(g: usize, on: bool, k: &Kit) -> El {
         .role("checkbox")
         .label("Viewed")
         .checked(on)
-        .help("Viewed  v · Space marks viewed and goes to the next file")
+        .help("Viewed  Shift+Space · Space marks viewed and goes to the next file")
         .h(26.0)
         .pl(8.0)
         .pr(10.0)
@@ -82,7 +83,7 @@ fn viewed_toggle(g: usize, on: bool, k: &Kit) -> El {
         .radius(radius::BUTTON)
         .cursor(Cursor::Pointer)
         .focusable(true);
-    // The same parts either way, so the button never changes width: the box, the word, `v`.
+    // The same parts either way, so the button never changes width: the box and the word.
     if on {
         b = b
             .fill(k.c.success.bg)
@@ -120,7 +121,7 @@ fn header_lead(s: &App, local: usize, k: &Kit) -> Option<El> {
     Some(row().gap(6.0).items_center().child(copy).child(group_tag(s.group_of(g), k)))
 }
 
-/// After the stats: the changed-since chip, then at the end `Whole file e` · Viewed `v` · `⋯`
+/// After the stats: the changed-since chip, then at the end `Whole file z` · Viewed · `⋯`
 /// (Open in editor, Copy location).
 fn header_actions(s: &App, local: usize, k: &Kit) -> El {
     let (surf, _) = sr(k);
@@ -139,7 +140,7 @@ fn header_actions(s: &App, local: usize, k: &Kit) -> El {
         .child(
             Ghost::new(format!("file-more-{g}"))
                 .icon(&icons::MORE)
-                .help("Open in editor  Ctrl+O · Copy location  y")
+                .help("Open in editor  Ctrl+O · Copy location  Y")
                 .on(s.menus.file == Some(g))
                 .build(k)
                 .expanded(s.menus.file == Some(g))

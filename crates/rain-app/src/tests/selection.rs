@@ -308,7 +308,7 @@ fn the_right_click_menu_runs_what_the_keys_run_on_the_clicked_line() {
     assert_eq!(
         clipboard.text().as_deref().map(String::as_str),
         Some(want.as_str()),
-        "what y copies"
+        "what Shift+Y copies"
     );
 
     let was = rt.state.is_viewed(0);

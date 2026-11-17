@@ -82,7 +82,7 @@ The window is the list on the left and the reader on the right.
 
 | Part | What |
 |---|---|
-| Toolbar | `repo · branch → base`, Must / Review progress, `N waiting` (`w`), the agent's presence dot, `Auto │ Split │ Unified`, `Map`, `Finish review…` |
+| Toolbar | `repo · branch → base`, Must / Review progress, `N waiting` (`i`), the agent's presence dot, `Auto │ Split │ Unified`, `Map`, `Finish review…` |
 | List | sections, each folding on its header: Read me first (Brief, Map) · Changes (triage order) · Tests · Moves · Formatting-only · Generated · Lockfile · Huge · Binary · Ignored · Done · **Waiting on you**. Group headers carry `[Accept N]`. The filter box and chips narrow every section and the reader |
 | Reader | the Brief card on top (Facts, Intent, How with cite chips, Invariants, Not changed, Not covered, Verify, `▶ Tour`), then the files; `Shift+S` switches to one item at a time |
 | Overlays | Conversation (`C`), Map (`m`), Tour (`T`), picker (`Ctrl+P`), Finish review (`Shift+F`) |
@@ -91,18 +91,21 @@ The window is the list on the left and the reader on the right.
 | Key | Does |
 |---|---|
 | `j`/`k`, `n`/`p`, `]`/`[` | line, hunk, file |
+| `h`/`l`, `w`/`b`/`e`, `W`/`B`, `0`/`^`/`$` | Vim motions on the block cursor: character, word, WORD, line start / first non-blank / end |
+| `gg`/`G`, `f`/`t` + char, `;`/`,`, `Ctrl+D`/`Ctrl+U` | first/last line of the file (`5G`: line 5), find in the line and repeat, half a page; counts work (`3w`, `5j`) |
+| `v` / `V`, then `y` / `c` / `?` / `Esc` | visual (characters / lines): yank, comment, ask, leave; `yy` yanks the line |
 | `J`/`K`, `Alt+←`/`Alt+→` | next/previous list section; jump history |
-| `Space` / `v` / `Shift+V` / `u` | viewed + next / toggle viewed / accept the file's group / undo the last accept |
-| `w` | next thread waiting on you |
+| `Space` / `Shift+Space` / `Shift+A` / `u` | viewed + next / toggle viewed / accept the file's group / undo the last accept |
+| `i` | next thread waiting on you |
 | `c`, `?`, `r`, `a x d` | comment, question, reply, Agree / Dismiss (reason) / Defer |
-| `C`, `m`, `b`, `T` | Conversation, Map, fold the Brief, Tour |
+| `C`, `m`, `o`, `T` | Conversation, Map, Overview ↔ Changes, Tour |
 | `}`/`{`, `H` | next/previous Map view; fold or open Verify by hand |
-| `s` / `Shift+S` / `l` / `Shift+Esc` | split ↔ unified / stream ↔ one at a time / list ↔ rail / zoom and restore |
-| `f` or `Ctrl+L` / `Ctrl+Shift+L` | filter files / clear the filter |
+| `s` / `Shift+S` / `Ctrl+B` / `Shift+Esc` | split ↔ unified / stream ↔ one at a time / list ↔ rail / zoom and restore |
+| `Ctrl+L` / `Ctrl+Shift+L` | filter files / clear the filter |
 | `Ctrl+P` / `Ctrl+K` | picker / palette |
-| `e` / `E` | show the current file whole / open every file's context |
-| `/`, `y`, `Ctrl+O` | find, copy `<repoId>/<path>:<line>`, open in the editor |
-| `Shift+R`, `Shift+F`, `F1`, `Ctrl+D`, `Esc` | reload in place, Finish review, keyboard sheet, density, close the top layer |
+| `z` / `E` | show the current file whole / open every file's context |
+| `/`, `Shift+Y`, `Ctrl+O` | find, copy `<repoId>/<path>:<line>`, open in the editor |
+| `Shift+R`, `Shift+F`, `F1`, `Ctrl+Shift+D`, `Esc` | reload in place, Finish review, keyboard sheet, density, close the top layer |
 
 ## Layout
 

@@ -496,15 +496,7 @@ impl App {
             }),
         };
         match text {
-            Some(t) => {
-                let n = t.lines().count().max(1);
-                tx.copy(t);
-                self.status = if n == 1 {
-                    "Copied 1 line".into()
-                } else {
-                    format!("Copied {n} lines")
-                };
-            }
+            Some(t) => self.copied(t, tx),
             None => self.status = "Nothing to copy: select text or lines, or put the cursor on a line".into(),
         }
     }

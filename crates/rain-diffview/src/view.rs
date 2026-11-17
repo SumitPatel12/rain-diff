@@ -19,6 +19,7 @@ use rune_kit::Kit;
 use rune_kit::syntax::SyntaxTheme;
 
 use crate::model;
+use crate::state::vim::{SCROLLOFF, VisualSpan};
 use crate::state::{Annotation, DiffState, Draw, EXPAND_STEP, Expand, LineRange, LineRef, Metrics, Row, SpanSelection};
 
 static EXPAND_UP: Icon = Icon {
@@ -75,6 +76,31 @@ const CALM_LINES: u32 = 200;
 const DIM: f32 = 0.45;
 /// The spotlight outline's stroke.
 const SPOT_W: f32 = 2.0;
+/// The code's and the line numbers' type sizes.
+const CODE_SIZE: f32 = 13.0;
+const NUMBER_SIZE: f32 = 12.0;
+/// The advance of a mono column of code.
+pub(crate) const ADV: f32 = 0.6 * CODE_SIZE;
+
+/// One line-number column for numbers of `digits` digits.
+fn number_w(digits: u32) -> f32 {
+    (digits as f32 * 0.6 * NUMBER_SIZE + 16.0).ceil().max(NUMBER_MIN)
+}
+
+/// Where the code starts in a unified line, after the gutter that holds to the left edge.
+pub(crate) fn code_left(digits: u32) -> f32 {
+    MARKS + 2.0 * number_w(digits) + SIGN.0 + CODE_PAD.0
+}
+
+thread_local! {
+    static LINE_BUILDS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// Lines built on this thread so far, memoised ones not counted: a test reads it around a key
+/// to check the key rebuilt only the rows it touched.
+pub fn line_builds() -> u64 {
+    LINE_BUILDS.with(|n| n.get())
+}
 
 /// The [`Tx`] scroll key of the viewport of a [`DiffView`] with the default key `"diff"`, for
 /// `tx.scroll_to_y(SCROLL_KEY, y)`. A view keyed `k` scrolls as `"{k}/scroll"`.
@@ -153,6 +179,7 @@ pub struct DiffView<S> {
     on_need_texts: Option<Rc<dyn Fn(&mut S, usize)>>,
     scroll_live: Option<Live<[f32; 4]>>,
     on_scroll: Option<Rc<dyn Fn(ScrollPos)>>,
+    block: bool,
 }
 
 impl<S: 'static> DiffView<S> {
@@ -178,7 +205,15 @@ impl<S: 'static> DiffView<S> {
             on_need_texts: None,
             scroll_live: None,
             on_scroll: None,
+            block: true,
         }
+    }
+
+    /// Draw the cursor as a block on its character (the default); off while a text field outside
+    /// the diff has the keyboard.
+    pub fn block_cursor(mut self, on: bool) -> Self {
+        self.block = on;
+        self
     }
 
     /// Write where the viewport is scrolled into `live` every frame it moves, with no view run:
@@ -311,7 +346,9 @@ impl<S: 'static> DiffView<S> {
         if !wrap && let Some(r) = rune::memo::layout(&format!("{key}/scroll")) {
             st.set_viewport(r);
         }
-        let v = Rc::new(View { look, d: self });
+        st.set_scroll_key(&key);
+        let vis = st.visual_span();
+        let v = Rc::new(View { look, d: self, vis });
         let count = st.rows.len();
         let mut list = col()
             .key("rows")
@@ -366,7 +403,7 @@ impl<S: 'static> DiffView<S> {
         let (live, f) = (v.d.scroll_live.clone(), v.d.on_scroll.clone());
         let (at_cell, shift) = (st.scroll_cell(), st.spot_shift.clone());
         let scroll = scroll.on_scroll_offset(move |at| {
-            at_cell.set([at.offset[1], at.viewport[1]]);
+            at_cell.set([at.offset[1], at.viewport[1], at.offset[0]]);
             shift.set([0.0, -at.offset[1]]);
             if let Some(live) = &live {
                 live.set([at.offset[1], at.max[1], at.viewport[1], at.drawn[1]]);
@@ -492,7 +529,7 @@ impl Look {
             }
         };
         let font = TextStyle {
-            size: 13.0,
+            size: CODE_SIZE,
             line_height: m.line,
             ..k.ty.mono
         };
@@ -507,7 +544,7 @@ impl Look {
             m,
             font,
             number: TextStyle {
-                size: 12.0,
+                size: NUMBER_SIZE,
                 line_height: m.line,
                 ..k.ty.mono
             },
@@ -532,7 +569,7 @@ impl Look {
                 line_height: 18.0,
                 ..k.ty.ui
             },
-            adv: 0.6 * font.size,
+            adv: ADV,
             bg,
             text: c.text_base,
             muted: c.text_muted,
@@ -601,7 +638,7 @@ impl Look {
 
     /// One line-number column for numbers of `digits` digits.
     fn number_w(&self, digits: u32) -> f32 {
-        (digits as f32 * 0.6 * self.number.size + 16.0).ceil().max(NUMBER_MIN)
+        number_w(digits)
     }
 }
 
@@ -655,13 +692,36 @@ impl Cell<'_> {
 #[derive(Clone, Copy, Default, PartialEq, Eq, Hash)]
 struct Marks {
     cursor: bool,
+    /// The block's side and bytes, on the cursor's row.
+    block: Option<(Side, u32, u32)>,
+    /// Visual mode's side and bytes on this row (charwise).
+    vis: Option<(Side, u32, u32)>,
+    /// The viewport's height on the cursor's row, which sizes its margin box.
+    room: u32,
     range: [bool; 2],
     spans: u64,
+}
+
+impl Marks {
+    /// The block on `side`'s cell (any cell in one column).
+    fn block_on(&self, side: Option<Side>) -> Option<Range<usize>> {
+        self.block
+            .filter(|b| side.is_none_or(|s| s == b.0))
+            .map(|(_, a, b)| a as usize..b as usize)
+    }
+
+    fn vis_on(&self, side: Option<Side>) -> Option<Range<usize>> {
+        self.vis
+            .filter(|v| side.is_none_or(|s| s == v.0))
+            .map(|(_, a, b)| a as usize..b as usize)
+    }
 }
 
 struct View<S> {
     d: DiffView<S>,
     look: Look,
+    /// Visual mode's extent, worked out once a build.
+    vis: Option<VisualSpan>,
 }
 
 impl<S: 'static> View<S> {
@@ -686,8 +746,23 @@ impl<S: 'static> View<S> {
 
     fn marks(&self, st: &DiffState, i: usize, r: Row) -> Marks {
         let f = r.file();
+        let cursor = st.cursor_row() == Some(i as u32);
         let mut m = Marks {
-            cursor: st.cursor_row() == Some(i as u32),
+            cursor,
+            block: st
+                .block()
+                .filter(|_| cursor && self.d.block)
+                .map(|(s, b)| (s, b.start as u32, b.end as u32)),
+            vis: self
+                .vis
+                .as_ref()
+                .filter(|v| (v.rows.0..=v.rows.1).contains(&(i as u32)))
+                .and_then(|v| {
+                    let side = st.visual_side(v, i as u32);
+                    let len = st.row_text(i as u32, side)?.len();
+                    v.bytes(i as u32, len).map(|b| (side, b.start as u32, b.end as u32))
+                }),
+            room: if cursor { st.viewport_height().to_bits() } else { 0 },
             ..Marks::default()
         };
         if st.annotations().is_empty() {
@@ -816,11 +891,13 @@ impl<S: 'static> View<S> {
     }
 
     fn line(&self, s: &S, st: &DiffState, i: usize, key: &str, annotated: bool) -> El {
+        LINE_BUILDS.with(|n| n.set(n.get() + 1));
         let r = st.rows[i];
         let f = r.file();
         let (a, b) = self.cells(st, r);
         let Some(a) = a else { return col() };
         let marks = self.marks(st, i, r);
+        let reveal = marks.cursor.then(|| self.reveal_box(st));
         let draw = st.draw(f);
         let line = match draw {
             Draw::Unified => {
@@ -849,10 +926,9 @@ impl<S: 'static> View<S> {
                 self.split(st, i, f, old, new, marks, key, [old_mark, new_mark])
             }
         };
-        let Some(build) = self.d.annotation.as_ref() else { return line };
-        if !annotated {
-            return line;
-        }
+        let Some(build) = self.d.annotation.as_ref().filter(|_| annotated) else {
+            return line.children(reveal);
+        };
         // Annotations run the reader's full width under the line, in unified and split alike.
         let mut c = col().key("notes").w_full();
         if let Some(w) = self.view_w(st) {
@@ -873,6 +949,25 @@ impl<S: 'static> View<S> {
             .w_full()
             .child(line.key("line"))
             .child(c.children(all.map(|a| note(build(s, a), a))))
+            .children(reveal)
+    }
+
+    /// An invisible box around the cursor's line, three lines taller each way (and a sticky
+    /// header's height above), that a cursor move scrolls just into view: Vim's `scrolloff`.
+    fn reveal_box(&self, st: &DiffState) -> El {
+        let m = &self.look.m;
+        let (mut above, mut below) = (SCROLLOFF * m.line + m.header, SCROLLOFF * m.line);
+        let room = st.viewport_height() - m.line;
+        if room > 0.0 && above + below > room {
+            let k = room / (above + below);
+            (above, below) = (above * k, below * k);
+        }
+        el().key("vim-reveal")
+            .absolute(0.0, -above)
+            .w_full()
+            .h(above + m.line + below)
+            .inert()
+            .a11y_hidden()
     }
 
     /// Whether lines carry the hover's `+` and `?`.
@@ -1025,7 +1120,10 @@ impl<S: 'static> View<S> {
             .role("listitem")
             .label(label)
             .child(gutter)
-            .child(self.code(st, f, &c, copy, hover_side, key).key("code"));
+            .child(
+                self.code(st, f, &c, copy, hover_side, key, marks.block_on(None), marks.vis_on(None))
+                    .key("code"),
+            );
         if marks.cursor {
             r = r.child(self.cursor_bar());
         }
@@ -1075,7 +1173,10 @@ impl<S: 'static> View<S> {
                 .child(self.marks_cell(f, at, mark, show))
                 .child(self.number(st, i, f, n, side, selected, marks.cursor, digits).key("n"))
                 .child(self.sign(if calm { LineKind::Context } else { kind }, SIGN.1))
-                .child(self.code(st, f, &cell, copy, side, key).key("code"));
+                .child(
+                    self.code(st, f, &cell, copy, side, key, marks.block_on(Some(side)), marks.vis_on(Some(side)))
+                        .key("code"),
+                );
             if marks.range[side as usize] {
                 h = h.child(self.range_bar().absolute(MARKS + l.number_w(digits) - RANGE_BAR, 0.0));
             }
@@ -1168,27 +1269,44 @@ impl<S: 'static> View<S> {
     }
 
     /// The code of a line: syntax colours under word changes, tabs padded to four columns, span
-    /// comments' text tinted without moving a glyph.
-    fn code(&self, st: &DiffState, f: usize, c: &Cell<'_>, copy: bool, side: Side, row_key: &str) -> El {
+    /// comments' text tinted without moving a glyph; visual mode's bytes in the selection colour
+    /// and the cursor's `block` inverted, the text's colour behind the ground's.
+    #[allow(clippy::too_many_arguments)]
+    fn code(
+        &self,
+        st: &DiffState,
+        f: usize,
+        c: &Cell<'_>,
+        copy: bool,
+        side: Side,
+        row_key: &str,
+        block: Option<Range<usize>>,
+        vis: Option<Range<usize>>,
+    ) -> El {
         let l = &self.look;
         let (src, n) = c.source();
         let syntax: Vec<(Range<usize>, Color)> = st.highlights(f, src, n).into_iter().map(|(r, p)| (r, l.syntax.paint(p))).collect();
         let word = l.tints(c.kind).map(|t| t.word);
         let spans = layer(c.text.len(), &syntax, word.map_or(&[][..], |_| &c.changes[..]), word);
-        let marks = st.span_marks(f, LineRef::new(src, n));
         let (found, current) = st.find_marks(c.text, c.idx.map(|i| (f, i)));
-        let n_spans = marks.len();
-        let all: Vec<Range<usize>> = marks.into_iter().chain(found).collect();
-        let (shown, spans, pads, all) = tabbed(c.text, spans, all, st.wraps());
+        let paint = MarkPaint {
+            span: l.span_mark,
+            find: if current { l.find_current } else { l.find_hit },
+            selection: l.selection,
+            text: l.text,
+            bg: l.bg,
+        };
+        let m = LineMarks {
+            spans: st.span_marks(f, LineRef::new(src, n)),
+            found,
+            vis,
+            block,
+        };
+        let (shown, spans, pads, lit) = drawn(c.text, spans, m, st.wraps(), &paint);
         let mut t = rich(shown, spans).font(l.font).color(l.text).key("text");
         t = if st.wraps() { t.w_full() } else { t.single_line() };
-        if !all.is_empty() {
-            let find = if current { l.find_current } else { l.find_hit };
-            t = t.text_highlights(
-                all.into_iter()
-                    .enumerate()
-                    .map(|(i, r)| TextHighlight::new(r, if i < n_spans { l.span_mark } else { find })),
-            );
+        if !lit.is_empty() {
+            t = t.text_highlights(lit);
         }
         if copy {
             t = t.selectable(true).selection_color(l.selection);
@@ -1582,6 +1700,58 @@ fn note(el: El, a: &Annotation) -> El {
 /// A line as drawn: text, spans, inserted (uncopied) ranges and span marks, from `tabbed`.
 type Drawn = (String, Vec<Span>, Vec<Range<usize>>, Vec<Range<usize>>);
 
+/// A line as drawn with its marks lit: text, spans, uncopied ranges and highlights.
+type Lit = (String, Vec<Span>, Vec<Range<usize>>, Vec<TextHighlight>);
+
+/// The colours a line's marks paint in.
+struct MarkPaint {
+    span: Color,
+    find: Color,
+    selection: Color,
+    text: Color,
+    bg: Color,
+}
+
+/// Byte ranges of a line's code to mark: span comments, find hits, visual mode, the block.
+struct LineMarks {
+    spans: Vec<Range<usize>>,
+    found: Vec<Range<usize>>,
+    vis: Option<Range<usize>>,
+    block: Option<Range<usize>>,
+}
+
+/// `code` as drawn (see [`tabbed`]) with its marks as highlights, painted in that order so the
+/// block is on top: the text's colour behind the glyph, the glyph in the ground's. An empty
+/// line's block sits on a space nothing copies.
+fn drawn(code: &str, spans: Vec<Span>, m: LineMarks, wrap: bool, p: &MarkPaint) -> Lit {
+    let n_spans = m.spans.len();
+    let mut all: Vec<Range<usize>> = m.spans.into_iter().chain(m.found).collect();
+    let n_found = all.len();
+    let vis_at = m.vis.is_some().then_some(n_found);
+    all.extend(m.vis);
+    let block_at = m.block.is_some().then_some(all.len());
+    all.extend(m.block);
+    let (mut shown, spans, mut pads, mut all) = tabbed(code, spans, all, wrap);
+    if code.is_empty()
+        && let Some(b) = block_at.and_then(|i| all.get_mut(i))
+    {
+        shown.push(' ');
+        pads.push(0..1);
+        *b = 0..1;
+    }
+    let lit = all
+        .into_iter()
+        .enumerate()
+        .map(|(i, r)| match i {
+            _ if Some(i) == block_at => TextHighlight::new(r, p.text).color(p.bg).pad(0.0),
+            _ if Some(i) == vis_at => TextHighlight::new(r, p.selection),
+            _ if i < n_spans => TextHighlight::new(r, p.span),
+            _ => TextHighlight::new(r, p.find),
+        })
+        .collect();
+    (shown, spans, pads, lit)
+}
+
 /// Spans for a line from its syntax colours and the byte ranges given `bg` (word changes): cut
 /// where either starts or ends, so each piece has one colour and one background.
 fn layer(len: usize, syntax: &[(Range<usize>, Color)], words: &[Range<usize>], bg: Option<Color>) -> Vec<Span> {
@@ -1702,6 +1872,49 @@ mod tests {
         for (b, col) in [(0, 0), (2, 2), (4, 2), (5, 3)] {
             assert_eq!(shown_to_col("a\tb\t\tc", false, b), col, "byte {b}");
         }
+    }
+
+    #[test]
+    #[allow(clippy::single_range_in_vec_init)]
+    fn the_block_inverts_one_grapheme_a_tabs_width_or_an_empty_lines_column() {
+        let hue = |r, g, b| Color { r, g, b, a: 1.0 };
+        let p = MarkPaint {
+            span: hue(1.0, 0.0, 0.0),
+            find: hue(0.0, 1.0, 0.0),
+            selection: hue(0.0, 0.0, 1.0),
+            text: Color::WHITE,
+            bg: Color::BLACK,
+        };
+        let block = |r: Range<usize>| TextHighlight::new(r, Color::WHITE).color(Color::BLACK).pad(0.0);
+        let marks = |vis: Option<Range<usize>>, b: Range<usize>| LineMarks {
+            spans: Vec::new(),
+            found: vec![0..1],
+            vis,
+            block: Some(b),
+        };
+        let (shown, _, _, lit) = drawn("ab\tc", Vec::new(), marks(None, 2..3), false, &p);
+        assert_eq!(shown, "ab\t c");
+        assert_eq!(lit.last(), Some(&block(2..4)), "the tab and its padding: one cell as drawn");
+        let (_, _, _, lit) = drawn("xe\u{301}y", Vec::new(), marks(Some(0..4), 1..4), false, &p);
+        assert_eq!(lit[0], TextHighlight::new(0..1, p.find));
+        assert_eq!(lit[1], TextHighlight::new(0..4, p.selection));
+        assert_eq!(lit[2], block(1..4), "the whole grapheme, on top of the selection");
+        let (shown, _, pads, lit) = drawn("", Vec::new(), marks(None, 0..0), false, &p);
+        assert_eq!((shown.as_str(), pads), (" ", vec![0..1]), "a space nothing copies");
+        assert_eq!(lit.last(), Some(&block(0..1)));
+        let (shown, _, pads, lit) = drawn(
+            "",
+            Vec::new(),
+            LineMarks {
+                spans: Vec::new(),
+                found: Vec::new(),
+                vis: None,
+                block: None,
+            },
+            false,
+            &p,
+        );
+        assert!(shown.is_empty() && pads.is_empty() && lit.is_empty(), "no block, nothing added");
     }
 
     #[test]

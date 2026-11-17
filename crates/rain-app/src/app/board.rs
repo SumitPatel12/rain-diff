@@ -398,14 +398,14 @@ impl App {
         out.into_iter().map(|(_, g)| g).collect()
     }
 
-    /// `f`: focuses the list's filter box.
+    /// `Ctrl+L`: focuses the list's filter box.
     pub fn focus_list_filter(&mut self, tx: &mut Tx) {
         self.filter_files(tx);
     }
 
     // ----- accept -----
 
-    /// `Shift+V`: accepts the current item's group.
+    /// `Shift+A`: accepts the current item's group.
     pub fn accept_group(&mut self, tx: &mut Tx) {
         let group = match self.board.pick {
             Pick::Group(g) if self.single_mode() => Some(g),

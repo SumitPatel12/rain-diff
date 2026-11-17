@@ -19,6 +19,11 @@ use rune_kit::syntax::{Highlight, Highlighter, Paint};
 use crate::model::{self, Block, LineIndex};
 use crate::myers;
 
+pub(crate) mod vim;
+
+use vim::{Pending, Want};
+pub use vim::{Vim, VimKey, Visual};
+
 /// How a diff lays out its two sides.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum DiffMode {
@@ -386,6 +391,17 @@ pub struct DiffState {
     shift: bool,
     span: Option<SpanSelection>,
     cursor: Option<(usize, LineRef)>,
+    /// The cursor's byte in its line, kept on a grapheme's start as the line is read.
+    col: usize,
+    /// The column `j` and `k` aim for (Vim's curswant).
+    want: Want,
+    /// A count or the first key of `gg`, `yy`, `f{c}`.
+    pending: Pending,
+    /// The last `f` `t` (char, forward, till), for `;` and `,`.
+    last_find: Option<(char, bool, bool)>,
+    visual: Option<Visual>,
+    /// The scroll viewport's key, as the view last drew it.
+    scroll_key: RefCell<String>,
     /// The side text selection copies, which follows the pointer.
     copy_side: Side,
     hovered: Vec<(Side, String)>,
@@ -432,8 +448,8 @@ pub struct DiffState {
     spot_rows: Option<(u32, u32)>,
     /// Per file and hunk (by `hunk_base`), its stable id.
     hunk_ids: Vec<u64>,
-    /// The viewport's scroll offset and height, as the view last drew them.
-    scroll: Rc<std::cell::Cell<[f32; 2]>>,
+    /// The viewport's vertical offset, height and horizontal offset, as the view last drew them.
+    scroll: Rc<std::cell::Cell<[f32; 3]>>,
     /// The spot outline's shift with the scroll, set every scrolled frame without a commit.
     pub(crate) spot_shift: rune::Live<[f32; 2]>,
     m: Metrics,
@@ -475,6 +491,12 @@ impl DiffState {
             shift: false,
             span: None,
             cursor: None,
+            col: 0,
+            want: Want::Here,
+            pending: Pending::default(),
+            last_find: None,
+            visual: None,
+            scroll_key: RefCell::new(String::new()),
             copy_side: Side::New,
             hovered: Vec::new(),
             hover_line: None,
@@ -502,7 +524,7 @@ impl DiffState {
             find: None,
             spot_rows: None,
             hunk_ids: Vec::new(),
-            scroll: Rc::new(std::cell::Cell::new([0.0; 2])),
+            scroll: Rc::new(std::cell::Cell::new([0.0; 3])),
             spot_shift: rune::Live::new([0.0; 2]),
             m: Metrics::default(),
         };
@@ -555,6 +577,8 @@ impl DiffState {
         self.selection = None;
         self.span = None;
         self.cursor = None;
+        self.visual = None;
+        self.pending = Pending::default();
         self.chunks.borrow_mut().clear();
         self.visible = 0;
         self.reported = None;
@@ -1012,6 +1036,9 @@ impl DiffState {
     }
 
     pub fn set_span_selection(&mut self, span: Option<SpanSelection>) {
+        if span.is_some() {
+            self.visual = None;
+        }
         self.span = span;
     }
 
@@ -1059,6 +1086,7 @@ impl DiffState {
     /// A press on line `at`'s number: a new selection, or with Shift held one extended to it.
     /// Pressing the one selected line clears it on release, unless the press drags.
     pub(crate) fn press_line(&mut self, file: usize, at: LineRef) {
+        self.visual = None;
         self.selection_at_press = self.selection;
         let sel = match self.selection {
             Some(s) if self.shift && s.file == file => LineRange { end: at, ..s },
@@ -1198,7 +1226,8 @@ impl DiffState {
     }
 
     pub fn set_cursor(&mut self, cursor: Option<(usize, LineRef)>) {
-        self.cursor = cursor;
+        let prev = std::mem::replace(&mut self.cursor, cursor);
+        self.jumped(prev);
     }
 
     /// The row the cursor is on, when it is shown.
@@ -1207,23 +1236,39 @@ impl DiffState {
         self.row_of(f, at.side, at.line)
     }
 
-    /// Move the cursor to the next (or previous) line, scrolling it into view.
+    /// Move the cursor to the next (or previous) line, at the column it aims for, scrolling only
+    /// as far as keeps it off the viewport's edges.
     pub fn cursor_step(&mut self, forward: bool, tx: &mut Tx) -> bool {
+        self.cursor_steps(forward, 1, tx)
+    }
+
+    /// [`DiffState::cursor_step`] `n` lines at once.
+    pub fn cursor_steps(&mut self, forward: bool, n: u32, tx: &mut Tx) -> bool {
         let from = self
             .cursor_row()
             .map_or_else(|| self.position() as i64 - i64::from(forward), i64::from);
-        let mut r = from;
-        loop {
-            r += if forward { 1 } else { -1 };
-            let Some(&row) = usize::try_from(r).ok().and_then(|i| self.rows.get(i)) else {
-                return false;
-            };
-            if row.has_line() {
-                break;
-            }
-        }
-        self.put_cursor(r as u32, tx);
+        let Some(r) = self.step_rows(from, forward, n) else { return false };
+        self.put_cursor(r, tx);
         true
+    }
+
+    /// The row `n` line rows on from row `from` (fewer at the end of the rows); `None` when
+    /// there is none at all.
+    fn step_rows(&self, from: i64, forward: bool, n: u32) -> Option<u32> {
+        let (mut r, mut found) = (from, None);
+        for _ in 0..n.max(1) {
+            loop {
+                r += if forward { 1 } else { -1 };
+                let Some(&row) = usize::try_from(r).ok().and_then(|i| self.rows.get(i)) else {
+                    return found;
+                };
+                if row.has_line() {
+                    break;
+                }
+            }
+            found = Some(r as u32);
+        }
+        found
     }
 
     pub fn cursor_down(&mut self, tx: &mut Tx) -> bool {
@@ -1234,24 +1279,47 @@ impl DiffState {
         self.cursor_step(false, tx)
     }
 
-    /// Put the cursor on row `r`'s line, preferring the cursor's side, and scroll it into view.
+    /// Put the cursor on row `r`'s line, preferring the cursor's side, at the column it aims for.
     fn put_cursor(&mut self, r: u32, tx: &mut Tx) {
-        let row = self.rows[r as usize];
         let prefer = self.cursor.map_or(Side::New, |(_, at)| at.side);
-        let side = match row {
+        self.aim();
+        let side = self.side_for(self.rows[r as usize], prefer);
+        self.land_at_want(r, side, tx);
+    }
+
+    /// The side the cursor takes on `row`: the side a one-sided line is on, else `prefer`.
+    pub(crate) fn side_for(&self, row: Row, prefer: Side) -> Side {
+        match row {
             Row::Line { f, i } => match self.files[f as usize].lines[i as usize].kind {
                 LineKind::Removed => Side::Old,
                 LineKind::Added => Side::New,
                 LineKind::Context => prefer,
             },
             _ => prefer,
-        };
-        let Some(n) = self.row_line(row, side) else { return };
-        self.cursor = Some((row.file(), LineRef::new(side, n)));
-        self.visible = row.file();
-        if !self.in_view(r as usize) {
-            tx.scroll_into_view(self.key_of(row));
         }
+    }
+
+    /// Row `r`'s text on `side`, when it shows that side.
+    pub(crate) fn row_text(&self, r: u32, side: Side) -> Option<&str> {
+        let row = *self.rows.get(r as usize)?;
+        let file = &self.files[row.file()];
+        let i = match row {
+            Row::Line { i, .. } => i,
+            Row::Pair { del, add, .. } => {
+                if side == Side::Old {
+                    del
+                } else {
+                    add
+                }
+            }
+            Row::Ctx { old, new, .. } => {
+                let n = if side == Side::Old { old } else { new };
+                return Some(self.side_line(row.file(), side, n).unwrap_or(""));
+            }
+            _ => return None,
+        };
+        model::number(file, i, side)?;
+        Some(file.line_text(i))
     }
 
     /// Row `r` is on screen below the sticky header.
@@ -1289,7 +1357,8 @@ impl DiffState {
         self.reveal_below_header(r, tx);
         self.visible = file;
         self.nav = Some(r);
-        self.cursor = Some((file, at));
+        let prev = self.cursor.replace((file, at));
+        self.jumped(prev);
     }
 
     /// Opens `file` and the unchanged range holding line `at`, so the line has a row.
@@ -1398,12 +1467,18 @@ impl DiffState {
         self.reveal_at_top(top as u32, tx);
         self.visible = file;
         self.nav = Some(r);
-        self.cursor = Some((file, LineRef::new(side, n)));
+        let prev = self.cursor.replace((file, LineRef::new(side, n)));
+        self.jumped(prev);
     }
 
     /// The viewport's scroll offset in points, as last drawn: for keeping the reading place.
     pub fn scroll_offset(&self) -> f32 {
         self.scroll.get()[0]
+    }
+
+    /// How far the code is scrolled sideways in points, as last drawn.
+    pub fn scroll_offset_x(&self) -> f32 {
+        self.scroll.get()[2]
     }
 
     /// The viewport's height in points, as last drawn (0 before the first frame).
@@ -1412,7 +1487,7 @@ impl DiffState {
     }
 
     /// The view records where it is scrolled here every frame it moves (no commit).
-    pub(crate) fn scroll_cell(&self) -> Rc<std::cell::Cell<[f32; 2]>> {
+    pub(crate) fn scroll_cell(&self) -> Rc<std::cell::Cell<[f32; 3]>> {
         self.scroll.clone()
     }
 
@@ -1494,7 +1569,8 @@ impl DiffState {
                 _ => Side::New,
             };
             if let Some(n) = self.row_line(row, side) {
-                self.cursor = Some((row.file(), LineRef::new(side, n)));
+                let prev = self.cursor.replace((row.file(), LineRef::new(side, n)));
+                self.jumped(prev);
             }
         }
         true
@@ -1515,6 +1591,7 @@ impl DiffState {
         };
         self.scroll_to_file(f, tx);
         self.cursor = None;
+        self.sync_visual();
         true
     }
 
@@ -1580,6 +1657,7 @@ impl DiffState {
             }
             Key::Escape if self.cursor.is_some() => {
                 self.cursor = None;
+                self.sync_visual();
                 true
             }
             _ if ev.is_command('c') => match self.selected_text() {

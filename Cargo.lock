@@ -2817,6 +2817,7 @@ dependencies = [
  "rain-core",
  "rune",
  "rune-kit",
+ "unicode-segmentation",
 ]
 
 [[package]]
