@@ -65,6 +65,31 @@ fn on_screen(rt: &Runtime<App>) -> f32 {
 }
 
 #[test]
+fn the_block_is_a_square_one_cell_wide_and_a_click_moves_it() {
+    let mut rt = vim_rt(20);
+    keys(&mut rt, "jw");
+    settle(&mut rt);
+    let blocks: Vec<_> = rt.elements().into_iter().filter(|e| e.key.as_deref() == Some("block")).collect();
+    assert_eq!(blocks.len(), 1, "one block on the cursor's line");
+    let b = blocks[0].rect;
+    let text = rt
+        .elements()
+        .into_iter()
+        .find(|e| e.key.as_deref() == Some("text") && e.rect[1] == b[1])
+        .unwrap()
+        .rect;
+    assert!(b[0] > text[0], "past `fn `: {b:?} {text:?}");
+    assert!(b[2] > 4.0 && b[2] < 14.0 && b[3] >= 14.0, "a cell-sized square: {b:?}");
+    let (line, _) = at(&rt);
+    let (x, y) = (text[0] + 1.0, b[1] + b[3] / 2.0);
+    rt.pointer_move(x, y);
+    rt.pointer_down(x, y);
+    rt.pointer_up(x, y);
+    settle(&mut rt);
+    assert_eq!(at(&rt), (line, 0), "a click at the line's start puts the cursor there");
+}
+
+#[test]
 fn vim_motions_reach_the_diff_ahead_of_the_keymap() {
     let mut rt = vim_rt(200);
     keys(&mut rt, "j");

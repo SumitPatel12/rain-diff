@@ -1314,16 +1314,21 @@ impl<S: 'static> View<S> {
             vis,
             block,
         };
-        let (shown, spans, pads, lit) = drawn(c.text, spans, m, st.wraps(), &paint);
+        let (shown, spans, pads, mut lit) = drawn(c.text, spans, m, st.wraps(), &paint);
         let cell_w = rune::text::advance("0", l.font);
-        // The highlight under the block has round corners; a square behind it fills them.
+        // Highlights have round corners: the block is a square behind its glyph instead, the
+        // highlight left only to colour the glyph.
         let square = (has_block && !st.wraps())
             .then(|| lit.last().map(TextHighlight::range))
             .flatten()
             .map(|r| {
+                if let Some(h) = lit.last_mut() {
+                    *h = TextHighlight::new(r.clone(), l.text.alpha(0.0)).color(l.bg).pad(0.0);
+                }
                 let head = &shown[..r.start];
+                // A line's measured width leaves out trailing spaces, so measure past a mark.
                 let x = if head.len() <= 4096 {
-                    rune::text::advance(head, l.font)
+                    rune::text::advance(&format!("{head}|"), l.font) - rune::text::advance("|", l.font)
                 } else {
                     cell_w * head.chars().count() as f32
                 };
