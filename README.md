@@ -8,7 +8,9 @@ review rounds in a session file. It is built for reviewing alongside a coding ag
   not covered, how to verify) and an overview document; Rain checks every cited path against the diff.
 - **Comments**: line, range, span, file and PR-level threads with kinds (issue, suggestion, nit, question, praise),
   states (open, addressed, resolved, dismissed) and replies; a Question is answered inline by the agent.
-- **Map**: native architecture, data-flow and data-model diagrams from the overview, shaded by what you have viewed.
+- **Map**: native architecture, data-flow and data-model diagrams from the overview, shaded by what you have viewed,
+  plus animated diagrams of the change (a layered tour, a step-by-step flowchart, field lineage with an ER view, and a
+  before/after icicle for performance).
 - **Tour**: a guided walk through the change, a spotlight sliding between the cited ranges.
 - **Triage**: deterministic grouping (changes, tests, moves, formatting-only, generated, lockfiles, huge, binary) in
   one reading order.
@@ -17,6 +19,13 @@ An agent drives a running window over HTTP or the CLI; see [docs/agent.md](docs/
 difit's comment routes, so tooling written for difit can read comments back unchanged
 ([docs/compat.md](docs/compat.md)). A ready-to-copy Claude Code skill that drives Rain lives in
 [skills/rain/](skills/rain/).
+
+## Download
+
+Windows x64: grab `Rain-<version>-windows-x64.zip` from [Releases](../../releases/latest), unzip, and run `Rain.exe`
+(or put it on your `PATH`). The build isn't code-signed yet, so Windows SmartScreen may warn on the first run: choose
+**More info → Run anyway**. Check the download against the `.sha256` file beside it. Other platforms: build from
+source below.
 
 ## Build and run
 
