@@ -9,6 +9,7 @@ mod filter;
 mod folds;
 mod layout;
 mod listing;
+mod map_diagrams;
 mod notes;
 mod overview;
 mod peek;

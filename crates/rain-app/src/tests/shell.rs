@@ -368,7 +368,9 @@ fn m_opens_the_map_overlay_and_a_node_press_jumps_to_its_file() {
     press(&mut rt, Key::Escape, Mods::default());
     assert!(!rt.state.layout.is_open(Overlay::Map));
     typed(&mut rt, "m");
-    rt.update(|s, tx| s.diagram_event(rain_diagram::DiagramEvent::Node("voucher-service".into()), tx));
+    for _ in 0..2 {
+        rt.update(|s, tx| s.diagram_event(rain_diagram::DiagramEvent::Node("voucher-service".into()), tx));
+    }
     settle(&mut rt);
     assert!(!rt.state.layout.is_open(Overlay::Map));
     assert_eq!(rt.state.current_key().as_deref(), Some("server/src/Services/VoucherService.cs"));

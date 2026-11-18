@@ -477,7 +477,20 @@ what they have viewed (hunk-level).
   checks a document offline; `rain overview render <file> --out <dir> [--size 1600x1000]` draws
   every view to `<dir>\NN-<view title>-<theme>.png` without a window.
 - The overview feeds the Map overlay (`m`; Clean style) and upgrades triage risk and `why` for the
-  files it rates. Repo ids: the overview `repos[].id` whose `dir` equals the checkout folder name
+  files it rates.
+- **Animated diagrams.** An optional top-level `diagrams` object carries up to four documents, each
+  in a rain-lab schema (fields: `crates/rain-lab/schema/README.md`): `tour` (schema A) for the
+  request / data flow through the layers, `flowchart` (S) for a step-by-step scene of the change,
+  `lineage` (B) for schema or data-model changes (PK/FK, a why-note per card), `icicle` (C) for
+  performance-sensitive code or a query before/after. The Map shows them first, as animated tabs
+  (Space plays, ←/→ step, Home restarts), the first one selected, then the graph's views. Keep each
+  compact (tour ≤ 14 entities and ≤ 8 steps, flowchart ≤ 24 shapes and ≤ 12 beats, lineage ≤ 30
+  fields, icicle ≤ 40 frames). `overview validate` checks each against its schema and its ids, with
+  paths like `diagrams.tour.paths[0].steps[1].from` (`INVALID_DIAGRAM`, `BROKEN_REFERENCE`,
+  `DUPLICATE_ID`); an overview without `diagrams` loads as before. Examples:
+  `skills/rain/references/overview-guide.md` §7a.
+- On the Map's graph views a click selects a node (its pane: files, threads, Comment / Ask); a
+  second click opens its first hunk; ✕ or Esc closes the pane until a node is clicked again. Repo ids: the overview `repos[].id` whose `dir` equals the checkout folder name
   (case-insensitive), else the first `dir` the folder name contains, else the folder name.
 - `overview get` returns `coverageByRepo` (`review`, `missingReview`, `ignored`, `generated`,
   `uncovered`, `formattingOnly` per repo) and `coverage` for `selfRepo`; `diffLoaded` is false until

@@ -394,3 +394,57 @@ fn rig_and_view_timings() {
         }
     }
 }
+
+/// A review's diagrams are the agent's, not the samples: tiny, sparse and odd documents that
+/// pass the schema lay out, draw and play to the end without a panic in every style.
+#[test]
+fn every_style_draws_small_and_sparse_review_documents() {
+    use rain_core::overview::OverviewDiagrams;
+    use serde_json::json;
+    let docs = [
+        OverviewDiagrams {
+            tour: Some(json!({ "title": "t", "entities": [{ "id": "a", "label": "A", "layer": "api" }],
+                "paths": [{ "id": "p", "name": "P", "steps": [{ "from": "a", "to": "a", "call": "x()", "status": "same" }] }] })),
+            flowchart: Some(json!({ "title": "t", "size": [10, 10], "shapes": [], "beats": [] })),
+            lineage: Some(json!({ "title": "t" })),
+            icicle: Some(json!({ "title": "t", "calls": { "id": "r", "name": "R" } })),
+        },
+        OverviewDiagrams {
+            tour: Some(json!({ "title": "", "entities": [
+                    { "id": "a", "label": "A", "layer": "mystery" }, { "id": "b", "label": "B", "layer": "db", "parent": "a" }],
+                "paths": [{ "id": "p", "name": "P", "steps": [
+                    { "from": "a", "to": "b", "call": "", "status": "removed", "fragment": "loop", "carries": ["b"] }] }],
+                "tour": [{ "title": "only", "text": "[[a]] then [[nowhere]]", "focus": ["a", "b"], "camera": { "zoom": 9 } }] })),
+            flowchart: Some(json!({ "title": "t", "size": [0, 0],
+                "shapes": [{ "id": "x", "kind": "arrow", "at": [0, 0] }, { "id": "d", "kind": "dot", "at": [5, 5] }],
+                "beats": [{ "t": 0, "actions": [{ "do": "pulse", "target": "x" }, { "do": "focus", "target": "" }] },
+                          { "t": 0, "actions": [{ "do": "morph", "target": "d", "into": "" }] }] })),
+            lineage: Some(json!({ "title": "t", "fields": [
+                { "id": "db:A.x", "stage": "db", "before": null, "after": null },
+                { "id": "ui:B.y", "stage": "ui", "after": { "name": "y", "type": "int" }, "references": "db:A.x" }],
+                "lineage": [{ "from": "db:A.x", "to": "ui:B.y", "via": ["db:A.x"] }], "notes": [{ "card": "dto:None", "why": "w" }] })),
+            icicle: Some(json!({ "title": "t", "calls": { "id": "r", "name": "R", "before": 0, "after": 0 },
+                "profiles": [{ "title": "p", "calls": { "id": "q", "name": "Q", "children": [{ "id": "q1", "name": "Q1", "after": 1e9 }] } }] })),
+        },
+    ];
+    let (k, ink) = (kit(), DiagramStyle::dark());
+    for (n, d) in docs.iter().enumerate() {
+        let (data, styles) = crate::review_diagrams(d);
+        assert_eq!(styles.len(), 4, "doc {n}: all four read");
+        for i in styles {
+            let mut lab = Lab::over(data.clone(), i);
+            for size in [[1100.0, 760.0], [40.0, 30.0]] {
+                let _ = lab.canvas(&k, &ink, size, &no_act);
+                lab.play();
+                for f in 0..2000 {
+                    if lab.tick(f as f32 / 30.0) == Tick::Ended || !lab.playing() {
+                        break;
+                    }
+                }
+                lab.step_by(false);
+                lab.step_by(true);
+                let _ = lab.canvas(&k, &ink, size, &no_act);
+            }
+        }
+    }
+}

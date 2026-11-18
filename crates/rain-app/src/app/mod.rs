@@ -60,7 +60,7 @@ pub use brief::{ArtifactDraft, BriefState, ComposeMode};
 pub use chapters::Subset;
 pub use composer::ComposerUi;
 pub use conversation::ConversationState;
-pub use diagram::DiagramPage;
+pub use diagram::{DiagramPage, MapTab};
 pub use editor::Launcher;
 pub use filter::FilterState;
 pub use find::Find;
@@ -472,6 +472,7 @@ impl App {
             self.chapters = Chapters::default();
         }
         self.diagram.target = self.diagram.target.min(self.layouts.len().saturating_sub(1));
+        self.rebuild_map_lab();
     }
 
     /// Frame start: loader messages, session changes from other threads, the highlighter's
@@ -562,6 +563,7 @@ impl App {
         }
         changed |= self.rest_poll(tx);
         changed |= self.playground_poll(tx);
+        changed |= self.map_lab_poll(tx);
         self.save_pane_state();
         changed
     }
@@ -852,6 +854,9 @@ impl App {
             return true;
         }
         if self.hide_selection_toolbar() {
+            return true;
+        }
+        if self.layout.top() == Some(Overlay::Map) && !self.diagram.lab_on && self.brief.composer.is_none() && self.close_map_pane() {
             return true;
         }
         if self.layout.pop_layer().is_some() {

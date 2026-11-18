@@ -224,6 +224,7 @@ impl App {
     /// when neither has the focus, so the key goes to the diff.
     pub fn artifact_key(&mut self, mode: ComposeMode) -> bool {
         if self.layout.is_open(Overlay::Map)
+            && !self.diagram.lab_on
             && let Some(n) = self.diagram.selected.clone()
         {
             self.comment_on_node(&n, mode);

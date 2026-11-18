@@ -1,0 +1,1936 @@
+{
+  "format": "difit-overview/v1",
+  "title": "ACME-0000 Vouchers at checkout (sample, with schema)",
+  "repos": [
+    {
+      "id": "server",
+      "dir": "acme-server",
+      "base": "1111111111111111111111111111111111111111",
+      "head": "2222222222222222222222222222222222222222"
+    },
+    {
+      "id": "app",
+      "dir": "acme-app",
+      "base": "3333333333333333333333333333333333333333",
+      "head": "WORKTREE"
+    }
+  ],
+  "graph": {
+    "schemaVersion": "0.3.0",
+    "kind": "graph",
+    "title": "Vouchers at checkout",
+    "summary": "Adds an optional voucher to account payments: a new VouchersController action, a VoucherService that validates and records the voucher, a Voucher entity, and an Angular voucher form wired into the account page.",
+    "lenses": [
+      "architecture",
+      "data-flow",
+      "data-model"
+    ],
+    "provenance": {
+      "repo": {
+        "owner": "acme",
+        "name": "acme-server"
+      },
+      "base": {
+        "sha": "1111111111111111111111111111111111111111"
+      },
+      "head": {
+        "sha": "2222222222222222222222222222222222222222"
+      }
+    },
+    "lanes": [
+      {
+        "id": "web",
+        "label": "Web app",
+        "subtitle": "Angular",
+        "order": 0
+      },
+      {
+        "id": "api",
+        "label": "Server API",
+        "subtitle": "ASP.NET",
+        "order": 1
+      },
+      {
+        "id": "data",
+        "label": "Data",
+        "subtitle": "SQL Server",
+        "order": 2
+      }
+    ],
+    "nodes": [
+      {
+        "id": "account-page",
+        "label": "Account page",
+        "kind": "ui",
+        "delta": "unchanged",
+        "lane": "web",
+        "files": [
+          {
+            "path": "app/src/app/account/account-page.component.ts"
+          }
+        ]
+      },
+      {
+        "id": "voucher-form",
+        "label": "VoucherFormComponent",
+        "kind": "ui",
+        "delta": "added",
+        "lane": "web",
+        "files": [
+          {
+            "path": "app/src/app/vouchers/voucher-form.component.ts",
+            "startLine": 1,
+            "endLine": 40
+          }
+        ]
+      },
+      {
+        "id": "voucher-client",
+        "label": "VoucherService (client)",
+        "kind": "service",
+        "delta": "added",
+        "lane": "web",
+        "files": [
+          {
+            "path": "app/src/app/vouchers/voucher.service.ts",
+            "startLine": 8,
+            "endLine": 20
+          }
+        ]
+      },
+      {
+        "id": "vouchers-controller",
+        "label": "POST /api/accounts/{id}/voucher",
+        "kind": "route",
+        "delta": "added",
+        "lane": "api",
+        "files": [
+          {
+            "path": "server/src/Api/VouchersController.cs",
+            "startLine": 12,
+            "endLine": 30
+          }
+        ]
+      },
+      {
+        "id": "voucher-service",
+        "label": "VoucherService",
+        "kind": "service",
+        "delta": "added",
+        "lane": "api",
+        "files": [
+          {
+            "path": "server/src/Services/VoucherService.cs",
+            "startLine": 9,
+            "endLine": 34
+          }
+        ]
+      },
+      {
+        "id": "account-service",
+        "label": "AccountService",
+        "kind": "service",
+        "delta": "modified",
+        "lane": "api",
+        "files": [
+          {
+            "path": "server/src/Services/AccountService.cs",
+            "startLine": 40,
+            "endLine": 52
+          }
+        ]
+      },
+      {
+        "id": "voucher-table",
+        "label": "Voucher",
+        "kind": "datastore",
+        "delta": "added",
+        "lane": "data",
+        "files": [
+          {
+            "path": "server/src/Data/Voucher.cs",
+            "startLine": 1,
+            "endLine": 18
+          }
+        ]
+      }
+    ],
+    "edges": [
+      {
+        "id": "page-to-form",
+        "from": "account-page",
+        "to": "voucher-form",
+        "kind": "render",
+        "delta": "added"
+      },
+      {
+        "id": "form-to-client",
+        "from": "voucher-form",
+        "to": "voucher-client",
+        "kind": "call",
+        "delta": "added"
+      },
+      {
+        "id": "client-to-api",
+        "from": "voucher-client",
+        "to": "vouchers-controller",
+        "kind": "http",
+        "delta": "added",
+        "label": "POST voucher",
+        "emphasis": "hero",
+        "animated": true
+      },
+      {
+        "id": "controller-to-service",
+        "from": "vouchers-controller",
+        "to": "voucher-service",
+        "kind": "call",
+        "delta": "added"
+      },
+      {
+        "id": "service-to-account",
+        "from": "voucher-service",
+        "to": "account-service",
+        "kind": "call",
+        "delta": "modified"
+      },
+      {
+        "id": "service-to-table",
+        "from": "voucher-service",
+        "to": "voucher-table",
+        "kind": "data",
+        "delta": "added"
+      }
+    ],
+    "flows": [
+      {
+        "id": "add-voucher",
+        "title": "Adding a voucher",
+        "delta": "added",
+        "participants": [
+          {
+            "node": "voucher-form"
+          },
+          {
+            "node": "vouchers-controller"
+          },
+          {
+            "node": "voucher-service"
+          },
+          {
+            "node": "voucher-table"
+          }
+        ],
+        "messages": [
+          {
+            "id": "submit",
+            "from": "voucher-form",
+            "to": "vouchers-controller",
+            "label": "POST /api/accounts/{id}/voucher",
+            "kind": "sync",
+            "delta": "added",
+            "files": [
+              {
+                "path": "app/src/app/vouchers/voucher.service.ts",
+                "startLine": 14
+              }
+            ]
+          },
+          {
+            "id": "record",
+            "from": "vouchers-controller",
+            "to": "voucher-service",
+            "label": "RecordVoucher(accountId, amount)",
+            "kind": "sync",
+            "delta": "added",
+            "files": [
+              {
+                "path": "server/src/Api/VouchersController.cs",
+                "startLine": 22
+              }
+            ]
+          },
+          {
+            "id": "insert",
+            "from": "voucher-service",
+            "to": "voucher-table",
+            "label": "INSERT Voucher",
+            "kind": "sync",
+            "delta": "added",
+            "files": [
+              {
+                "path": "server/src/Services/VoucherService.cs",
+                "startLine": 27
+              }
+            ]
+          },
+          {
+            "id": "ok",
+            "from": "vouchers-controller",
+            "to": "voucher-form",
+            "label": "200 VoucherViewModel",
+            "kind": "return",
+            "delta": "added"
+          }
+        ]
+      }
+    ],
+    "views": [
+      {
+        "id": "overview",
+        "title": "Vouchers end to end",
+        "lens": "architecture",
+        "defaultOpen": true,
+        "scope": {
+          "kind": "all"
+        }
+      },
+      {
+        "id": "api-only",
+        "title": "Inside the API",
+        "lens": "architecture",
+        "scope": {
+          "kind": "selection",
+          "nodes": [
+            "vouchers-controller",
+            "voucher-service",
+            "account-service",
+            "voucher-table"
+          ]
+        }
+      },
+      {
+        "id": "add-voucher-flow",
+        "title": "Adding a voucher",
+        "lens": "data-flow",
+        "scope": {
+          "kind": "selection",
+          "flows": [
+            "add-voucher"
+          ]
+        }
+      },
+      {
+        "id": "schema",
+        "title": "Voucher schema",
+        "lens": "data-model",
+        "scope": {
+          "kind": "all"
+        }
+      }
+    ],
+    "walkthrough": {
+      "steps": [
+        {
+          "id": "new-endpoint",
+          "heading": "Accounts now take a voucher",
+          "body": "A new endpoint records a voucher against an account; the web app posts it from a new form.",
+          "stage": {
+            "kind": "view",
+            "view": "overview"
+          },
+          "focus": {
+            "kind": "selection",
+            "nodes": [
+              "vouchers-controller",
+              "voucher-form"
+            ]
+          },
+          "detail": {
+            "text": "VoucherFormComponent posts to the new voucher endpoint, which hands the amount to VoucherService.",
+            "cites": [
+              {
+                "text": "VoucherFormComponent",
+                "ref": {
+                  "kind": "node",
+                  "node": "voucher-form"
+                }
+              },
+              {
+                "text": "voucher endpoint",
+                "ref": {
+                  "kind": "node",
+                  "node": "vouchers-controller"
+                }
+              },
+              {
+                "text": "VoucherService",
+                "ref": {
+                  "kind": "node",
+                  "node": "voucher-service"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "id": "flow",
+          "heading": "One request, one row",
+          "body": "The voucher is validated, then written as one Voucher row before the account total is refreshed.",
+          "stage": {
+            "kind": "flow",
+            "flow": "add-voucher"
+          },
+          "focus": {
+            "kind": "selection",
+            "messages": [
+              "record",
+              "insert"
+            ]
+          }
+        },
+        {
+          "id": "blast",
+          "heading": "4 parts added, 1 changed",
+          "body": "AccountService is the only existing code touched; it now includes vouchers in the total.",
+          "stage": {
+            "kind": "view",
+            "view": "overview"
+          },
+          "focus": {
+            "kind": "selection",
+            "nodes": [
+              "account-service"
+            ]
+          }
+        },
+        {
+          "id": "schema",
+          "heading": "A Voucher row per account",
+          "body": "Vouchers hang off accounts through a new foreign key, and a unique index keeps one voucher per account per moment.",
+          "stage": {
+            "kind": "view",
+            "view": "schema"
+          },
+          "focus": {
+            "kind": "selection",
+            "tables": [
+              "vouchers"
+            ]
+          },
+          "detail": {
+            "text": "Voucher.AccountId points at the account the voucher belongs to.",
+            "cites": [
+              {
+                "text": "Voucher.AccountId",
+                "ref": {
+                  "kind": "column",
+                  "table": "vouchers",
+                  "column": "AccountId"
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "dataModel": {
+      "stores": [
+        {
+          "id": "sql",
+          "label": "Acme DB",
+          "platform": "SQL Server"
+        }
+      ],
+      "tables": [
+        {
+          "id": "vouchers",
+          "label": "Voucher",
+          "store": "sql",
+          "name": "dbo.Vouchers",
+          "delta": "added",
+          "columns": [
+            {
+              "name": "Id",
+              "type": "int",
+              "key": "primary",
+              "delta": "added"
+            },
+            {
+              "name": "AccountId",
+              "type": "int",
+              "key": "foreign",
+              "delta": "added"
+            },
+            {
+              "name": "Amount",
+              "type": "decimal(18,2)",
+              "delta": "added"
+            },
+            {
+              "name": "CreatedAt",
+              "type": "datetime2",
+              "delta": "added"
+            }
+          ],
+          "indexes": [
+            {
+              "name": "UX_Vouchers_AccountId_Created",
+              "columns": [
+                "AccountId",
+                "CreatedAt"
+              ],
+              "unique": true,
+              "delta": "added",
+              "files": [
+                {
+                  "path": "server/src/Migrations/20260101000000_AddVoucher.cs",
+                  "startLine": 32,
+                  "endLine": 34
+                }
+              ]
+            }
+          ],
+          "files": [
+            {
+              "path": "server/src/Data/Voucher.cs",
+              "startLine": 1,
+              "endLine": 18
+            },
+            {
+              "path": "server/src/Migrations/20260101000000_AddVoucher.cs",
+              "startLine": 10,
+              "endLine": 30
+            }
+          ]
+        },
+        {
+          "id": "accounts",
+          "label": "Account",
+          "store": "sql",
+          "name": "dbo.Accounts",
+          "delta": "unchanged",
+          "columns": [
+            {
+              "name": "Id",
+              "type": "int",
+              "key": "primary",
+              "delta": "unchanged"
+            },
+            {
+              "name": "CustomerId",
+              "type": "int",
+              "key": "foreign",
+              "delta": "unchanged"
+            },
+            {
+              "name": "Total",
+              "type": "decimal(18,2)",
+              "delta": "unchanged"
+            }
+          ],
+          "indexes": [
+            {
+              "name": "IX_Accounts_CustomerId",
+              "columns": [
+                "CustomerId"
+              ],
+              "unique": false,
+              "delta": "unchanged"
+            }
+          ]
+        },
+        {
+          "id": "customers",
+          "label": "Customer",
+          "store": "sql",
+          "name": "dbo.Customers",
+          "delta": "unchanged",
+          "columns": [
+            {
+              "name": "Id",
+              "type": "int",
+              "key": "primary",
+              "delta": "unchanged"
+            },
+            {
+              "name": "Name",
+              "type": "nvarchar(200)",
+              "delta": "unchanged"
+            }
+          ]
+        }
+      ],
+      "relations": [
+        {
+          "id": "voucher-account",
+          "from": {
+            "table": "vouchers",
+            "column": "AccountId"
+          },
+          "to": {
+            "table": "accounts",
+            "column": "Id"
+          },
+          "delta": "added"
+        },
+        {
+          "id": "account-customer",
+          "from": {
+            "table": "accounts",
+            "column": "CustomerId"
+          },
+          "to": {
+            "table": "customers",
+            "column": "Id"
+          },
+          "delta": "unchanged"
+        }
+      ]
+    }
+  },
+  "readingOrder": [
+    {
+      "repo": "server",
+      "review": [
+        {
+          "path": "src/Api/VouchersController.cs",
+          "why": "payments entry point",
+          "risk": "critical"
+        },
+        {
+          "path": "src/Services/VoucherService.cs",
+          "why": "validation and the write",
+          "risk": "high"
+        },
+        {
+          "path": "src/Services/AccountService.cs",
+          "why": "the one modified path",
+          "risk": "high"
+        },
+        {
+          "path": "src/Data/Voucher.cs",
+          "why": "new entity",
+          "risk": "medium"
+        },
+        {
+          "path": "src/Migrations/20260101000000_AddVoucher.cs",
+          "why": "creates the Vouchers table and its index",
+          "risk": "high"
+        }
+      ],
+      "ignore": [
+        {
+          "glob": "src/Migrations/*.Designer.cs",
+          "reason": "generated"
+        }
+      ]
+    },
+    {
+      "repo": "app",
+      "review": [
+        {
+          "path": "src/app/vouchers/voucher-form.component.ts",
+          "why": "new form",
+          "risk": "medium"
+        },
+        {
+          "path": "src/app/vouchers/voucher.service.ts",
+          "why": "the call",
+          "risk": "medium"
+        }
+      ],
+      "ignore": [
+        {
+          "glob": "src/app/generated/**",
+          "reason": "generated models"
+        }
+      ]
+    }
+  ],
+  "phases": [
+    {
+      "id": "api",
+      "title": "API records a voucher",
+      "status": "done",
+      "today": "Accounts have no voucher; payments carry the account total only.",
+      "proposed": "A voucher endpoint validates and stores a Voucher row and the account total includes it.",
+      "nodeIds": [
+        "vouchers-controller",
+        "voucher-service",
+        "voucher-table",
+        "account-service"
+      ]
+    },
+    {
+      "id": "ui",
+      "title": "Web app asks for a voucher",
+      "status": "pending",
+      "today": "The account page has no voucher control.",
+      "proposed": "A voucher form on the account page posts the voucher before payment.",
+      "nodeIds": [
+        "voucher-form",
+        "voucher-client",
+        "account-page"
+      ]
+    }
+  ],
+  "notes": [
+    {
+      "id": "record-before-refresh",
+      "path": "server/src/Api/VouchersController.cs",
+      "startLine": 22,
+      "text": "RecordVoucher runs before the account total refresh so the refreshed total already includes the new voucher. Swapping the two calls would show the old total until the next reload."
+    },
+    {
+      "id": "single-insert",
+      "path": "server/src/Services/VoucherService.cs",
+      "startLine": 27,
+      "text": "The voucher is written as one row in the same unit of work as the validation. Likely kept in one transaction so a rejected amount never leaves a partial Voucher behind."
+    },
+    {
+      "id": "total-includes-vouchers",
+      "path": "server/src/Services/AccountService.cs",
+      "startLine": 44,
+      "endLine": 52,
+      "text": "Existing accounts have no Voucher rows, so adding vouchers to the total leaves their totals unchanged."
+    }
+  ],
+  "diagrams": {
+    "tour": {
+      "title": "Vouchers at checkout",
+      "entities": [
+        {
+          "id": "account-page",
+          "label": "Account page",
+          "layer": "web"
+        },
+        {
+          "id": "voucher-form",
+          "label": "VoucherFormComponent",
+          "layer": "web",
+          "parent": "account-page"
+        },
+        {
+          "id": "voucher-client",
+          "label": "VoucherService (client)",
+          "layer": "web"
+        },
+        {
+          "id": "vouchers-controller",
+          "label": "VouchersController",
+          "layer": "api"
+        },
+        {
+          "id": "payments-controller",
+          "label": "PaymentsController",
+          "layer": "api"
+        },
+        {
+          "id": "voucher-validator",
+          "label": "Amount check",
+          "layer": "domain"
+        },
+        {
+          "id": "voucher-service",
+          "label": "VoucherService",
+          "layer": "domain"
+        },
+        {
+          "id": "payment-service",
+          "label": "PaymentService",
+          "layer": "domain"
+        },
+        {
+          "id": "account-service",
+          "label": "AccountService",
+          "layer": "domain"
+        },
+        {
+          "id": "voucher-table",
+          "label": "Vouchers table",
+          "layer": "data"
+        },
+        {
+          "id": "account-table",
+          "label": "Accounts table",
+          "layer": "data"
+        },
+        {
+          "id": "voucher-dto",
+          "label": "VoucherDto",
+          "layer": "api",
+          "fields": [
+            "accountId",
+            "amount"
+          ]
+        },
+        {
+          "id": "voucher-row",
+          "label": "Voucher row",
+          "layer": "data",
+          "fields": [
+            "amount"
+          ]
+        },
+        {
+          "id": "account-total",
+          "label": "Account total",
+          "layer": "domain"
+        }
+      ],
+      "paths": [
+        {
+          "id": "record-voucher",
+          "name": "Record a voucher",
+          "steps": [
+            {
+              "from": "voucher-form",
+              "to": "voucher-client",
+              "call": "record(accountId, amount)",
+              "carries": [
+                "voucher-dto"
+              ],
+              "status": "added"
+            },
+            {
+              "from": "voucher-client",
+              "to": "vouchers-controller",
+              "call": "POST /api/accounts/{id}/voucher",
+              "carries": [
+                "voucher-dto"
+              ],
+              "status": "added"
+            },
+            {
+              "from": "vouchers-controller",
+              "to": "voucher-validator",
+              "call": "Amount <= 0 → 400",
+              "carries": [
+                "voucher-dto"
+              ],
+              "fragment": "alt",
+              "status": "added"
+            },
+            {
+              "from": "vouchers-controller",
+              "to": "voucher-service",
+              "call": "RecordVoucher(id, amount)",
+              "carries": [
+                "voucher-dto"
+              ],
+              "status": "added"
+            },
+            {
+              "from": "voucher-service",
+              "to": "voucher-table",
+              "call": "INSERT Voucher",
+              "carries": [
+                "voucher-row"
+              ],
+              "status": "added"
+            },
+            {
+              "from": "vouchers-controller",
+              "to": "account-service",
+              "call": "RefreshTotal(id)",
+              "carries": [
+                "account-total"
+              ],
+              "status": "added"
+            },
+            {
+              "from": "account-service",
+              "to": "voucher-table",
+              "call": "SUM(Amount)",
+              "carries": [
+                "voucher-row",
+                "account-total"
+              ],
+              "status": "added"
+            },
+            {
+              "from": "account-service",
+              "to": "account-table",
+              "call": "UPDATE Total",
+              "carries": [
+                "account-total"
+              ],
+              "status": "changed"
+            }
+          ]
+        },
+        {
+          "id": "checkout",
+          "name": "Pay at checkout",
+          "steps": [
+            {
+              "from": "account-page",
+              "to": "payments-controller",
+              "call": "POST /api/payments",
+              "carries": [
+                "account-total"
+              ],
+              "status": "same"
+            },
+            {
+              "from": "payments-controller",
+              "to": "account-service",
+              "call": "Total(account)",
+              "carries": [
+                "account-total"
+              ],
+              "status": "removed"
+            },
+            {
+              "from": "payments-controller",
+              "to": "payment-service",
+              "call": "Charge(account)",
+              "carries": [
+                "account-total"
+              ],
+              "status": "changed"
+            },
+            {
+              "from": "payment-service",
+              "to": "voucher-service",
+              "call": "Redeem(accountId)",
+              "carries": [
+                "voucher-row"
+              ],
+              "fragment": "loop",
+              "status": "added"
+            },
+            {
+              "from": "payment-service",
+              "to": "account-service",
+              "call": "Total(account)",
+              "carries": [
+                "account-total"
+              ],
+              "status": "same"
+            },
+            {
+              "from": "account-service",
+              "to": "voucher-table",
+              "call": "SUM(Amount)",
+              "carries": [
+                "voucher-row",
+                "account-total"
+              ],
+              "status": "added"
+            }
+          ]
+        }
+      ],
+      "tour": [
+        {
+          "title": "A form asks for a voucher",
+          "text": "[[voucher-form]] posts the amount through [[voucher-client]] to a new endpoint on [[vouchers-controller]].",
+          "focus": [
+            "voucher-form",
+            "voucher-client",
+            "vouchers-controller"
+          ]
+        },
+        {
+          "title": "Checked, then stored",
+          "text": "The controller rejects an amount of zero or less, then [[voucher-service]] writes one row to [[voucher-table]].",
+          "focus": [
+            "vouchers-controller",
+            "voucher-validator",
+            "voucher-service",
+            "voucher-table"
+          ]
+        },
+        {
+          "title": "The total now counts vouchers",
+          "text": "[[account-service]] sums the account's vouchers into its total, on both [[record-voucher]] and [[checkout]].",
+          "focus": [
+            "account-service",
+            "voucher-table",
+            "account-table"
+          ]
+        },
+        {
+          "title": "Checkout redeems them",
+          "text": "[[payment-service]] now redeems vouchers through [[voucher-service]]; the controller no longer asks [[account-service]] directly.",
+          "focus": [
+            "payments-controller",
+            "payment-service",
+            "voucher-service"
+          ],
+          "camera": {
+            "zoom": 1.3
+          }
+        }
+      ]
+    },
+    "flowchart": {
+      "title": "A voucher's journey",
+      "size": [
+        1000,
+        560
+      ],
+      "shapes": [
+        {
+          "id": "voucher-form",
+          "kind": "box",
+          "at": [
+            60,
+            80
+          ],
+          "props": {
+            "w": 190,
+            "h": 56,
+            "text": "VoucherFormComponent",
+            "tone": "added"
+          }
+        },
+        {
+          "id": "vouchers-controller",
+          "kind": "box",
+          "at": [
+            400,
+            80
+          ],
+          "props": {
+            "w": 200,
+            "h": 56,
+            "text": "VouchersController",
+            "tone": "added"
+          }
+        },
+        {
+          "id": "voucher-service",
+          "kind": "box",
+          "at": [
+            400,
+            250
+          ],
+          "props": {
+            "w": 200,
+            "h": 56,
+            "text": "VoucherService",
+            "tone": "added"
+          }
+        },
+        {
+          "id": "account-service",
+          "kind": "box",
+          "at": [
+            720,
+            250
+          ],
+          "props": {
+            "w": 200,
+            "h": 56,
+            "text": "AccountService",
+            "tone": "changed"
+          }
+        },
+        {
+          "id": "total-calculator",
+          "kind": "box",
+          "at": [
+            720,
+            80
+          ],
+          "props": {
+            "w": 200,
+            "h": 56,
+            "text": "TotalCalculator",
+            "tone": "removed"
+          }
+        },
+        {
+          "id": "voucher-table",
+          "kind": "box",
+          "at": [
+            400,
+            420
+          ],
+          "props": {
+            "w": 200,
+            "h": 56,
+            "text": "Vouchers table",
+            "tone": "added"
+          }
+        },
+        {
+          "id": "post",
+          "kind": "arrow",
+          "at": [
+            250,
+            108
+          ],
+          "props": {
+            "points": [
+              [
+                250,
+                108
+              ],
+              [
+                400,
+                108
+              ]
+            ],
+            "text": "POST voucher",
+            "tone": "added"
+          }
+        },
+        {
+          "id": "record",
+          "kind": "arrow",
+          "at": [
+            500,
+            136
+          ],
+          "props": {
+            "points": [
+              [
+                500,
+                136
+              ],
+              [
+                500,
+                250
+              ]
+            ],
+            "text": "RecordVoucher",
+            "tone": "added"
+          }
+        },
+        {
+          "id": "insert",
+          "kind": "arrow",
+          "at": [
+            500,
+            306
+          ],
+          "props": {
+            "points": [
+              [
+                500,
+                306
+              ],
+              [
+                500,
+                420
+              ]
+            ],
+            "text": "INSERT",
+            "tone": "added"
+          }
+        },
+        {
+          "id": "refresh",
+          "kind": "arrow",
+          "at": [
+            600,
+            278
+          ],
+          "props": {
+            "points": [
+              [
+                600,
+                278
+              ],
+              [
+                720,
+                278
+              ]
+            ],
+            "text": "RefreshTotal",
+            "tone": "added"
+          }
+        },
+        {
+          "id": "sum",
+          "kind": "arrow",
+          "at": [
+            820,
+            306
+          ],
+          "props": {
+            "points": [
+              [
+                820,
+                306
+              ],
+              [
+                820,
+                448
+              ],
+              [
+                600,
+                448
+              ]
+            ],
+            "text": "SUM(Amount)",
+            "tone": "added"
+          }
+        },
+        {
+          "id": "calc",
+          "kind": "arrow",
+          "at": [
+            820,
+            250
+          ],
+          "props": {
+            "points": [
+              [
+                820,
+                250
+              ],
+              [
+                820,
+                136
+              ]
+            ],
+            "text": "Calculate",
+            "tone": "removed"
+          }
+        },
+        {
+          "id": "amount",
+          "kind": "dot",
+          "at": [
+            250,
+            108
+          ],
+          "props": {
+            "r": 7,
+            "text": "amount",
+            "tone": "added"
+          }
+        },
+        {
+          "id": "caption",
+          "kind": "text",
+          "at": [
+            60,
+            20
+          ],
+          "props": {
+            "text": "One amount, from the form to the account's total"
+          }
+        },
+        {
+          "id": "rule",
+          "kind": "text",
+          "at": [
+            190,
+            158
+          ],
+          "props": {
+            "text": "New check: amount ≤ 0 → 400",
+            "tone": "added"
+          }
+        }
+      ],
+      "beats": [
+        {
+          "t": 0.0,
+          "actions": [
+            {
+              "do": "write",
+              "target": "caption",
+              "dur": 0.6
+            },
+            {
+              "do": "create",
+              "target": "voucher-form",
+              "dur": 0.5
+            }
+          ],
+          "say": "Staff type an amount into the new [[voucher-form]]."
+        },
+        {
+          "t": 1.6,
+          "actions": [
+            {
+              "do": "write",
+              "target": "post",
+              "dur": 0.6
+            },
+            {
+              "do": "create",
+              "target": "vouchers-controller",
+              "dur": 0.5
+            }
+          ],
+          "say": "The form posts it to the new [[vouchers-controller]]."
+        },
+        {
+          "t": 3.2,
+          "actions": [
+            {
+              "do": "create",
+              "target": "amount",
+              "dur": 0.2
+            },
+            {
+              "do": "move",
+              "target": "amount",
+              "to": [
+                400,
+                108
+              ],
+              "dur": 0.8
+            }
+          ],
+          "say": "The [[amount]] rides along with the request."
+        },
+        {
+          "t": 4.6,
+          "actions": [
+            {
+              "do": "fade",
+              "target": "rule",
+              "to": [
+                0,
+                1
+              ],
+              "dur": 0.3
+            },
+            {
+              "do": "focus",
+              "target": "vouchers-controller",
+              "dur": 0.6
+            }
+          ],
+          "say": "The controller turns away an amount of zero or less with a 400: a [[rule]]."
+        },
+        {
+          "t": 6.4,
+          "actions": [
+            {
+              "do": "focus",
+              "target": "",
+              "dur": 0.5
+            },
+            {
+              "do": "write",
+              "target": "record",
+              "dur": 0.5
+            },
+            {
+              "do": "create",
+              "target": "voucher-service",
+              "dur": 0.5
+            },
+            {
+              "do": "move",
+              "target": "amount",
+              "to": [
+                500,
+                250
+              ],
+              "dur": 0.6
+            }
+          ],
+          "say": "Otherwise it hands the amount to the new [[voucher-service]]."
+        },
+        {
+          "t": 8.0,
+          "actions": [
+            {
+              "do": "write",
+              "target": "insert",
+              "dur": 0.5
+            },
+            {
+              "do": "create",
+              "target": "voucher-table",
+              "dur": 0.5
+            },
+            {
+              "do": "move",
+              "target": "amount",
+              "to": [
+                500,
+                420
+              ],
+              "dur": 0.6
+            }
+          ],
+          "say": "It is stored as one row in the new [[voucher-table]]."
+        },
+        {
+          "t": 9.6,
+          "actions": [
+            {
+              "do": "write",
+              "target": "refresh",
+              "dur": 0.5
+            },
+            {
+              "do": "create",
+              "target": "account-service",
+              "dur": 0.5
+            },
+            {
+              "do": "create",
+              "target": "total-calculator",
+              "dur": 0.5
+            },
+            {
+              "do": "write",
+              "target": "calc",
+              "dur": 0.5
+            }
+          ],
+          "say": "Then [[account-service]] refreshes the total, which [[total-calculator]] used to work out."
+        },
+        {
+          "t": 11.4,
+          "actions": [
+            {
+              "do": "write",
+              "target": "sum",
+              "dur": 0.7
+            },
+            {
+              "do": "pulse",
+              "target": "sum",
+              "dur": 1.2
+            }
+          ],
+          "say": "[[account-service]] now sums the vouchers itself: [[sum]]."
+        },
+        {
+          "t": 13.2,
+          "actions": [
+            {
+              "do": "morph",
+              "target": "account-service",
+              "into": "AccountService · total counts vouchers",
+              "dur": 0.5
+            },
+            {
+              "do": "fade",
+              "target": "total-calculator",
+              "to": [
+                1,
+                0.45
+              ],
+              "dur": 0.6
+            },
+            {
+              "do": "fade",
+              "target": "calc",
+              "to": [
+                1,
+                0.45
+              ],
+              "dur": 0.6
+            },
+            {
+              "do": "focus",
+              "target": "",
+              "dur": 0.4
+            }
+          ],
+          "say": "[[total-calculator]] goes; the account's total now counts its vouchers."
+        }
+      ],
+      "camera": [
+        {
+          "t": 0.0,
+          "center": [
+            500,
+            280
+          ],
+          "zoom": 1.0
+        },
+        {
+          "t": 4.6,
+          "center": [
+            500,
+            280
+          ],
+          "zoom": 1.0
+        },
+        {
+          "t": 5.2,
+          "center": [
+            420,
+            160
+          ],
+          "zoom": 1.2
+        },
+        {
+          "t": 6.4,
+          "center": [
+            420,
+            160
+          ],
+          "zoom": 1.2
+        },
+        {
+          "t": 7.0,
+          "center": [
+            500,
+            280
+          ],
+          "zoom": 1.0
+        }
+      ]
+    },
+    "lineage": {
+      "title": "Vouchers at checkout",
+      "fields": [
+        {
+          "id": "db:Accounts.Id",
+          "stage": "db",
+          "before": {
+            "name": "Id",
+            "type": "int"
+          },
+          "after": {
+            "name": "Id",
+            "type": "int"
+          },
+          "primaryKey": true
+        },
+        {
+          "id": "db:Accounts.Total",
+          "stage": "db",
+          "before": {
+            "name": "Total",
+            "type": "decimal(18,2)",
+            "nullable": true
+          },
+          "after": {
+            "name": "Total",
+            "type": "decimal(18,2)",
+            "nullable": false
+          },
+          "why": "RefreshTotal now writes it after every voucher and payment, so it is never empty."
+        },
+        {
+          "id": "db:Accounts.LegacyTotal",
+          "stage": "db",
+          "before": {
+            "name": "LegacyTotal",
+            "type": "money",
+            "nullable": true
+          },
+          "after": null,
+          "why": "An old copy of the total that no screen showed."
+        },
+        {
+          "id": "db:Vouchers.Id",
+          "stage": "db",
+          "before": null,
+          "after": {
+            "name": "Id",
+            "type": "int"
+          },
+          "primaryKey": true
+        },
+        {
+          "id": "db:Vouchers.AccountId",
+          "stage": "db",
+          "before": null,
+          "after": {
+            "name": "AccountId",
+            "type": "int"
+          },
+          "references": "db:Accounts.Id"
+        },
+        {
+          "id": "db:Vouchers.Amount",
+          "stage": "db",
+          "before": null,
+          "after": {
+            "name": "Amount",
+            "type": "decimal(18,2)"
+          },
+          "why": "The voucher's value: typed in the form, subtracted from the balance."
+        },
+        {
+          "id": "db:Vouchers.CreatedAt",
+          "stage": "db",
+          "before": null,
+          "after": {
+            "name": "CreatedAt",
+            "type": "datetime2"
+          }
+        },
+        {
+          "id": "entity:Account.Total",
+          "stage": "entity",
+          "before": {
+            "name": "Total",
+            "type": "decimal?"
+          },
+          "after": {
+            "name": "Total",
+            "type": "decimal"
+          }
+        },
+        {
+          "id": "entity:Account.LegacyTotal",
+          "stage": "entity",
+          "before": {
+            "name": "LegacyTotal",
+            "type": "decimal?"
+          },
+          "after": null
+        },
+        {
+          "id": "entity:Voucher.AccountId",
+          "stage": "entity",
+          "before": null,
+          "after": {
+            "name": "AccountId",
+            "type": "int"
+          },
+          "references": "db:Accounts.Id"
+        },
+        {
+          "id": "entity:Voucher.Amount",
+          "stage": "entity",
+          "before": null,
+          "after": {
+            "name": "Amount",
+            "type": "decimal"
+          }
+        },
+        {
+          "id": "dto:VoucherDto.Amount",
+          "stage": "dto",
+          "before": null,
+          "after": {
+            "name": "Amount",
+            "type": "decimal"
+          }
+        },
+        {
+          "id": "dto:PaymentVm.Total",
+          "stage": "dto",
+          "before": {
+            "name": "total",
+            "type": "number"
+          },
+          "after": {
+            "name": "total",
+            "type": "number"
+          }
+        },
+        {
+          "id": "dto:PaymentVm.LegacyTotal",
+          "stage": "dto",
+          "before": {
+            "name": "legacyTotal",
+            "type": "number"
+          },
+          "after": null
+        },
+        {
+          "id": "ui:VoucherForm.amount",
+          "stage": "ui",
+          "before": null,
+          "after": {
+            "name": "amount",
+            "type": "number"
+          }
+        },
+        {
+          "id": "ui:AccountPage.total",
+          "stage": "ui",
+          "before": {
+            "name": "total",
+            "type": "number"
+          },
+          "after": {
+            "name": "total",
+            "type": "number"
+          }
+        }
+      ],
+      "lineage": [
+        {
+          "from": "db:Vouchers.Amount",
+          "to": "ui:VoucherForm.amount",
+          "via": [
+            "entity:Voucher.Amount",
+            "dto:VoucherDto.Amount"
+          ]
+        },
+        {
+          "from": "db:Vouchers.AccountId",
+          "to": "entity:Voucher.AccountId",
+          "via": []
+        },
+        {
+          "from": "db:Accounts.Total",
+          "to": "ui:AccountPage.total",
+          "via": [
+            "entity:Account.Total",
+            "dto:PaymentVm.Total"
+          ]
+        },
+        {
+          "from": "db:Vouchers.Amount",
+          "to": "entity:Account.Total",
+          "via": []
+        },
+        {
+          "from": "db:Accounts.LegacyTotal",
+          "to": "dto:PaymentVm.LegacyTotal",
+          "via": [
+            "entity:Account.LegacyTotal"
+          ]
+        }
+      ],
+      "notes": [
+        {
+          "card": "db:Accounts",
+          "why": "Each account's balance, kept so pages read one row."
+        },
+        {
+          "card": "db:Vouchers",
+          "why": "New: one row per voucher, linked to its account."
+        },
+        {
+          "card": "entity:Account",
+          "why": "Total is now always set; the old copy is gone."
+        },
+        {
+          "card": "entity:Voucher",
+          "why": "New: what VoucherService saves and sums."
+        },
+        {
+          "card": "dto:VoucherDto",
+          "why": "New: the amount the form posts to the API."
+        },
+        {
+          "card": "dto:PaymentVm",
+          "why": "What checkout returns; loses legacyTotal."
+        },
+        {
+          "card": "ui:VoucherForm",
+          "why": "New: where staff type a voucher's amount."
+        },
+        {
+          "card": "ui:AccountPage",
+          "why": "Shows the balance, now net of vouchers."
+        }
+      ]
+    },
+    "icicle": {
+      "title": "Vouchers at checkout",
+      "calls": {
+        "id": "all",
+        "name": "All server work",
+        "children": [
+          {
+            "id": "pay",
+            "name": "PaymentsController.Charge()",
+            "before": 2,
+            "after": 2,
+            "children": [
+              {
+                "id": "pay.charge",
+                "name": "PaymentService.Charge()",
+                "before": 3,
+                "after": 4,
+                "children": [
+                  {
+                    "id": "pay.compute",
+                    "name": "TotalCalculator.Compute()",
+                    "before": 4,
+                    "after": 0,
+                    "children": [
+                      {
+                        "id": "pay.compute.read",
+                        "name": "SELECT Account",
+                        "before": 6,
+                        "after": 0
+                      }
+                    ]
+                  },
+                  {
+                    "id": "pay.total",
+                    "name": "AccountService.Total()",
+                    "before": 0,
+                    "after": 1,
+                    "children": [
+                      {
+                        "id": "pay.total.read",
+                        "name": "SUM Charges",
+                        "before": 0,
+                        "after": 5
+                      },
+                      {
+                        "id": "pay.total.vouchers",
+                        "name": "SUM Vouchers",
+                        "before": 0,
+                        "after": 4
+                      }
+                    ]
+                  },
+                  {
+                    "id": "pay.redeem",
+                    "name": "VoucherService.Redeem()",
+                    "before": 0,
+                    "after": 2,
+                    "children": [
+                      {
+                        "id": "pay.redeem.write",
+                        "name": "UPDATE Voucher",
+                        "before": 0,
+                        "after": 5
+                      }
+                    ]
+                  },
+                  {
+                    "id": "pay.capture",
+                    "name": "Gateway.Capture()",
+                    "before": 12,
+                    "after": 12
+                  },
+                  {
+                    "id": "pay.refresh",
+                    "name": "AccountService.RefreshTotal()",
+                    "before": 0,
+                    "after": 1,
+                    "children": [
+                      {
+                        "id": "pay.refresh.write",
+                        "name": "UPDATE Account",
+                        "before": 0,
+                        "after": 4
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "id": "record",
+            "name": "VouchersController.RecordVoucher()",
+            "before": 0,
+            "after": 1,
+            "children": [
+              {
+                "id": "record.rules",
+                "name": "VoucherRules.AmountIsValid()",
+                "before": 0,
+                "after": 1
+              },
+              {
+                "id": "record.service",
+                "name": "VoucherService.RecordVoucher()",
+                "before": 0,
+                "after": 1,
+                "children": [
+                  {
+                    "id": "record.insert",
+                    "name": "INSERT Voucher",
+                    "before": 0,
+                    "after": 6
+                  }
+                ]
+              },
+              {
+                "id": "record.refresh",
+                "name": "AccountService.RefreshTotal()",
+                "before": 0,
+                "after": 1,
+                "children": [
+                  {
+                    "id": "record.total",
+                    "name": "AccountService.Total()",
+                    "before": 0,
+                    "after": 1,
+                    "children": [
+                      {
+                        "id": "record.total.read",
+                        "name": "SUM Charges",
+                        "before": 0,
+                        "after": 5
+                      },
+                      {
+                        "id": "record.total.vouchers",
+                        "name": "SUM Vouchers",
+                        "before": 0,
+                        "after": 4
+                      }
+                    ]
+                  },
+                  {
+                    "id": "record.write",
+                    "name": "UPDATE Account",
+                    "before": 0,
+                    "after": 4
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "id": "page",
+            "name": "AccountPage load",
+            "before": 3,
+            "after": 3,
+            "children": [
+              {
+                "id": "page.read",
+                "name": "SELECT Account",
+                "before": 6,
+                "after": 6
+              }
+            ]
+          }
+        ]
+      },
+      "profiles": [
+        {
+          "title": "Query: account total",
+          "calls": {
+            "id": "q",
+            "name": "Account total, 2,400 charges",
+            "children": [
+              {
+                "id": "q.compute",
+                "name": "TotalCalculator.Compute()",
+                "before": 3,
+                "after": 0,
+                "children": [
+                  {
+                    "id": "q.compute.load",
+                    "name": "SELECT Charges (2,400 rows)",
+                    "before": 18,
+                    "after": 0
+                  },
+                  {
+                    "id": "q.compute.map",
+                    "name": "Map rows to Charge",
+                    "before": 7,
+                    "after": 0
+                  }
+                ]
+              },
+              {
+                "id": "q.total",
+                "name": "AccountService.Total()",
+                "before": 0,
+                "after": 1,
+                "children": [
+                  {
+                    "id": "q.total.charges",
+                    "name": "SELECT SUM(Amount) FROM Charges",
+                    "before": 0,
+                    "after": 5
+                  },
+                  {
+                    "id": "q.total.vouchers",
+                    "name": "SELECT SUM(Amount) FROM Vouchers",
+                    "before": 0,
+                    "after": 4
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

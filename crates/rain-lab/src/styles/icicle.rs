@@ -182,7 +182,7 @@ pub(crate) fn layout(calls: &CallFrame, ink: &rain_diagram::DiagramStyle, size: 
         _ => (fu_b[0], fu_b[1].max(1e-4)),
     };
     let depth = walk.iter().map(|(d, _)| *d).max().unwrap_or(0) + 1;
-    let width = size[0] - 2.0 * MARGIN;
+    let width = (size[0] - 2.0 * MARGIN).max(1.0);
     let row = ((size[1] - 2.0 * MARGIN - HEAD - FOOT) / depth as f32).floor().clamp(24.0, 52.0);
     let top = MARGIN + HEAD;
     let map = |u: [f32; 2], d: usize| -> [f32; 4] {

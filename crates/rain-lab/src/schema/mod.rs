@@ -67,7 +67,8 @@ impl SchemaId {
     }
 }
 
-/// Every sample, parsed once.
+/// One document per schema: the samples, or a review's diagrams.
+#[derive(Clone, Debug)]
 pub struct Samples {
     pub a: Trace,
     pub b: States,
@@ -88,6 +89,40 @@ impl Samples {
             s: one(SchemaId::S)?,
         })
     }
+}
+
+/// A review's diagrams read into the styles' types: the documents, with the built-in samples
+/// standing in for the kinds the overview leaves out, and the registry indices of the styles it
+/// carries, in the registry's order. A document that doesn't read is left out.
+pub fn review_diagrams(d: &rain_core::overview::OverviewDiagrams) -> (Samples, Vec<usize>) {
+    fn read<T: serde::de::DeserializeOwned>(v: &Option<serde_json::Value>) -> Option<T> {
+        v.as_ref().and_then(|v| T::deserialize(v).ok())
+    }
+    let mut out = samples().clone();
+    let mut ids = Vec::new();
+    if let Some(a) = read(&d.tour) {
+        out.a = a;
+        ids.push("tour");
+    }
+    if let Some(s) = read(&d.flowchart) {
+        out.s = s;
+        ids.push("flowchart");
+    }
+    if let Some(b) = read(&d.lineage) {
+        out.b = b;
+        ids.push("lineage");
+    }
+    if let Some(c) = read(&d.icicle) {
+        out.c = c;
+        ids.push("icicle");
+    }
+    let styles = crate::registry()
+        .iter()
+        .enumerate()
+        .filter(|(_, s)| ids.contains(&s.id()))
+        .map(|(i, _)| i)
+        .collect();
+    (out, styles)
 }
 
 /// The samples, parsed on first use. The samples are compiled in and tested, so a parse

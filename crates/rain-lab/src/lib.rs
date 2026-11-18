@@ -17,5 +17,5 @@ mod tests;
 
 pub use lab::{Lab, SCRUB_W, SPEEDS, Scrub};
 pub use motion::{Clock, Rig, Tick};
-pub use schema::{SchemaId, samples};
+pub use schema::{Samples, SchemaId, review_diagrams, samples};
 pub use style::{Act, Cx, Style, registry};

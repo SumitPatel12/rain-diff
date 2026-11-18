@@ -198,5 +198,14 @@ tree.
 - leaving a property out fails to parse exactly when the schema marks it required;
 - every enum value in a schema parses, and one outside it does not.
 
-The validator is a small one in the tests (types, properties, required, additionalProperties,
-items, minItems and maxItems, enum, anyOf, `$ref` into `$defs`); it covers what these schemas use.
+The validator is a small one in `rain-overview` (`schema.rs`: types, properties, required,
+additionalProperties, items, minItems and maxItems, enum, anyOf, `$ref` into `$defs`); it covers
+what these schemas use.
+
+## In a review
+
+An overview's optional `diagrams` object carries one document per style: `tour` (A), `flowchart`
+(S), `lineage` (B), `icicle` (C). `rain overview validate` checks each against its schema here and
+for ids that point nowhere (`diagrams.rs` in `rain-overview`), and the window's Map plays them ahead
+of the graph's views. When to include which, size budgets and examples:
+`skills/rain/references/overview-guide.md` §7a.

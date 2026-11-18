@@ -232,7 +232,12 @@ fn map_rig(cx: &Cx) -> Rig {
         anim,
         said,
     };
-    let mut rig = Rig::new(data, cx.size, duration).step(0.0, "Overview: both paths");
+    let overview = match cx.samples.a.paths.len() {
+        1 => "Overview: the path".to_owned(),
+        2 => "Overview: both paths".to_owned(),
+        n => format!("Overview: all {n} paths"),
+    };
+    let mut rig = Rig::new(data, cx.size, duration).step(0.0, overview);
     for (t, title) in titles {
         rig = rig.step(t, title);
     }

@@ -2,7 +2,6 @@
 //! sections, the Map's nodes, the tour's steps and the threads waiting on you.
 
 use rain_comments::ops;
-use rain_diagram::DiagramEvent;
 use rain_triage::Group;
 use rune::{TextEdit, Tx};
 
@@ -217,7 +216,7 @@ impl App {
                 self.show_overview();
                 self.status = format!("Brief › {}", e.label);
             }
-            Target::Node(id) => self.diagram_event(DiagramEvent::Node(id), tx),
+            Target::Node(id) => self.open_node(id, tx),
             Target::Step(spec) => {
                 if !self.tour_from_picker(&e.label, tx) {
                     self.goto_spec(&spec, tx);

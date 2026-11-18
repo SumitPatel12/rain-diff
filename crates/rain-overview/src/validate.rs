@@ -254,6 +254,8 @@ struct Wrapper {
     phases: Vec<OverviewPhase>,
     #[serde(default)]
     notes: Vec<OverviewNote>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    diagrams: Option<Value>,
 }
 
 /// Deserialized only to type-check the graph against PR Lens's schema; the fields are never read.
@@ -358,13 +360,16 @@ pub fn load_value(input: Value) -> Result<Loaded, Vec<Issue>> {
 
     let mut issues = Vec::new();
     let typed = serde_json::to_value(&wrapper).unwrap_or_default();
-    unknown_keys(&input, &typed, "", INVALID_OVERVIEW, &["graph"], &mut issues);
+    unknown_keys(&input, &typed, "", INVALID_OVERVIEW, &["graph", "diagrams"], &mut issues);
     wrapper_shape(&wrapper, &mut issues);
     if !issues.is_empty() {
         return Err(issues);
     }
 
     let repo_ids = wrapper_rules(&wrapper, &mut issues);
+    if let Some(d) = &wrapper.diagrams {
+        issues.extend(crate::diagrams::check(d));
+    }
 
     let graph = match parse_graph(&wrapper.graph) {
         Ok(g) => g,
@@ -412,7 +417,10 @@ pub fn load_value(input: Value) -> Result<Loaded, Vec<Issue>> {
         return Err(issues);
     }
 
-    let warnings = warnings(&wrapper, &graph);
+    let mut warnings = warnings(&wrapper, &graph);
+    if let Some(d) = &wrapper.diagrams {
+        warnings.extend(crate::diagrams::budget_warnings(d));
+    }
     let Wrapper {
         format,
         title,
@@ -420,6 +428,7 @@ pub fn load_value(input: Value) -> Result<Loaded, Vec<Issue>> {
         reading_order,
         phases,
         notes,
+        diagrams,
         ..
     } = wrapper;
     Ok(Loaded {
@@ -431,6 +440,7 @@ pub fn load_value(input: Value) -> Result<Loaded, Vec<Issue>> {
             reading_order,
             phases,
             notes,
+            diagrams: diagrams.and_then(|d| serde_json::from_value(d).ok()),
             extra: BTreeMap::new(),
         },
         targets,
@@ -1526,6 +1536,33 @@ mod tests {
             }
         }
         assert!(n >= 4, "{n} fixtures");
+    }
+
+    const SAMPLE_DIAGRAMS: &str = include_str!("../../../fixtures/overview/sample-overview-diagrams.json");
+
+    #[test]
+    fn diagrams_are_kept_and_checked_and_an_overview_without_them_is_unchanged() {
+        let loaded = load_value(json(SAMPLE_DIAGRAMS)).unwrap();
+        let d = loaded.document.diagrams.as_ref().expect("diagrams kept");
+        assert!(d.tour.is_some() && d.flowchart.is_some() && d.lineage.is_some() && d.icicle.is_some());
+        let plain = load_value(json(SAMPLE_SCHEMA)).unwrap();
+        assert_eq!(plain.document.diagrams, None);
+        let mut both = json(SAMPLE_DIAGRAMS);
+        both.as_object_mut().unwrap().remove("diagrams");
+        assert_eq!(load_value(both).unwrap().document, plain.document);
+
+        let mut bad = json(SAMPLE_DIAGRAMS);
+        bad["diagrams"]["tour"]["paths"][0]["steps"][0]["from"] = json!("nowhere");
+        bad["diagrams"]["icicle"]["calls"]["before"] = json!("slow");
+        let issues = issues_of(bad);
+        assert!(
+            has(&issues, "BROKEN_REFERENCE", "diagrams.tour.paths[0].steps[0].from"),
+            "{issues:#?}"
+        );
+        assert!(has(&issues, "INVALID_DIAGRAM", "diagrams.icicle.calls.before"), "{issues:#?}");
+        let mut list = json(SAMPLE_DIAGRAMS);
+        list["diagrams"] = json!([]);
+        assert_issue(list, "INVALID_DIAGRAM", "diagrams");
     }
 
     #[test]

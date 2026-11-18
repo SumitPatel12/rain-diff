@@ -693,8 +693,21 @@ fn overview_validate(file: &Path) -> i32 {
             let d = &l.document;
             let reviews: Vec<_> = d.reading_order.iter().flat_map(|o| o.review.iter()).collect();
             let rated = reviews.iter().filter(|e| e.risk.is_some()).count();
+            let diagrams = d.diagrams.as_ref().map_or_else(String::new, |x| {
+                let kinds: Vec<&str> = [
+                    ("tour", &x.tour),
+                    ("flowchart", &x.flowchart),
+                    ("lineage", &x.lineage),
+                    ("icicle", &x.icicle),
+                ]
+                .into_iter()
+                .filter(|(_, v)| v.is_some())
+                .map(|(k, _)| k)
+                .collect();
+                format!(", {} diagram(s): {}", kinds.len(), kinds.join(" "))
+            });
             println!(
-                "valid: {} \u{2014} {} repo(s), {} nodes, {} edges, {} flows, {} picture(s), {} notes, {} of {} review files rated",
+                "valid: {} \u{2014} {} repo(s), {} nodes, {} edges, {} flows, {} picture(s), {} notes, {} of {} review files rated{diagrams}",
                 d.title,
                 d.repos.len(),
                 d.graph.nodes.len(),

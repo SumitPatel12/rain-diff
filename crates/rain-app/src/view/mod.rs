@@ -11,6 +11,7 @@ mod filter;
 mod find;
 mod finish;
 pub(crate) mod icons;
+mod lab;
 pub(crate) mod messages;
 mod notes;
 mod overview;
@@ -286,7 +287,7 @@ fn reader(s: &App, look: &Look, cx: &mut Cx<App>) -> El {
         // Toasts stack inside the reader, over its bottom right, clear of the status line and
         // of the Map's node pane.
         Some(t) => {
-            let right = if s.layout.is_open(Overlay::Map) && s.diagram.selected.is_some() {
+            let right = if s.layout.is_open(Overlay::Map) && s.diagram.selected.is_some() && !s.diagram.lab_on {
                 diagram::PANE_WIDTH + 14.0
             } else {
                 14.0

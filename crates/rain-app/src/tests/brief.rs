@@ -290,12 +290,7 @@ fn map_nodes_take_comments_and_show_viewed_shares() {
     let mut rt = with_brief(true);
     typed(&mut rt, "m");
     assert!(rt.state.layout.is_open(Overlay::Map));
-    rt.update(|s, tx| {
-        s.diagram_event(
-            rain_diagram::DiagramEvent::Hover(Some(rain_diagram::ItemId::Node("voucher-service".into()))),
-            tx,
-        )
-    });
+    rt.update(|s, tx| s.diagram_event(rain_diagram::DiagramEvent::Node("voucher-service".into()), tx));
     settle(&mut rt);
     assert_eq!(rt.state.diagram.selected.as_deref(), Some("voucher-service"));
     assert!(rt.find("map-pane").is_some());
@@ -328,7 +323,10 @@ fn map_tabs_never_repeat_and_a_press_still_opens_the_file() {
     assert!(rt.find("map-legend").is_some());
     rt.update(|s, tx| s.diagram_event(rain_diagram::DiagramEvent::Node("voucher-service".into()), tx));
     settle(&mut rt);
-    assert!(!rt.state.layout.is_open(Overlay::Map));
+    assert!(rt.state.layout.is_open(Overlay::Map), "the first press selects");
+    rt.update(|s, tx| s.diagram_event(rain_diagram::DiagramEvent::Node("voucher-service".into()), tx));
+    settle(&mut rt);
+    assert!(!rt.state.layout.is_open(Overlay::Map), "the second opens the file");
     assert_eq!(rt.state.current_key().as_deref(), Some("server/src/Services/VoucherService.cs"));
 }
 

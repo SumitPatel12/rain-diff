@@ -49,7 +49,7 @@ Tell the user the window is open once; there is no URL to hand over.
 ```
 Write it to a file and run `& $r brief set '<abs path>.md' --session <s>` after `open`. A Brief also fills the Overview tab, so add `## Intent` (one paragraph) when you have one; leave out sections you have nothing real for. Ticks are not part of comment readback.
 
-**Overview** (optional): write it per [`references/overview-guide.md`](references/overview-guide.md), validate with `& $r overview validate <abs path>` (exit 1 prints the issues), pass `-Overview`. It drives the Map, per-file risk and intent notes. Repo ids come from the overview's `repos[].dir` matching the folder name. Never read back.
+**Overview** (optional): write it per [`references/overview-guide.md`](references/overview-guide.md), validate with `& $r overview validate <abs path>` (exit 1 prints the issues), pass `-Overview`. It drives the Map, per-file risk and intent notes. Include its `diagrams` block (guide §7a: tour almost always; flowchart, lineage, icicle when the change calls for them) — that is what puts the animated diagrams on the Map; without it the Map shows only the graph views. Repo ids come from the overview's `repos[].dir` matching the folder name. Never read back.
 
 ## Stay attached while the user reviews (live loop)
 

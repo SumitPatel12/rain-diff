@@ -21,7 +21,8 @@ pub enum Act {
 
 /// What a style builds with.
 pub struct Cx<'a> {
-    pub samples: &'static Samples,
+    /// The documents drawn: the built-in samples, or a review's diagrams.
+    pub samples: &'a Samples,
     /// The schema picked for this style (one of its [`Style::schemas`]).
     pub schema: SchemaId,
     /// Rain's component kit for the scheme on screen: text colours, surfaces, states.

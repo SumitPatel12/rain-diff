@@ -9,7 +9,7 @@ use rain_diagram::DiagramStyle;
 use rune::{El, Live, LiveText};
 
 use crate::motion::{Clock, Rig, Tick};
-use crate::schema::{SchemaId, samples};
+use crate::schema::{Samples, SchemaId, samples};
 use crate::style::{Act, Cx, Style, registry};
 
 /// The scrubber's track width, in points.
@@ -51,6 +51,8 @@ struct Key {
 }
 
 pub struct Lab {
+    /// The documents drawn; `None` is the built-in samples.
+    data: Option<Rc<Samples>>,
     style: usize,
     schema: SchemaId,
     pub clock: Clock,
@@ -78,7 +80,17 @@ impl Lab {
     /// Opens on the first style that is built.
     pub fn new() -> Lab {
         let first = registry().iter().position(|s| s.ready()).unwrap_or(0);
+        Lab::build(None, first)
+    }
+
+    /// Draws `data` (a review's diagrams) instead of the samples, opening on style `first`.
+    pub fn over(data: Samples, first: usize) -> Lab {
+        Lab::build(Some(Rc::new(data)), first)
+    }
+
+    fn build(data: Option<Rc<Samples>>, first: usize) -> Lab {
         let mut lab = Lab {
+            data,
             style: 0,
             schema: SchemaId::A,
             clock: Clock::default(),
@@ -164,7 +176,7 @@ impl Lab {
     /// The style drawn for a canvas `size` big; `act` makes an element send an [`Act`].
     pub fn canvas(&self, kit: &rune_kit::Kit, ink: &DiagramStyle, size: [f32; 2], act: &dyn Fn(El, Act) -> El) -> El {
         let cx = Cx {
-            samples: samples(),
+            samples: self.data.as_deref().unwrap_or(samples()),
             schema: self.schema,
             kit,
             ink,

@@ -108,8 +108,25 @@ pub struct OverviewDocument {
     pub phases: Vec<OverviewPhase>,
     #[serde(default)]
     pub notes: Vec<OverviewNote>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub diagrams: Option<OverviewDiagrams>,
     #[serde(flatten)]
     pub extra: Extra,
+}
+
+/// The animated diagrams an overview may carry, each a document of its rain-lab schema (`tour`
+/// A, `flowchart` S, `lineage` B, `icicle` C), kept as JSON: rain-overview validates them and the
+/// app reads them into rain-lab's types.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct OverviewDiagrams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tour: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flowchart: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lineage: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icicle: Option<Value>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
@@ -605,7 +622,7 @@ mod tests {
     use super::*;
     use std::collections::BTreeSet;
 
-    const SAMPLES: [(&str, &str); 3] = [
+    const SAMPLES: [(&str, &str); 4] = [
         (
             "sample-overview.json",
             include_str!("../../../fixtures/overview/sample-overview.json"),
@@ -617,6 +634,10 @@ mod tests {
         (
             "sample-overview-schema.json",
             include_str!("../../../fixtures/overview/sample-overview-schema.json"),
+        ),
+        (
+            "sample-overview-diagrams.json",
+            include_str!("../../../fixtures/overview/sample-overview-diagrams.json"),
         ),
     ];
 

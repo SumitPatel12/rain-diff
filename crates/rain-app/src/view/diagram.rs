@@ -9,10 +9,11 @@ use rune::{Cursor, Cx, El, Tx, col, el, row, text};
 use rune_kit::Kit;
 
 use super::icons;
+use super::lab::{self, Slot};
 use super::muted;
 use super::overview::{artifact_composer, dot, thread_card};
 use super::ui::{Ghost, outline, sr};
-use crate::app::{App, ComposeMode, Overlay};
+use crate::app::{App, ComposeMode, MapTab, Overlay};
 use crate::theme::{TYPE, radius, space};
 
 pub(super) const PANE_WIDTH: f32 = 300.0;
@@ -72,22 +73,61 @@ fn segments(
 
 /// The Map in the reader: its toolbar, the canvas with the node pane beside it, the legend.
 pub(super) fn map_view(s: &App, k: &Kit, cx: &mut Cx<App>) -> El {
-    let (surf, _) = sr(k);
+    let (surf, roles) = sr(k);
     let style = s.seen_scheme.get().diagram();
     let targets = s.overview.as_ref().map(|l| l.targets.clone()).unwrap_or_default();
     let names = rain_overview::tab_names(&targets);
-    let shown: Vec<usize> = (0..names.len())
-        .filter(|&i| s.layouts.get(i).is_some_and(Option::is_some))
+    let tabs_of = s.map_tabs();
+    let labels: Vec<String> = tabs_of
+        .iter()
+        .map(|t| match *t {
+            MapTab::Lab(i) => rain_lab::registry()[i].name().to_owned(),
+            MapTab::View(i) => names.get(i).cloned().unwrap_or_default(),
+        })
         .collect();
-    let labels: Vec<String> = shown.iter().map(|&i| names[i].clone()).collect();
-    let at = shown.iter().position(|&i| i == s.diagram.target);
-    let picks = shown.clone();
+    let at = tabs_of.iter().position(|&t| t == s.map_tab());
     let chord = |c: Command| c.chord().map(|k| k.display()).unwrap_or_default();
     let view_keys = format!("{} {} switch views", chord(Command::NextMapView), chord(Command::PrevMapView));
     let tabs = segments("map-tabs", &labels, at, Some(&view_keys), k, move |i| {
-        let t = picks[i];
-        Box::new(move |s: &mut App| s.pick_map_view(t))
+        let t = tabs_of[i];
+        Box::new(move |s: &mut App| s.pick_map_tab(t))
     });
+    if s.diagram.lab_on
+        && let Some(stage) = lab::stage(s, Slot::Map, cx.is_reduced_motion(), &style, k, &surf, &roles)
+    {
+        let header = row()
+            .key("diagram-header")
+            .w_full()
+            .h(space::READER_TOOL)
+            .pl(10.0)
+            .pr(8.0)
+            .gap(10.0)
+            .items_center()
+            .child(
+                row()
+                    .key("map-tabs-scroll")
+                    .grow(1.0)
+                    .min_w(0.0)
+                    .scroll_x()
+                    .scroll_edge_fade(24.0)
+                    .child(tabs),
+            )
+            .child(
+                el().pin(Some(0.0), None, Some(0.0), Some(0.0))
+                    .h(1.0)
+                    .fill(surf.hairline)
+                    .a11y_hidden(),
+            );
+        return col()
+            .key("overlay-map")
+            .role("region")
+            .label("Map")
+            .w_full()
+            .grow(1.0)
+            .min_h(0.0)
+            .child(header)
+            .child(col().key("map-lab").w_full().grow(1.0).min_h(0.0).child(stage));
+    }
     let zi = match s.diagram.zoom {
         Zoom::Fit => Some(0),
         Zoom::P100 => Some(1),
@@ -208,7 +248,7 @@ fn legend(st: &DiagramStyle, k: &Kit) -> El {
         .child(item(el().w(10.0).h(10.0).radius(2.0).border(2.0, st.foreground), "selected"))
         .child(
             text(crate::keys::with_hints(
-                "Click opens the files",
+                "Click a node to select it, again to open its files",
                 &[(Command::Comment, "comment"), (Command::Ask, "ask")],
             ))
             .font(TYPE.small)
@@ -271,10 +311,12 @@ fn side_pane(s: &App, node: &str, k: &Kit) -> El {
     title = title.child(el().grow(1.0)).child(
         Ghost::new("map-pane-close")
             .icon(&icons::CLOSE)
-            .help("Clear the selection")
+            .help("Close  Esc")
             .height(24.0)
             .build(k)
-            .on_press(|s: &mut App| s.diagram.selected = None),
+            .on_press(|s: &mut App| {
+                s.close_map_pane();
+            }),
     );
     let files_n = n.files.len();
     let mut top = col()

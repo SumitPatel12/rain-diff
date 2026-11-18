@@ -57,7 +57,11 @@ numstat shows a huge generated file (a 40k-line migration designer file); read h
   ],
   "notes": [                                  // optional, §5b, ≤ 128 (guide budget 8 per repo)
     { "id": "record-before-refresh", "path": "api/src/Api/X.cs", "startLine": 22, "text": "…" }
-  ]
+  ],
+  "diagrams": {                               // optional, §7a: the Map's animated diagrams
+    "tour": { /* schema A */ }, "flowchart": { /* schema S */ },
+    "lineage": { /* schema B */ }, "icicle": { /* schema C */ }
+  }
 }
 ```
 
@@ -313,6 +317,94 @@ things named as the diagram names them, numbers as digits. Never "leverages", "o
 | The mail provider now gets 500 emails per call / One call per batch instead of one call per person. | Batched delivery replaces single sends / The worker leverages the shared library to send emails in chunks of 500 via the provider's batch endpoint. |
 | processBroadcast and sendSingleEmail removed / sendBroadcastBulk does their job for whole batches. | Single send functions are retired / sendBroadcastBulk replaces processBroadcast and sendSingleEmail to handle bulk deliveries in chunks. |
 
+## 7a. Animated diagrams (`diagrams`)
+
+Optional. Each key holds one document the Map plays as an animation, ahead of the graph's views (the
+first one present opens selected; the views stay as tabs after them). Fields, types and defaults:
+`crates/rain-lab/schema/README.md` (JSON Schemas beside it). Schemas are strict: unknown keys fail.
+Pick only the ones the change needs:
+
+| Key | Schema | Include when | Shows |
+|---|---|---|---|
+| `tour` | A | almost always: the request / data flow through the layers | components as stations in frontend, backend and database bands, each path a coloured line, tour steps that walk it |
+| `flowchart` | S | the change is a sequence worth replaying step by step | your own scene: boxes, arrows and dots brought in beat by beat, a sentence per beat |
+| `lineage` | B | a schema or data-model change | columns → entity → DTO → screen, PK/FK tagged, a strand per value, a why-note per card |
+| `icicle` | C | performance-sensitive code, or a query before/after | call trees, bars as wide as their self time, red where it grew |
+
+**Size budget**: tour ≤ 14 entities, ≤ 3 paths, ≤ 8 tour steps; flowchart ≤ 24 shapes, ≤ 12
+beats, scene about 900 × 500; lineage ≤ 30 fields over ≤ 6 cards; icicle ≤ 40 frames, depth ≤ 5.
+Labels ≤ 24 characters, tour and beat text one or two sentences. `validate` warns past the entity,
+tour-step, shape, beat, field and frame counts.
+
+Rules that `validate` enforces beyond the schema: ids unique (entities, paths, shapes, fields, frames
+across every tree); every `from`/`to`/`carries`/`focus` names an entity, every action `target` a shape
+(only `focus` may be empty), every lineage `from`/`to`/`via` and `references` a field; a path has at
+least one step; an icicle has `calls` or a profile. Ids of different diagrams are separate.
+
+**tour** — `layer` is `web`/`ui`, `api`/`domain` or `data`/`db`; `[[id]]` in text links an entity or path.
+
+```json
+{ "title": "Tips at checkout",
+  "entities": [
+    { "id": "tip-form", "label": "TipForm", "layer": "web" },
+    { "id": "tips-api", "label": "TipsController", "layer": "api" },
+    { "id": "tip-service", "label": "TipService", "layer": "domain" },
+    { "id": "tips-table", "label": "Tips", "layer": "db" },
+    { "id": "tip-dto", "label": "TipDto", "layer": "api", "fields": ["amount"] } ],
+  "paths": [ { "id": "add-tip", "name": "Add a tip", "steps": [
+    { "from": "tip-form", "to": "tips-api", "call": "POST /tips", "carries": ["tip-dto"], "status": "added" },
+    { "from": "tips-api", "to": "tip-service", "call": "Add(dto)", "status": "added" },
+    { "from": "tip-service", "to": "tips-table", "call": "INSERT Tips", "status": "added" } ] } ],
+  "tour": [
+    { "title": "The form posts", "text": "[[tip-form]] posts the amount to [[tips-api]].", "focus": ["tip-form", "tips-api"] },
+    { "title": "Stored once", "text": "[[tip-service]] writes one row to [[tips-table]].", "focus": ["tip-service", "tips-table"] } ] }
+```
+
+**flowchart** — `size` is the scene in points; `at` is a box's top-left, an arrow's start; beats run
+in order of `t` (seconds). Verbs: `create`, `write`, `transform`, `move`, `fade`, `focus`, `pulse`, `morph`.
+
+```json
+{ "title": "A tip's journey", "size": [640, 220],
+  "shapes": [
+    { "id": "form", "kind": "box", "at": [40, 80], "props": { "w": 160, "h": 50, "text": "TipForm", "tone": "added" } },
+    { "id": "api", "kind": "box", "at": [440, 80], "props": { "w": 160, "h": 50, "text": "TipsController", "tone": "added" } },
+    { "id": "post", "kind": "arrow", "at": [200, 105], "props": { "points": [[200, 105], [440, 105]], "text": "POST /tips", "tone": "added" } } ],
+  "beats": [
+    { "t": 0, "actions": [{ "do": "create", "target": "form" }], "say": "Staff enter a tip on the new [[form]]." },
+    { "t": 1.2, "actions": [{ "do": "write", "target": "post" }, { "do": "create", "target": "api" }], "say": "It posts to [[api]]." },
+    { "t": 2.4, "actions": [{ "do": "pulse", "target": "post", "dur": 1 }], "say": "The amount travels with the call." } ] }
+```
+
+**lineage** — field ids are `stage:Owner.name` with stage `db`, `entity`, `dto` or `ui`; a missing
+`before` means added, a missing `after` removed. Mark keys with `primaryKey` and `references`, and give
+each card (`stage:Owner`) a `notes[].why`.
+
+```json
+{ "title": "Tips at checkout",
+  "fields": [
+    { "id": "db:Tips.Id", "stage": "db", "after": { "name": "Id", "type": "int" }, "primaryKey": true },
+    { "id": "db:Tips.OrderId", "stage": "db", "after": { "name": "OrderId", "type": "int" }, "references": "db:Orders.Id", "why": "Each tip belongs to one order." },
+    { "id": "db:Tips.Amount", "stage": "db", "after": { "name": "Amount", "type": "decimal(18,2)" } },
+    { "id": "db:Orders.Id", "stage": "db", "before": { "name": "Id", "type": "int" }, "after": { "name": "Id", "type": "int" }, "primaryKey": true },
+    { "id": "dto:TipDto.amount", "stage": "dto", "after": { "name": "amount", "type": "decimal" } },
+    { "id": "ui:TipForm.amount", "stage": "ui", "after": { "name": "amount", "type": "number" } } ],
+  "lineage": [ { "from": "ui:TipForm.amount", "to": "db:Tips.Amount", "via": ["dto:TipDto.amount"] } ],
+  "notes": [
+    { "card": "db:Tips", "why": "New table: one row per tip." },
+    { "card": "db:Orders", "why": "Unchanged; shown for the foreign key." } ] }
+```
+
+**icicle** — `before`/`after` are self time in ms per request (0 before = new call, 0 after = gone);
+add `profiles[]` for a query or load to compare on its own tab.
+
+```json
+{ "title": "Tips at checkout",
+  "calls": { "id": "checkout", "name": "CheckoutController.Pay()", "before": 3, "after": 3, "children": [
+    { "id": "checkout.total", "name": "TotalCalculator.Sum()", "before": 12, "after": 4 },
+    { "id": "checkout.tip", "name": "TipService.Add()", "after": 2 } ] },
+  "profiles": [ { "title": "Tips report, 10k orders", "calls": { "id": "q", "name": "SELECT tips by day", "before": 180, "after": 35 } } ] }
+```
+
 ## 8. Validate
 
 ```pwsh
@@ -336,6 +428,7 @@ means some files are unrated.
 `& $r overview render <abs path> --out <abs dir>`. It draws every view headless with the same renderer
 the window's Map uses and prints one PNG path per view and theme (`NN-<view>-dark.png` / `-light.png`).
 Open the dark PNGs, fix anything §4a rules out, and render again until each picture is clean.
+`render` draws the graph's views only; the animated diagrams show in the window's Map.
 
 `valid:` does not mean the paths are real. The validator checks the `<repoId>/` prefix, not that the
 file is in the diff — a placeholder like `api/src/.../placeholder.cs` passes. Before pushing, check
@@ -343,9 +436,10 @@ every graph path and file cite against the numstat file list.
 
 | Code | What you did |
 |---|---|
-| `BROKEN_REFERENCE` | an edge, flow step, view, walkthrough step or phase names an id you never declared |
+| `BROKEN_REFERENCE` | an edge, flow step, view, walkthrough step or phase names an id you never declared (in a diagram: an entity, shape or field it doesn't have) |
 | `INVALID_DOCUMENT` / `INVALID_OVERVIEW` | an invented field (schemas are strict), a bad enum (`risk` outside `low`/`medium`/`high`/`critical`), a length over its cap (note `text` > 600), a reading-order path with a repo prefix, or a note whose `endLine` is before its `startLine`; |
 | `DUPLICATE_ID` | two nodes, edges, views, repos, phases or notes share an id, or two indexes of one table share a name |
+| `INVALID_DIAGRAM` | a `diagrams.<kind>` document breaks its schema (path down to the field), an unknown kind, a path with no steps, an icicle with no tree |
 | `UNSUPPORTED_SCHEMA_VERSION` | `schemaVersion` is not `0.3.0` |
 | `UNKNOWN_REPO_PREFIX` | a graph file path, index file path, file cite or `notes[].path` without a known `<repoId>/` prefix |
 | `UNKNOWN_REPO` | a `readingOrder[].repo` not in `repos` |
@@ -356,8 +450,8 @@ every graph path and file cite against the numstat file list.
 
 ≤ 40 nodes, ≤ 60 edges, ≤ 3 flows of ≤ 5 participants, ≤ 8 views, ≤ 6 walkthrough steps, labels
 ≤ 20 chars, ≤ 8 notes per repo of ≤ 600 chars, every review file rated, indexes only on changed tables
-(plus their unchanged neighbours when a diffed file shows them) — unless the story is
-exceptional, and then say why in the summary.
+(plus their unchanged neighbours when a diffed file shows them), diagrams inside their §7a budgets —
+unless the story is exceptional, and then say why in the summary.
 
 ## 10. A complete example
 

@@ -5,8 +5,10 @@
 pub mod brief;
 pub mod chapters;
 pub mod coverage;
+pub mod diagrams;
 pub mod paths;
 pub mod queue;
+pub mod schema;
 pub mod tags;
 pub mod targets;
 pub mod validate;

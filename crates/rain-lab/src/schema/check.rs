@@ -1,7 +1,7 @@
-//! The JSON Schemas in `schema/` held to the serde types and to the samples. A small validator
-//! covers what the schemas use: `type`, `properties`, `required`, `additionalProperties`,
-//! `items`, `minItems`, `maxItems`, `enum`, `anyOf` and `$ref` into `$defs`.
+//! The JSON Schemas in `schema/` held to the serde types and to the samples, with the validator
+//! `rain overview validate` runs on an overview's diagrams (`rain_overview::schema`).
 
+use rain_overview::schema::{DiagramSchema, resolve, types, violations};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
@@ -9,105 +9,22 @@ use serde_json::{Value, json};
 use super::{CallTrees, Scene, SchemaId, States, Trace};
 
 fn spec(id: SchemaId) -> Value {
-    let raw = match id {
-        SchemaId::A => include_str!("../../schema/a.schema.json"),
-        SchemaId::B => include_str!("../../schema/b.schema.json"),
-        SchemaId::C => include_str!("../../schema/c.schema.json"),
-        SchemaId::S => include_str!("../../schema/s.schema.json"),
-    };
-    serde_json::from_str(raw).unwrap_or_else(|e| panic!("schema {}: {e}", id.letter()))
+    match id {
+        SchemaId::A => DiagramSchema::A,
+        SchemaId::B => DiagramSchema::B,
+        SchemaId::C => DiagramSchema::C,
+        SchemaId::S => DiagramSchema::S,
+    }
+    .spec()
+    .clone()
 }
 
-/// `node`, its `$ref` followed.
-fn resolve<'a>(root: &'a Value, node: &'a Value) -> &'a Value {
-    match node.get("$ref").and_then(Value::as_str) {
-        Some(r) => {
-            let name = r.strip_prefix("#/$defs/").unwrap_or_else(|| panic!("{r}: only local refs"));
-            let def = root["$defs"].get(name).unwrap_or_else(|| panic!("{r}: no such def"));
-            resolve(root, def)
-        }
-        None => node,
-    }
-}
-
-fn is(ty: &str, v: &Value) -> bool {
-    match ty {
-        "object" => v.is_object(),
-        "array" => v.is_array(),
-        "string" => v.is_string(),
-        "number" => v.is_number(),
-        "integer" => v.is_i64() || v.is_u64(),
-        "boolean" => v.is_boolean(),
-        "null" => v.is_null(),
-        other => panic!("type {other}"),
-    }
-}
-
-fn types(node: &Value) -> Vec<&str> {
-    match node.get("type") {
-        Some(Value::String(t)) => vec![t.as_str()],
-        Some(Value::Array(ts)) => ts.iter().filter_map(Value::as_str).collect(),
-        _ => Vec::new(),
-    }
-}
-
-/// Every way `v` breaks `node`, each at its JSON pointer.
-fn validate(root: &Value, node: &Value, v: &Value, at: &str, out: &mut Vec<String>) {
-    let node = resolve(root, node);
-    if let Some(any) = node.get("anyOf").and_then(Value::as_array) {
-        if !any.iter().any(|n| errors(root, n, v, at).is_empty()) {
-            out.push(format!("{at}: fits no anyOf branch"));
-        }
-        return;
-    }
-    let ts = types(node);
-    if !ts.is_empty() && !ts.iter().any(|t| is(t, v)) {
-        out.push(format!("{at}: expected {ts:?}, found {v}"));
-        return;
-    }
-    if let Some(e) = node.get("enum").and_then(Value::as_array)
-        && !e.contains(v)
-    {
-        out.push(format!("{at}: {v} is not one of {e:?}"));
-    }
-    match v {
-        Value::Object(m) => {
-            let props = node.get("properties").and_then(Value::as_object);
-            for r in node.get("required").and_then(Value::as_array).into_iter().flatten() {
-                let r = r.as_str().unwrap_or_default();
-                if !m.contains_key(r) {
-                    out.push(format!("{at}: {r} is required"));
-                }
-            }
-            for (k, x) in m {
-                match props.and_then(|p| p.get(k)) {
-                    Some(p) => validate(root, p, x, &format!("{at}/{k}"), out),
-                    None if node.get("additionalProperties") == Some(&json!(false)) => out.push(format!("{at}: unknown key {k}")),
-                    None => {}
-                }
-            }
-        }
-        Value::Array(a) => {
-            let n = a.len() as u64;
-            if node.get("minItems").and_then(Value::as_u64).is_some_and(|m| n < m)
-                || node.get("maxItems").and_then(Value::as_u64).is_some_and(|m| n > m)
-            {
-                out.push(format!("{at}: {n} items"));
-            }
-            if let Some(items) = node.get("items") {
-                for (i, x) in a.iter().enumerate() {
-                    validate(root, items, x, &format!("{at}/{i}"), out);
-                }
-            }
-        }
-        _ => {}
-    }
-}
-
+/// Every way `v` breaks `node`, as `pointer: message`.
 fn errors(root: &Value, node: &Value, v: &Value, at: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    validate(root, node, v, at, &mut out);
-    out
+    violations(root, node, v, at)
+        .into_iter()
+        .map(|(p, m)| format!("{p}: {m}"))
+        .collect()
 }
 
 /// A document for `node` with every property set, every enum and nullable at its first
@@ -269,7 +186,7 @@ fn the_validator_catches_what_it_should() {
     for want in [
         "/fields/0/stage: \"table\" is not one of",
         "/fields/0: unknown key extra",
-        "/fields/0/after: fits no anyOf branch",
+        "/fields/0/after: type is required",
         "/lineage/0: to is required",
     ] {
         assert!(e.iter().any(|x| x.starts_with(want)), "{want} in {e:?}");

@@ -183,6 +183,9 @@ pub fn on_key(s: &mut App, ev: &KeyEvent, tx: &mut Tx) -> bool {
     if s.typing() {
         return is_escape(chord) && s.escape(tx);
     }
+    if s.map_lab_key(chord) {
+        return true;
+    }
     let cmd = chord.and_then(|c| keymap::with_active(|k| k.lookup(&c)));
     if s.phase != Phase::Ready {
         return match cmd {

@@ -612,6 +612,11 @@ fn spec() -> AppSpec<App> {
                 s.playground.lab.act(rain_lab::Act::Pick(Some("q".into())));
             }),
             ("session", scene_session),
+            // The `--session` (or `--overview`) with the Map open on its first tab.
+            ("session-map", |s| {
+                scene_session(s);
+                s.toggle_map();
+            }),
         ],
         fonts,
         families,
