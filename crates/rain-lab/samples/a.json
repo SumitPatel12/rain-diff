@@ -1,0 +1,70 @@
+{
+  "title": "Vouchers at checkout",
+  "entities": [
+    { "id": "account-page", "label": "Account page", "layer": "web" },
+    { "id": "voucher-form", "label": "VoucherFormComponent", "layer": "web", "parent": "account-page" },
+    { "id": "voucher-client", "label": "VoucherService (client)", "layer": "web" },
+    { "id": "vouchers-controller", "label": "VouchersController", "layer": "api" },
+    { "id": "payments-controller", "label": "PaymentsController", "layer": "api" },
+    { "id": "voucher-validator", "label": "Amount check", "layer": "domain" },
+    { "id": "voucher-service", "label": "VoucherService", "layer": "domain" },
+    { "id": "payment-service", "label": "PaymentService", "layer": "domain" },
+    { "id": "account-service", "label": "AccountService", "layer": "domain" },
+    { "id": "voucher-table", "label": "Vouchers table", "layer": "data" },
+    { "id": "account-table", "label": "Accounts table", "layer": "data" },
+    { "id": "voucher-dto", "label": "VoucherDto", "layer": "api", "fields": ["accountId", "amount"] },
+    { "id": "voucher-row", "label": "Voucher row", "layer": "data", "fields": ["amount"] },
+    { "id": "account-total", "label": "Account total", "layer": "domain" }
+  ],
+  "paths": [
+    {
+      "id": "record-voucher",
+      "name": "Record a voucher",
+      "steps": [
+        { "from": "voucher-form", "to": "voucher-client", "call": "record(accountId, amount)", "carries": ["voucher-dto"], "status": "added" },
+        { "from": "voucher-client", "to": "vouchers-controller", "call": "POST /api/accounts/{id}/voucher", "carries": ["voucher-dto"], "status": "added" },
+        { "from": "vouchers-controller", "to": "voucher-validator", "call": "Amount <= 0 → 400", "carries": ["voucher-dto"], "fragment": "alt", "status": "added" },
+        { "from": "vouchers-controller", "to": "voucher-service", "call": "RecordVoucher(id, amount)", "carries": ["voucher-dto"], "status": "added" },
+        { "from": "voucher-service", "to": "voucher-table", "call": "INSERT Voucher", "carries": ["voucher-row"], "status": "added" },
+        { "from": "vouchers-controller", "to": "account-service", "call": "RefreshTotal(id)", "carries": ["account-total"], "status": "added" },
+        { "from": "account-service", "to": "voucher-table", "call": "SUM(Amount)", "carries": ["voucher-row", "account-total"], "status": "added" },
+        { "from": "account-service", "to": "account-table", "call": "UPDATE Total", "carries": ["account-total"], "status": "changed" }
+      ]
+    },
+    {
+      "id": "checkout",
+      "name": "Pay at checkout",
+      "steps": [
+        { "from": "account-page", "to": "payments-controller", "call": "POST /api/payments", "carries": ["account-total"], "status": "same" },
+        { "from": "payments-controller", "to": "account-service", "call": "Total(account)", "carries": ["account-total"], "status": "removed" },
+        { "from": "payments-controller", "to": "payment-service", "call": "Charge(account)", "carries": ["account-total"], "status": "changed" },
+        { "from": "payment-service", "to": "voucher-service", "call": "Redeem(accountId)", "carries": ["voucher-row"], "fragment": "loop", "status": "added" },
+        { "from": "payment-service", "to": "account-service", "call": "Total(account)", "carries": ["account-total"], "status": "same" },
+        { "from": "account-service", "to": "voucher-table", "call": "SUM(Amount)", "carries": ["voucher-row", "account-total"], "status": "added" }
+      ]
+    }
+  ],
+  "tour": [
+    {
+      "title": "A form asks for a voucher",
+      "text": "[[voucher-form]] posts the amount through [[voucher-client]] to a new endpoint on [[vouchers-controller]].",
+      "focus": ["voucher-form", "voucher-client", "vouchers-controller"]
+    },
+    {
+      "title": "Checked, then stored",
+      "text": "The controller rejects an amount of zero or less, then [[voucher-service]] writes one row to [[voucher-table]].",
+      "focus": ["vouchers-controller", "voucher-validator", "voucher-service", "voucher-table"]
+    },
+    {
+      "title": "The total now counts vouchers",
+      "text": "[[account-service]] sums the account's vouchers into its total, on both [[record-voucher]] and [[checkout]].",
+      "focus": ["account-service", "voucher-table", "account-table"]
+    },
+    {
+      "title": "Checkout redeems them",
+      "text": "[[payment-service]] now redeems vouchers through [[voucher-service]]; the controller no longer asks [[account-service]] directly.",
+      "focus": ["payments-controller", "payment-service", "voucher-service"],
+      "camera": { "zoom": 1.3 }
+    }
+  ]
+}

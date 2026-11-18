@@ -1,0 +1,38 @@
+{
+  "title": "Vouchers at checkout",
+  "fields": [
+    { "id": "db:Accounts.Id", "stage": "db", "before": { "name": "Id", "type": "int" }, "after": { "name": "Id", "type": "int" }, "primaryKey": true },
+    { "id": "db:Accounts.Total", "stage": "db", "before": { "name": "Total", "type": "decimal(18,2)", "nullable": true }, "after": { "name": "Total", "type": "decimal(18,2)", "nullable": false }, "why": "RefreshTotal now writes it after every voucher and payment, so it is never empty." },
+    { "id": "db:Accounts.LegacyTotal", "stage": "db", "before": { "name": "LegacyTotal", "type": "money", "nullable": true }, "after": null, "why": "An old copy of the total that no screen showed." },
+    { "id": "db:Vouchers.Id", "stage": "db", "before": null, "after": { "name": "Id", "type": "int" }, "primaryKey": true },
+    { "id": "db:Vouchers.AccountId", "stage": "db", "before": null, "after": { "name": "AccountId", "type": "int" }, "references": "db:Accounts.Id" },
+    { "id": "db:Vouchers.Amount", "stage": "db", "before": null, "after": { "name": "Amount", "type": "decimal(18,2)" }, "why": "The voucher's value: typed in the form, subtracted from the balance." },
+    { "id": "db:Vouchers.CreatedAt", "stage": "db", "before": null, "after": { "name": "CreatedAt", "type": "datetime2" } },
+    { "id": "entity:Account.Total", "stage": "entity", "before": { "name": "Total", "type": "decimal?" }, "after": { "name": "Total", "type": "decimal" } },
+    { "id": "entity:Account.LegacyTotal", "stage": "entity", "before": { "name": "LegacyTotal", "type": "decimal?" }, "after": null },
+    { "id": "entity:Voucher.AccountId", "stage": "entity", "before": null, "after": { "name": "AccountId", "type": "int" }, "references": "db:Accounts.Id" },
+    { "id": "entity:Voucher.Amount", "stage": "entity", "before": null, "after": { "name": "Amount", "type": "decimal" } },
+    { "id": "dto:VoucherDto.Amount", "stage": "dto", "before": null, "after": { "name": "Amount", "type": "decimal" } },
+    { "id": "dto:PaymentVm.Total", "stage": "dto", "before": { "name": "total", "type": "number" }, "after": { "name": "total", "type": "number" } },
+    { "id": "dto:PaymentVm.LegacyTotal", "stage": "dto", "before": { "name": "legacyTotal", "type": "number" }, "after": null },
+    { "id": "ui:VoucherForm.amount", "stage": "ui", "before": null, "after": { "name": "amount", "type": "number" } },
+    { "id": "ui:AccountPage.total", "stage": "ui", "before": { "name": "total", "type": "number" }, "after": { "name": "total", "type": "number" } }
+  ],
+  "lineage": [
+    { "from": "db:Vouchers.Amount", "to": "ui:VoucherForm.amount", "via": ["entity:Voucher.Amount", "dto:VoucherDto.Amount"] },
+    { "from": "db:Vouchers.AccountId", "to": "entity:Voucher.AccountId", "via": [] },
+    { "from": "db:Accounts.Total", "to": "ui:AccountPage.total", "via": ["entity:Account.Total", "dto:PaymentVm.Total"] },
+    { "from": "db:Vouchers.Amount", "to": "entity:Account.Total", "via": [] },
+    { "from": "db:Accounts.LegacyTotal", "to": "dto:PaymentVm.LegacyTotal", "via": ["entity:Account.LegacyTotal"] }
+  ],
+  "notes": [
+    { "card": "db:Accounts", "why": "Each account's balance, kept so pages read one row." },
+    { "card": "db:Vouchers", "why": "New: one row per voucher, linked to its account." },
+    { "card": "entity:Account", "why": "Total is now always set; the old copy is gone." },
+    { "card": "entity:Voucher", "why": "New: what VoucherService saves and sums." },
+    { "card": "dto:VoucherDto", "why": "New: the amount the form posts to the API." },
+    { "card": "dto:PaymentVm", "why": "What checkout returns; loses legacyTotal." },
+    { "card": "ui:VoucherForm", "why": "New: where staff type a voucher's amount." },
+    { "card": "ui:AccountPage", "why": "Shows the balance, now net of vouchers." }
+  ]
+}

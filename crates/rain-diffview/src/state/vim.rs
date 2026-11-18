@@ -219,8 +219,13 @@ impl DiffState {
         self.sync_visual();
     }
 
-    /// A click on row `r`'s code on `side`, `col` display columns in: the cursor goes there.
+    /// A click on row `r`'s code on `side`, `col` display columns in: the cursor goes there and,
+    /// as in any editor, a selection (visual, Shift or lines) is dropped.
     pub(crate) fn click_code(&mut self, r: u32, side: Side, col: u32, tx: &mut Tx) {
+        self.end_visual();
+        self.caret_visual = false;
+        self.selection = None;
+        self.span = None;
         let byte = self.row_text(r, side).map_or(0, |t| Want::Col(col).byte_in(t));
         self.land(r, side, byte, false, tx);
         self.want = Want::Here;
@@ -623,27 +628,7 @@ impl DiffState {
                 self.cursor_steps(c == 'j', n, tx);
             }
             'h' | 'l' | 'w' | 'b' | 'e' | 'W' | 'B' | '0' | '^' | '$' | ';' | ',' if !self.ensure_cursor(tx) => {}
-            'h' => self.move_in_line(
-                |t, mut at| {
-                    for _ in 0..n {
-                        at = motion::prev_grapheme(t, at);
-                    }
-                    Some(at)
-                },
-                tx,
-            ),
-            'l' => self.move_in_line(
-                |t, mut at| {
-                    for _ in 0..n {
-                        match motion::next_grapheme(t, at) {
-                            next if next < t.len() => at = next,
-                            _ => break,
-                        }
-                    }
-                    Some(at)
-                },
-                tx,
-            ),
+            'h' | 'l' => self.step_chars(c == 'l', n, tx),
             'w' | 'e' | 'b' => self.word(c as u8, false, n, tx),
             'W' | 'B' => self.word(c.to_ascii_lowercase() as u8, true, n, tx),
             '0' => self.move_in_line(|_, _| Some(0), tx),
@@ -730,8 +715,14 @@ mod tests {
         assert_eq!(go("t;"), (4, 10));
         assert_eq!(go("fz"), (4, 10), "no match: no move");
         assert_eq!(go("h"), (4, 9));
-        assert_eq!(go("3l"), (4, 11));
-        assert_eq!(go("l"), (4, 11), "l stops at the last character");
+        assert_eq!(go("2l"), (4, 11));
+        assert_eq!(go("l"), (5, 0), "l at the last character goes on to the next line");
+        assert_eq!(go("h"), (4, 11), "h at the first goes back to the line before's end");
+        assert_eq!(go("3h"), (4, 8));
+        assert_eq!(go("4l"), (5, 0), "a count runs across the line's end");
+        assert_eq!(go("l"), (5, 0), "and stops at the file's end");
+        assert_eq!(go("k"), (4, 0));
+        assert_eq!(go("2h"), (2, 10), "an empty line counts as one stop");
         assert_eq!(go("gg"), (1, 0));
         assert_eq!(go("G"), (5, 0));
         assert_eq!(go("4G"), (4, 4), "a count picks the line, at its first non-blank");
@@ -740,6 +731,22 @@ mod tests {
         assert_eq!(go("g\u{1b}w"), (2, 7), "and a waiting g");
         assert_eq!(go("W"), (2, 9));
         assert_eq!(go("B"), (2, 7));
+    }
+
+    #[test]
+    fn a_click_drops_any_selection_and_moves_the_cursor() {
+        let mut st = added(TEXT);
+        for k in ["vll", "Vj"] {
+            keys(&mut st, k);
+            assert!(st.visual().is_some());
+            let r = st.row_of(0, Side::New, 4).unwrap();
+            st.click_code(r, Side::New, 2, &mut Tx::default());
+            assert!(
+                st.visual().is_none() && st.selection().is_none() && st.span_selection().is_none(),
+                "{k}"
+            );
+            assert_eq!(at(&st), (4, 2));
+        }
     }
 
     #[test]

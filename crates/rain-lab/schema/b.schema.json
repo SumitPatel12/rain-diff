@@ -1,0 +1,100 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "rain-lab/b.schema.json",
+  "title": "Schema B: fields before and after",
+  "description": "The data fields a change touches at each stage of their trip (table, entity, DTO, screen), each before and after, the way values flow between them, and why each card of fields is there. Read by style 3, field lineage and ER. Rust type: rain_lab::schema::state::States.",
+  "type": "object",
+  "properties": {
+    "title": { "type": "string", "description": "The change's name." },
+    "fields": {
+      "type": "array",
+      "description": "Every field, in the order cards and rows are listed.",
+      "default": [],
+      "items": { "$ref": "#/$defs/Field" }
+    },
+    "lineage": {
+      "type": "array",
+      "description": "Each value's way from a source field to where it ends.",
+      "default": [],
+      "items": { "$ref": "#/$defs/Lineage" }
+    },
+    "notes": {
+      "type": "array",
+      "description": "Why a table, entity, DTO or screen holds the fields it does.",
+      "default": [],
+      "items": { "$ref": "#/$defs/Note" }
+    }
+  },
+  "required": ["title"],
+  "additionalProperties": false,
+  "$defs": {
+    "Field": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "stage:Owner.name, such as db:Vouchers.Amount; the owner names the card the field sits on."
+        },
+        "stage": { "$ref": "#/$defs/Stage" },
+        "before": {
+          "anyOf": [{ "$ref": "#/$defs/FieldState" }, { "type": "null" }],
+          "description": "The field before the change; null or absent when the change adds it."
+        },
+        "after": {
+          "anyOf": [{ "$ref": "#/$defs/FieldState" }, { "type": "null" }],
+          "description": "The field after the change; null or absent when the change removes it."
+        },
+        "primaryKey": { "type": "boolean", "default": false, "description": "It is its owner's primary key." },
+        "references": {
+          "type": ["string", "null"],
+          "description": "For a foreign key: the id of the key field it points at."
+        },
+        "why": {
+          "type": ["string", "null"],
+          "description": "What the field is for; for a new or changed one, why the change made it so."
+        }
+      },
+      "required": ["id", "stage"],
+      "additionalProperties": false
+    },
+    "Stage": {
+      "type": "string",
+      "enum": ["db", "entity", "dto", "ui"],
+      "description": "Where the field lives: a table column, an entity property, a DTO field or a screen control."
+    },
+    "FieldState": {
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "description": "The field's name at this stage." },
+        "type": { "type": "string", "description": "Its type as the code writes it, such as decimal(18,2) or int?." },
+        "nullable": { "type": "boolean", "default": false, "description": "It may be empty." }
+      },
+      "required": ["name", "type"],
+      "additionalProperties": false
+    },
+    "Lineage": {
+      "type": "object",
+      "properties": {
+        "from": { "type": "string", "description": "The source field's id." },
+        "to": { "type": "string", "description": "The id of the field where the value ends." },
+        "via": {
+          "type": "array",
+          "description": "The ids of the fields between, in order.",
+          "default": [],
+          "items": { "type": "string" }
+        }
+      },
+      "required": ["from", "to"],
+      "additionalProperties": false
+    },
+    "Note": {
+      "type": "object",
+      "properties": {
+        "card": { "type": "string", "description": "stage:Owner, such as db:Vouchers." },
+        "why": { "type": "string", "description": "One short sentence on the card's reason to be; for a new card, what it adds." }
+      },
+      "required": ["card", "why"],
+      "additionalProperties": false
+    }
+  }
+}

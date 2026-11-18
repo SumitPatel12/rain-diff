@@ -233,6 +233,7 @@ fn more_menu(s: &App, k: &Kit, layer: &mut Vec<El>) -> El {
     menu = menu
         .item(command_item("Tour", &icons::TOUR, Command::Tour))
         .item(command_item("Conversation", &icons::CHAT, Command::Conversation))
+        .item(command_item("Diagram playground", &icons::DIAGRAM, Command::DiagramPlayground))
         .item(command_item("Find in diff", &icons::SEARCH, Command::Find))
         .item(command_item("Filter files", &icons::FUNNEL, Command::FilterFiles))
         .separator()

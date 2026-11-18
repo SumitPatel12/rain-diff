@@ -12,6 +12,7 @@ mod listing;
 mod notes;
 mod overview;
 mod peek;
+mod playground;
 mod profiles;
 mod remote;
 mod rest;
@@ -25,6 +26,8 @@ mod verify;
 mod vim;
 mod wholefile;
 
+use std::alloc::{GlobalAlloc, Layout, System};
+use std::cell::Cell;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -33,6 +36,43 @@ use rain_core::{Launch, RepoLaunch, Shared};
 use rune::{Env, Key, KeyEvent, Mods, Runtime};
 
 use super::*;
+
+/// Counts the allocations each thread makes, so a test can check a frame's budget.
+struct Counting;
+
+thread_local! {
+    static ALLOCS: Cell<u64> = const { Cell::new(0) };
+}
+
+fn count() {
+    let _ = ALLOCS.try_with(|n| n.set(n.get() + 1));
+}
+
+unsafe impl GlobalAlloc for Counting {
+    unsafe fn alloc(&self, l: Layout) -> *mut u8 {
+        count();
+        unsafe { System.alloc(l) }
+    }
+    unsafe fn alloc_zeroed(&self, l: Layout) -> *mut u8 {
+        count();
+        unsafe { System.alloc_zeroed(l) }
+    }
+    unsafe fn dealloc(&self, p: *mut u8, l: Layout) {
+        unsafe { System.dealloc(p, l) }
+    }
+    unsafe fn realloc(&self, p: *mut u8, l: Layout, new: usize) -> *mut u8 {
+        count();
+        unsafe { System.realloc(p, l, new) }
+    }
+}
+
+#[global_allocator]
+static ALLOC: Counting = Counting;
+
+/// How many allocations this thread has made.
+pub(crate) fn allocations() -> u64 {
+    ALLOCS.with(Cell::get)
+}
 
 pub(crate) fn workspace(p: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..").join(p)

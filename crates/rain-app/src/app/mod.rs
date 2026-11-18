@@ -19,6 +19,7 @@ mod notes;
 pub(crate) mod overview;
 pub(crate) mod picker;
 mod place;
+pub(crate) mod playground;
 mod reload;
 mod remote;
 pub(crate) mod rest;
@@ -66,6 +67,7 @@ pub use find::Find;
 pub use layout::{LayoutSnapshot, LayoutState, Menus, MoreSub, Overlay};
 pub use overview::{PeekContent, PeekTarget, ReaderTab};
 pub use picker::PickerState;
+pub use playground::PlaygroundState;
 pub use reload::{ReloadCounts, ReloadState, Stale};
 #[cfg(test)]
 pub(crate) use remote::APPLY_CALLS;
@@ -182,6 +184,7 @@ pub struct App {
     pub reloader: ReloadState,
     pub ruler: RulerState,
     pub shortcuts: ShortcutsState,
+    pub playground: PlaygroundState,
     /// Bumped whenever the active keymap is replaced, so cached hints rebuild.
     pub keymap_gen: u64,
     pub diff_width: f32,
@@ -273,6 +276,7 @@ impl App {
             reloader: ReloadState::default(),
             ruler: RulerState::default(),
             shortcuts: ShortcutsState::default(),
+            playground: PlaygroundState::default(),
             keymap_gen: 0,
             launch,
             shared,
@@ -557,6 +561,7 @@ impl App {
             changed |= self.ask_poll(tx);
         }
         changed |= self.rest_poll(tx);
+        changed |= self.playground_poll(tx);
         self.save_pane_state();
         changed
     }
@@ -840,6 +845,9 @@ impl App {
             self.close_palette();
             return true;
         }
+        if self.close_playground() {
+            return true;
+        }
         if self.close_peek() {
             return true;
         }
@@ -960,6 +968,7 @@ impl App {
             Command::Reload => self.reload_now(tx),
             Command::ToggleTheme => self.toggle_theme(),
             Command::ToggleDensity => self.toggle_density(),
+            Command::DiagramPlayground => self.toggle_playground(),
             Command::ToggleChaptersQueue => {
                 self.status = "Chapters and the queue are groups in the list now".into();
             }

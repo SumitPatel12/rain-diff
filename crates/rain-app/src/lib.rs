@@ -366,6 +366,15 @@ fn scene_reader(s: &mut App) {
     s.status.clear();
 }
 
+/// The Diagram playground on style `n` (1 to 4), playing from the start: `--at T` snaps the
+/// timeline `T` seconds in.
+fn scene_playground(s: &mut App, n: usize) {
+    scene_base(s);
+    s.open_playground();
+    s.pick_style(n - 1);
+    s.playground.lab.play();
+}
+
 fn spec() -> AppSpec<App> {
     let (fonts, families) = fonts();
     let size = Settings::load(&Settings::default_path()).window;
@@ -593,6 +602,14 @@ fn spec() -> AppSpec<App> {
             ("more-menu", |s| {
                 scene_reader(s);
                 s.menus.more = true;
+            }),
+            ("playground-1", |s| scene_playground(s, 1)),
+            ("playground-2", |s| scene_playground(s, 2)),
+            ("playground-3", |s| scene_playground(s, 3)),
+            ("playground-4", |s| scene_playground(s, 4)),
+            ("playground-4-query", |s| {
+                scene_playground(s, 4);
+                s.playground.lab.act(rain_lab::Act::Pick(Some("q".into())));
             }),
             ("session", scene_session),
         ],

@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "rain-lab/c.schema.json",
+  "title": "Schema C: call trees before and after",
+  "description": "Where the time goes: call trees whose frames carry their own work before and after the change, such as a change's entry points or one query under a given load. Read by style 4, the differential icicle. Rust type: rain_lab::schema::calls::CallTrees.",
+  "type": "object",
+  "properties": {
+    "title": { "type": "string", "description": "The change's name." },
+    "calls": {
+      "anyOf": [{ "$ref": "#/$defs/CallFrame" }, { "type": "null" }],
+      "description": "The call tree under the change's entry points; the icicle's first tab."
+    },
+    "profiles": {
+      "type": "array",
+      "description": "More call trees to compare, one tab each.",
+      "default": [],
+      "items": { "$ref": "#/$defs/Profile" }
+    }
+  },
+  "required": ["title"],
+  "additionalProperties": false,
+  "$defs": {
+    "Profile": {
+      "type": "object",
+      "properties": {
+        "title": { "type": "string", "description": "What was measured and under what load; the tab's label." },
+        "calls": { "$ref": "#/$defs/CallFrame" }
+      },
+      "required": ["title", "calls"],
+      "additionalProperties": false
+    },
+    "CallFrame": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique across every tree in the document; a pick names it." },
+        "name": { "type": "string", "description": "The frame's label." },
+        "before": {
+          "type": "number",
+          "default": 0,
+          "description": "Its own work before the change, in milliseconds per request; 0 for a new call."
+        },
+        "after": {
+          "type": "number",
+          "default": 0,
+          "description": "Its own work after the change; 0 for a call that is gone."
+        },
+        "children": {
+          "type": "array",
+          "description": "The calls it makes.",
+          "default": [],
+          "items": { "$ref": "#/$defs/CallFrame" }
+        }
+      },
+      "required": ["id", "name"],
+      "additionalProperties": false
+    }
+  }
+}

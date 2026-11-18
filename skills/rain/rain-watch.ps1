@@ -1,7 +1,8 @@
 <#
 Wait on a Rain session as the attached agent until something needs the agent, then print it and exit.
 Run it in the background while the user reviews; one wake per actionable event.
-  exit 0 : events printed as JSON ({"seq","events":[…]}); handle them, then rerun with -Since <seq>
+  exit 0 : events printed as JSON ({"seq","gap","events":[…]}); handle them, then rerun with -Since <seq>.
+           "gap":true means events were lost off the ring: re-read the threads (rain-story -Mode get) first.
   exit 3 : the window closed (or the session has no window)
 Kinds: ask (answer now), submitted (the user pressed Finish review), plus any -Kinds given.
 Rain binary: $env:RAIN_EXE, else the per-OS install path of install-rain.ps1, else Rain on PATH.
@@ -23,15 +24,21 @@ function Resolve-RainExe {
 $rain = Resolve-RainExe
 if (-not (Test-Path $rain)) { Write-Output "Rain not found at $rain (set RAIN_EXE)"; exit 3 }
 
+# Runs one watch call; stdout's last JSON line is the result, stderr only explains a failure.
+function Invoke-Watch([string[]]$watchArgs) {
+    $lines = @(& $rain watch @watchArgs --session $Session 2>&1 | ForEach-Object { "$_" })
+    $json = $lines | Where-Object { $_ -match '^\s*\{' } | Select-Object -Last 1
+    [pscustomobject]@{ Code = $LASTEXITCODE; Json = $json; Doc = if ($json) { $json | ConvertFrom-Json }; Text = $lines -join ' ' }
+}
+
 if (-not $Since) {
-    $first = & $rain watch --kinds $Kinds --timeout 1 --session $Session 2>&1
-    if ($LASTEXITCODE -eq 1) { Write-Output "window gone: $first"; exit 3 }
-    $Since = ($first | ConvertFrom-Json).seq
+    $first = Invoke-Watch @('--kinds', $Kinds, '--timeout', '1')
+    if (-not $first.Doc) { Write-Output "window gone: $($first.Text)"; exit 3 }
+    $Since = $first.Doc.seq
 }
 while ($true) {
-    $out = & $rain watch --for agent --kinds $Kinds --since $Since --timeout 60 --session $Session 2>&1
-    if ($LASTEXITCODE -eq 2) { $Since = ($out | ConvertFrom-Json).seq; continue }
-    if ($LASTEXITCODE -ne 0) { Write-Output "window gone: $out"; exit 3 }
-    if (($out | ConvertFrom-Json).events) { Write-Output "$out"; exit 0 }
-    $Since = ($out | ConvertFrom-Json).seq
+    $w = Invoke-Watch @('--for', 'agent', '--kinds', $Kinds, '--since', $Since, '--timeout', '60')
+    if ($w.Code -notin 0, 2 -or -not $w.Doc) { Write-Output "window gone: $($w.Text)"; exit 3 }
+    if ($w.Doc.events -or $w.Doc.gap) { Write-Output $w.Json; exit 0 }
+    $Since = $w.Doc.seq
 }

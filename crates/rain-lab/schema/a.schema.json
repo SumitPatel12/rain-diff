@@ -1,0 +1,121 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "rain-lab/a.schema.json",
+  "title": "Schema A: trace, paths and tour",
+  "description": "What happens, in order: the components a request calls, the paths it takes through them, and a tour whose prose links back to them. Read by style 1, the linked-text tour. Rust type: rain_lab::schema::trace::Trace.",
+  "type": "object",
+  "properties": {
+    "title": { "type": "string", "description": "The change's name." },
+    "entities": {
+      "type": "array",
+      "description": "Every component, function, table and data object the paths name.",
+      "items": { "$ref": "#/$defs/Entity" }
+    },
+    "paths": {
+      "type": "array",
+      "description": "Each request path, in the order the tour should meet them.",
+      "items": { "$ref": "#/$defs/TracePath" }
+    },
+    "tour": {
+      "type": "array",
+      "description": "The tour's steps, read in order.",
+      "default": [],
+      "items": { "$ref": "#/$defs/TourStep" }
+    }
+  },
+  "required": ["title", "entities", "paths"],
+  "additionalProperties": false,
+  "$defs": {
+    "Entity": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique among the entities; steps, tour text and focus lists name it." },
+        "label": { "type": "string", "description": "The name drawn for it." },
+        "layer": {
+          "type": "string",
+          "description": "Where it runs: web or ui (frontend), api or domain (backend), data or db (database); anything else is drawn as Other."
+        },
+        "parent": {
+          "type": ["string", "null"],
+          "description": "The entity it sits inside, such as a component's page; the map draws it inside the parent's box."
+        },
+        "fields": {
+          "type": "array",
+          "description": "For a data object: the fields worth naming when a call carries it.",
+          "default": [],
+          "items": { "type": "string" }
+        }
+      },
+      "required": ["id", "label", "layer"],
+      "additionalProperties": false
+    },
+    "TracePath": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique among the paths; tour text links to it with [[id]]." },
+        "name": { "type": "string", "description": "What the path does, as its line's name." },
+        "steps": {
+          "type": "array",
+          "description": "The calls the path makes, in calling order.",
+          "items": { "$ref": "#/$defs/TraceStep" }
+        }
+      },
+      "required": ["id", "name", "steps"],
+      "additionalProperties": false
+    },
+    "TraceStep": {
+      "type": "object",
+      "properties": {
+        "from": { "type": "string", "description": "The calling entity's id." },
+        "to": { "type": "string", "description": "The called entity's id." },
+        "call": { "type": "string", "description": "What the call says, such as RecordVoucher(id, amount)." },
+        "carries": {
+          "type": "array",
+          "description": "Ids of the data objects travelling with the call; the packet is labelled with them.",
+          "default": [],
+          "items": { "type": "string" }
+        },
+        "fragment": {
+          "type": ["string", "null"],
+          "enum": ["alt", "loop", "opt", null],
+          "description": "The call runs conditionally (alt, opt) or repeatedly (loop); tagged on its stretch."
+        },
+        "status": { "$ref": "#/$defs/Status" }
+      },
+      "required": ["from", "to", "call", "status"],
+      "additionalProperties": false
+    },
+    "TourStep": {
+      "type": "object",
+      "properties": {
+        "title": { "type": "string", "description": "The step's heading." },
+        "text": { "type": "string", "description": "One or two sentences; [[id]] links an entity or a path." },
+        "focus": {
+          "type": "array",
+          "description": "Entity ids the camera frames and lights while the step plays.",
+          "default": [],
+          "items": { "type": "string" }
+        },
+        "camera": {
+          "anyOf": [{ "$ref": "#/$defs/CameraKey" }, { "type": "null" }],
+          "description": "Limits on the camera for this step."
+        }
+      },
+      "required": ["title", "text"],
+      "additionalProperties": false
+    },
+    "CameraKey": {
+      "type": "object",
+      "properties": {
+        "zoom": { "type": "number", "description": "The most the camera zooms in while framing the step's focus (1 is the whole map)." }
+      },
+      "required": ["zoom"],
+      "additionalProperties": false
+    },
+    "Status": {
+      "type": "string",
+      "enum": ["added", "changed", "removed", "same"],
+      "description": "What the change did to the call."
+    }
+  }
+}

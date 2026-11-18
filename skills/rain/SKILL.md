@@ -59,6 +59,7 @@ It holds `rain watch --for agent`, so the window shows the agent as attached, an
 - **exit 0** — JSON events. For each:
   - `ask` (`data.threadId`, `data.question`, `data.filePath`, `data.excerpt`): the user asked a question and expects an answer now. Read the code it points at, then `& $r comment reply --session <s> --thread <threadId> --body '…'` — ≤150 words, cite `path:line`, say when the answer isn't in the code you read. Don't edit files to answer. If the thread already shows `answer.by: launcher` with a status other than `failed`, Rain's fallback answered it; skip.
   - `submitted` (`data.verdict`): the user pressed Finish review. Treat it as "done" — go to readback.
+  - `"gap": true`: events fell off Rain's ring while you weren't watching; re-read the threads (`-Mode get`) before going on.
   Then restart the watcher with `-Since <seq>` from the output.
 - **exit 3** — the window closed. Do the readback if you haven't (`get` fails once the window is gone; ask the user to reopen with the same `-Session`, which restores their threads).
 - The user saying "done" in chat also ends the review. Stop the background watcher you started (its shell id) when the loop ends.

@@ -13,6 +13,7 @@ rain-comments = { workspace = true }
 rain-tree = { workspace = true }
 rain-diagram = { workspace = true }
 rain-overview = { workspace = true }
+rain-lab = { workspace = true }
 rain-triage = { workspace = true }
 rain-ask = { workspace = true }
 rune = { workspace = true }

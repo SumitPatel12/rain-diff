@@ -180,6 +180,16 @@ pub static PLAY: Icon = Icon {
     view: 16.0,
     body: r#"<path d="M5 3.5v9l7-4.5z" fill="currentColor"/>"#,
 };
+pub static PAUSE: Icon = Icon {
+    name: "rain-pause",
+    view: 16.0,
+    body: r#"<path d="M4.5 3.5h2.5v9H4.5zM9 3.5h2.5v9H9z" fill="currentColor"/>"#,
+};
+stroked!(
+    DIAGRAM,
+    "diagram",
+    r#"<rect fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" x="2" y="2.5" width="4.5" height="4.5" rx="1"/><rect fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" x="9.5" y="9" width="4.5" height="4.5" rx="1"/><path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" d="M4.25 7v4h5.25M11.75 9V4.75H6.5"/>"#
+);
 stroked!(
     BOOK,
     "book",

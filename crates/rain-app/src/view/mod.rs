@@ -17,6 +17,7 @@ mod overview;
 mod palette;
 mod peek;
 mod picker;
+mod playground;
 mod ruler;
 mod selection;
 mod shortcuts;
@@ -90,6 +91,9 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
         }
     }
     root = root.children(selection::toolbar(s, k, cx));
+    if s.playground.open {
+        root = root.child(playground::page(s, &look, cx).absolute(0.0, 0.0));
+    }
     if s.palette.open {
         root = root.child(palette::palette_overlay(s, k).absolute(0.0, 0.0));
     }

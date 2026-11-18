@@ -174,6 +174,9 @@ pub fn on_key(s: &mut App, ev: &KeyEvent, tx: &mut Tx) -> bool {
     if s.shortcuts.open {
         return is_escape(chord) && s.escape(tx);
     }
+    if s.playground.open && !s.typing() {
+        return s.playground_key(chord, tx);
+    }
     if ev.is_command('c') && !s.typing() {
         return s.copy_key(ev, tx);
     }

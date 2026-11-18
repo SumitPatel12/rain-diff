@@ -9,6 +9,7 @@ members = [
     "crates/rain-tree",
     "crates/rain-diagram",
     "crates/rain-overview",
+    "crates/rain-lab",
     "crates/rain-triage",
     "crates/rain-ask",
     "crates/rain-server",
@@ -53,6 +54,7 @@ rain-comments = { path = "crates/rain-comments" }
 rain-tree = { path = "crates/rain-tree" }
 rain-diagram = { path = "crates/rain-diagram" }
 rain-overview = { path = "crates/rain-overview" }
+rain-lab = { path = "crates/rain-lab" }
 rain-triage = { path = "crates/rain-triage" }
 rain-ask = { path = "crates/rain-ask" }
 rain-server = { path = "crates/rain-server" }

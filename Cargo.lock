@@ -2738,6 +2738,7 @@ dependencies = [
  "rain-diagram",
  "rain-diffview",
  "rain-git",
+ "rain-lab",
  "rain-overview",
  "rain-syntax",
  "rain-tree",
@@ -2828,6 +2829,18 @@ dependencies = [
  "rain-core",
  "regex",
  "sha2",
+]
+
+[[package]]
+name = "rain-lab"
+version = "0.1.0"
+dependencies = [
+ "rain-core",
+ "rain-diagram",
+ "rune",
+ "rune-kit",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

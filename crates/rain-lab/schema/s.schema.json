@@ -1,0 +1,121 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "rain-lab/s.schema.json",
+  "title": "Schema S: scene script",
+  "description": "A hand-written explanation as an explicit timeline, in the manner of Manim: shapes placed in the scene's own points, beats that act on them at given seconds, and camera keys. Read by style 2, the flowchart. Rust type: rain_lab::schema::scene::Scene.",
+  "type": "object",
+  "properties": {
+    "title": { "type": "string", "description": "What the scene explains." },
+    "size": { "$ref": "#/$defs/Point", "description": "The scene's own width and height, in points." },
+    "shapes": {
+      "type": "array",
+      "description": "Every shape, hidden until a beat brings it in.",
+      "items": { "$ref": "#/$defs/SceneShape" }
+    },
+    "beats": {
+      "type": "array",
+      "description": "The timeline, in order of t.",
+      "items": { "$ref": "#/$defs/Beat" }
+    },
+    "camera": {
+      "type": "array",
+      "description": "Camera keys, in order of t; the camera eases between them.",
+      "default": [],
+      "items": { "$ref": "#/$defs/SceneCamera" }
+    }
+  },
+  "required": ["title", "size", "shapes", "beats"],
+  "additionalProperties": false,
+  "$defs": {
+    "Point": {
+      "type": "array",
+      "items": { "type": "number" },
+      "minItems": 2,
+      "maxItems": 2
+    },
+    "SceneShape": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique among the shapes; actions and [[id]] links name it." },
+        "kind": {
+          "type": "string",
+          "enum": ["box", "text", "path", "dot", "arrow"],
+          "description": "A component box, a caption or note, a line, a travelling dot, or a call's arrow."
+        },
+        "at": { "$ref": "#/$defs/Point", "description": "Top-left for boxes and text, the start for paths and arrows, the centre for dots." },
+        "props": { "$ref": "#/$defs/Props" }
+      },
+      "required": ["id", "kind", "at"],
+      "additionalProperties": false
+    },
+    "Props": {
+      "type": "object",
+      "description": "Everything optional; each kind reads what it needs.",
+      "default": {},
+      "properties": {
+        "w": { "type": ["number", "null"], "description": "A box's width." },
+        "h": { "type": ["number", "null"], "description": "A box's height." },
+        "r": { "type": ["number", "null"], "description": "A dot's radius." },
+        "text": { "type": ["string", "null"], "description": "A box's or text's words, an arrow's call, a dot's value." },
+        "points": {
+          "type": "array",
+          "description": "For paths and arrows, in scene points.",
+          "default": [],
+          "items": { "$ref": "#/$defs/Point" }
+        },
+        "tone": {
+          "type": ["string", "null"],
+          "enum": ["added", "changed", "removed", "same", null],
+          "description": "What the change did to it; picks the colour and a box's tag. Absent means same."
+        }
+      },
+      "additionalProperties": false
+    },
+    "Beat": {
+      "type": "object",
+      "properties": {
+        "t": { "type": "number", "description": "Seconds from the start." },
+        "actions": {
+          "type": "array",
+          "description": "What happens at t, all at once.",
+          "items": { "$ref": "#/$defs/Action" }
+        },
+        "say": {
+          "type": ["string", "null"],
+          "description": "What the beat shows, in a sentence; [[id]] names a shape. Without it the card lists the actions."
+        }
+      },
+      "required": ["t", "actions"],
+      "additionalProperties": false
+    },
+    "Action": {
+      "type": "object",
+      "properties": {
+        "do": {
+          "type": "string",
+          "enum": ["create", "write", "transform", "move", "fade", "focus", "pulse", "morph"],
+          "description": "create grows it in; write draws strokes on and types text; transform changes size or shape; move travels to `to`; fade takes opacity from to[0] to to[1]; focus frames it and dims the rest (an empty target ends focus); pulse runs a dot along it; morph relabels it `into`."
+        },
+        "target": { "type": "string", "description": "A shape's id; empty only for focus, to end it." },
+        "to": {
+          "anyOf": [{ "$ref": "#/$defs/Point" }, { "type": "null" }],
+          "description": "move: where to, in scene points; fade: opacity from and to."
+        },
+        "into": { "type": ["string", "null"], "description": "morph: the new label; text after ' · ' says what it now does." },
+        "dur": { "type": "number", "default": 0.5, "description": "Seconds the action takes." }
+      },
+      "required": ["do", "target"],
+      "additionalProperties": false
+    },
+    "SceneCamera": {
+      "type": "object",
+      "properties": {
+        "t": { "type": "number", "description": "Seconds from the start." },
+        "center": { "$ref": "#/$defs/Point", "description": "Where the camera looks, in scene points." },
+        "zoom": { "type": "number", "description": "1 frames the whole scene." }
+      },
+      "required": ["t", "center", "zoom"],
+      "additionalProperties": false
+    }
+  }
+}

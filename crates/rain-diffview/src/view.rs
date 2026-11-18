@@ -1327,19 +1327,24 @@ impl<S: 'static> View<S> {
         let (shown, spans, pads, mut lit) = drawn(c.text, spans, m, wrap, &paint);
         let cell_w = rune::text::advance("0", l.font);
         // Highlights have round corners and paint under later ones: the block is a square over
-        // the text with its glyph drawn again inverted, where the view knows the glyph's place.
+        // the text with its glyph drawn again inverted, on whichever wrapped line it sits.
         let block = if has_block { lit.pop() } else { None };
         let square = block.and_then(|h| {
             let r = h.range();
-            let x = (!wrap || wrap_width(st, f).is_some_and(|w| on_first_line(&shown, r.end, w, cell_w)))
-                .then(|| x_in(&shown[..r.start], l.font, cell_w));
-            if x.is_none() {
+            let at = if wrap {
+                wrap_width(st, f).map(|w| wrapped_line(&shown, r.start, w, cell_w))
+            } else {
+                Some((0, 0))
+            };
+            if at.is_none() {
                 lit.push(h);
             }
-            x.map(|x| {
+            at.map(|(line, start)| {
+                let x = x_in(&shown[start..r.start], l.font, cell_w);
+                let y = line as f32 * l.font.line_height;
                 let w = rune::text::advance(&shown[r.clone()], l.font).max(cell_w);
                 el().key("block")
-                    .absolute(x, 0.0)
+                    .absolute(x, y)
                     .w(w)
                     .h(l.font.line_height)
                     .fill(l.text)
@@ -1784,12 +1789,21 @@ fn x_in(head: &str, font: TextStyle, cell_w: f32) -> f32 {
     }
 }
 
-/// Whether the byte before `end` in `shown`, wrapped at `w`, sits on the first line, by
-/// counting columns as [`wrap_starts`] does rather than shaping the text.
-fn on_first_line(shown: &str, end: usize, w: f32, cell_w: f32) -> bool {
+/// The wrapped line (wrapped at `w`) that byte `at` of `shown` sits on, and the byte that line
+/// starts at, by counting columns as [`wrap_starts`] does rather than shaping the text.
+fn wrapped_line(shown: &str, at: usize, w: f32, cell_w: f32) -> (usize, usize) {
     let cols = (w / cell_w + 0.01).max(1.0) as u32;
-    let col = shown[..end].chars().filter(|&c| c != '\u{200B}').count() as u32;
-    wrap_starts(shown, cols, 2).get(1).is_none_or(|&b| col <= b)
+    let col = shown[..at].chars().filter(|&c| c != '\u{200B}').count() as u32;
+    // A word's later characters decide whether it wraps, so scan the whole line.
+    let starts = wrap_starts(shown, cols, usize::MAX);
+    let line = starts.iter().rposition(|&s| s <= col).unwrap_or(0);
+    let start = starts[line];
+    let byte = shown
+        .char_indices()
+        .filter(|&(_, c)| c != '\u{200B}')
+        .nth(start as usize)
+        .map_or(at, |(b, _)| b.min(at));
+    (line, byte)
 }
 
 /// The column a click lands on, `col` cells into the `line`th line of row `r`'s wrapped code.
@@ -2073,12 +2087,18 @@ mod tests {
     }
 
     #[test]
-    fn the_block_is_on_the_first_wrapped_line_while_its_word_is() {
+    fn the_block_finds_its_wrapped_line_and_where_that_line_starts() {
         let (w, cell) = (5.0 * 7.0, 7.0);
-        assert!(on_first_line("aaa bbb ccc", 1, w, cell));
-        assert!(on_first_line("aaa bbb ccc", 3, w, cell), "the word's last character");
-        assert!(!on_first_line("aaa bbb ccc", 5, w, cell), "bbb wrapped to the second line");
-        assert!(on_first_line("short", 5, w * 4.0, cell), "no wrap at all");
+        assert_eq!(wrapped_line("aaa bbb ccc", 0, w, cell), (0, 0));
+        assert_eq!(wrapped_line("aaa bbb ccc", 2, w, cell), (0, 0), "the word's last character");
+        assert_eq!(wrapped_line("aaa bbb ccc", 4, w, cell), (1, 4), "bbb wrapped to the second line");
+        assert_eq!(wrapped_line("aaa bbb ccc", 9, w, cell), (2, 8), "ccc on the third");
+        assert_eq!(wrapped_line("short", 4, w * 4.0, cell), (0, 0), "no wrap at all");
+        assert_eq!(
+            wrapped_line("a.\u{200B}bcde", 6, 3.0 * 7.0, cell),
+            (1, 5),
+            "after a zero-width break"
+        );
     }
 
     #[test]

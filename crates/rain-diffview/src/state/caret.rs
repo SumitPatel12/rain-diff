@@ -49,8 +49,8 @@ impl DiffState {
             self.end_visual();
         }
         match key {
-            Caret::Left => self.step_char(false, tx),
-            Caret::Right => self.step_char(true, tx),
+            Caret::Left => self.step_chars(false, 1, tx),
+            Caret::Right => self.step_chars(true, 1, tx),
             Caret::Up | Caret::Down => {
                 self.cursor_steps(key == Caret::Down, 1, tx);
             }
@@ -82,27 +82,33 @@ impl DiffState {
         }
     }
 
-    /// Left or Right by one character, onto the line before or after at either end.
-    fn step_char(&mut self, forward: bool, tx: &mut Tx) {
+    /// Left or Right by `n` characters (arrows, `h`, `l`), onto the line before or after at
+    /// either end; it stops at the file's ends.
+    pub(super) fn step_chars(&mut self, forward: bool, n: u32, tx: &mut Tx) {
         let Some((r, side, t)) = self.cursor_line() else { return };
-        let at = norm(t, self.col);
-        let (next, prev, len) = (motion::next_grapheme(t, at), motion::prev_grapheme(t, at), t.len());
-        if (forward && next < len) || (!forward && at > 0) {
-            self.want = super::Want::Here;
-            self.land(r, side, if forward { next } else { prev }, true, tx);
-            return;
-        }
         let lines = FileLines {
             st: self,
             f: self.rows[r as usize].file(),
             prefer: side,
         };
-        let Some(to) = (if forward { lines.next((r, side)) } else { lines.prev((r, side)) }) else {
-            return;
-        };
-        let byte = if forward { 0 } else { norm(lines.text(to), usize::MAX) };
+        let (mut line, mut t, mut at) = ((r, side), t, norm(t, self.col));
+        for _ in 0..n.max(1) {
+            let next = motion::next_grapheme(t, at);
+            if forward && next < t.len() {
+                at = next;
+            } else if !forward && at > 0 {
+                at = motion::prev_grapheme(t, at);
+            } else {
+                let Some(to) = (if forward { lines.next(line) } else { lines.prev(line) }) else {
+                    break;
+                };
+                line = to;
+                t = lines.text(to);
+                at = if forward { 0 } else { norm(t, usize::MAX) };
+            }
+        }
         self.want = super::Want::Here;
-        self.land(to.0, to.1, byte, true, tx);
+        self.land(line.0, line.1, at, true, tx);
     }
 
     /// Ctrl+A: every line of the cursor's file (else the one on screen), on the cursor's side.

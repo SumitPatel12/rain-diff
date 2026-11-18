@@ -36,6 +36,30 @@ function Resolve-RainExe {
 $rain = Resolve-RainExe
 if (-not (Test-Path $rain)) { throw "rain-story: Rain not found at $rain (set RAIN_EXE or run install-rain.ps1)" }
 
+# The checked-out branch read straight from HEAD (no git process per folder); $null when not a repo.
+function Get-Branch([string]$dir) {
+    $git = Join-Path $dir '.git'
+    $gitDir = $git
+    if ([IO.File]::Exists($git)) {
+        $line = [IO.File]::ReadLines($git) | Select-Object -First 1
+        if ($line -notmatch '^gitdir:\s*(.+)$') { return $null }
+        $gitDir = $Matches[1].Trim()
+        if (-not [IO.Path]::IsPathRooted($gitDir)) { $gitDir = Join-Path $dir $gitDir }
+    }
+    elseif (-not [IO.Directory]::Exists($git)) { return $null }
+    $head = Join-Path $gitDir 'HEAD'
+    if (-not [IO.File]::Exists($head)) { return $null }
+    $ref = [IO.File]::ReadAllText($head).Trim()
+    if ($ref -match '^ref:\s*refs/heads/(.+)$') { return $Matches[1] }
+    return ''
+}
+
+# The last line of a command's output that is a JSON object, parsed; $null when there is none.
+function Get-JsonLine([string[]]$lines) {
+    $json = $lines | Where-Object { $_ -match '^\s*\{' } | Select-Object -Last 1
+    if ($json) { $json | ConvertFrom-Json }
+}
+
 function Get-RepoId($folder, $doc, [string[]]$known) {
     if ($doc) {
         $id = ($doc.repos | Where-Object { $_.dir -ieq $folder } | Select-Object -First 1).id
@@ -52,7 +76,7 @@ if ($Mode -eq 'open') {
         if (-not $Key) { throw 'rain-story: pass -Repos or -Key' }
         if (-not $Root) { $Root = (Get-Location).Path }
         $Repos = Get-ChildItem $Root -Directory |
-            Where-Object { (Test-Path (Join-Path $_.FullName '.git')) -and ((git -C $_.FullName branch --show-current) -like "*$Key*") } |
+            Where-Object { (Get-Branch $_.FullName) -like "*$Key*" } |
             ForEach-Object { $_.FullName }
         if (-not $Repos) { throw "rain-story: no repo under $Root has a *$Key* branch checked out; pass -Root or -Repos" }
     }
@@ -70,16 +94,18 @@ if ($Mode -eq 'open') {
     $openArgs += @('--session', $Session, '--background')
     if ($absOverview) { $openArgs += @('--overview', $absOverview) }
     $raw = @(& $rain @openArgs 2>&1 | ForEach-Object { "$_" })
-    $json = $raw | Where-Object { $_ -match '^\s*\{.*"port"' } | Select-Object -Last 1
-    if (-not $json) { throw "rain-story: open failed: $($raw -join ' ')" }
-    $info = $json | ConvertFrom-Json
+    $info = Get-JsonLine ($raw | Where-Object { $_ -match '"port"' })
+    if ($LASTEXITCODE -ne 0 -or -not $info) { throw "rain-story: open failed: $($raw -join ' ')" }
     $state = if ($info.reused) { 'reused' } else { 'opened' }
 
+    # A new window takes a moment to load its repos; poll up to ~10 s, tightly at first.
     $known = @()
-    for ($i = 0; $i -lt 40 -and -not $known; $i++) {
-        $h = & $rain health --session $Session 2>$null
-        if ($LASTEXITCODE -eq 0 -and $h) { $known = @(($h | ConvertFrom-Json).repos) } else { Start-Sleep -Milliseconds 250 }
+    for ($i = 0; $i -lt 60 -and -not $known; $i++) {
+        $h = Get-JsonLine @(& $rain health --session $Session 2>$null)
+        if ($LASTEXITCODE -eq 0 -and $h) { $known = @($h.repos) }
+        if (-not $known) { Start-Sleep -Milliseconds ([Math]::Min(50 * ($i + 1), 250)) }
     }
+    if (-not $known) { Write-Output "warning: session $Session didn't report its repos within ~10 s; comment repo ids fall back to folder names" }
 
     if ($CommentsDir) {
         foreach ($r in $Repos) {
@@ -88,8 +114,9 @@ if ($Mode -eq 'open') {
             if (-not (Test-Path $file)) { continue }
             $id = Get-RepoId $folder $doc $known
             $out = @(& $rain comment add "@$((Resolve-Path $file).Path)" --repo $id --session $Session 2>&1 | ForEach-Object { "$_" })
-            if ($LASTEXITCODE -ne 0) { Write-Output "$folder  comments FAILED  $($out -join ' ')"; continue }
-            $res = ($out | Where-Object { $_ -match '^\s*\{' } | Select-Object -Last 1) | ConvertFrom-Json
+            # A warning (e.g. a line outside the diff, stored file-level) exits non-zero but still imports.
+            $res = Get-JsonLine $out
+            if (-not $res.success) { Write-Output "$folder  comments FAILED  $($out -join ' ')"; continue }
             Write-Output "$folder ($id)  comments sent $($res.count) (Rain skips ones it already has)$(if ($res.warnings) { "  warnings: $($res.warnings -join '; ')" })"
         }
     }

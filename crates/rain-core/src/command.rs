@@ -56,6 +56,7 @@ pub enum Command {
     Reload,
     ToggleTheme,
     ToggleDensity,
+    DiagramPlayground,
     Escape,
     /// Round-2 commands with no chord and no place in [`Command::ALL`]; the round-2 shell still
     /// dispatches them until the round-3 shell replaces it.
@@ -68,7 +69,7 @@ pub enum Command {
 }
 
 impl Command {
-    pub const ALL: [Command; 54] = [
+    pub const ALL: [Command; 55] = [
         Command::CursorDown,
         Command::CursorUp,
         Command::NextHunk,
@@ -122,16 +123,18 @@ impl Command {
         Command::Reload,
         Command::ToggleTheme,
         Command::ToggleDensity,
+        Command::DiagramPlayground,
         Command::Escape,
     ];
 
-    /// Reached from the palette only.
-    pub const PALETTE_ONLY: [Command; 5] = [
+    /// No key in any profile until the user binds one.
+    pub const PALETTE_ONLY: [Command; 6] = [
         Command::LayoutAuto,
         Command::CopyAll,
         Command::ToggleTheme,
         Command::GoOverview,
         Command::GoChanges,
+        Command::DiagramPlayground,
     ];
 
     pub const LEGACY: [Command; 6] = [
@@ -202,6 +205,7 @@ impl Command {
             Command::Reload => "Reload diff",
             Command::ToggleTheme => "Toggle theme",
             Command::ToggleDensity => "Toggle density",
+            Command::DiagramPlayground => "Diagram playground",
             Command::Escape => "Close / clear",
             Command::NextChapter => "Next chapter",
             Command::PrevChapter => "Previous chapter",
@@ -278,6 +282,7 @@ impl Command {
             Command::Reload => "reload",
             Command::ToggleTheme => "toggle-theme",
             Command::ToggleDensity => "toggle-density",
+            Command::DiagramPlayground => "diagram-playground",
             Command::Escape => "escape",
             Command::NextChapter => "next-chapter",
             Command::PrevChapter => "prev-chapter",
@@ -343,6 +348,17 @@ mod tests {
         }
         let labels: HashSet<_> = Command::ALL.iter().map(|c| c.label()).collect();
         assert_eq!(labels.len(), Command::ALL.len(), "labels are unique");
+    }
+
+    #[test]
+    fn the_diagram_playground_has_a_stable_id_and_no_key_in_any_profile() {
+        assert_eq!(Command::from_id("diagram-playground"), Some(Command::DiagramPlayground));
+        for p in crate::keymap::Profile::ALL {
+            assert!(
+                crate::keymap::Keymap::defaults(p).chords(Command::DiagramPlayground).is_empty(),
+                "{p:?}"
+            );
+        }
     }
 
     #[test]

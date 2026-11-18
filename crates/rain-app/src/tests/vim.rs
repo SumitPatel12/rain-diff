@@ -156,10 +156,16 @@ fn the_block_is_a_full_line_square_over_its_glyph_in_every_layout_and_density() 
                 "{case}: {b:?} {t:?}"
             );
             keys(&mut rt, "$");
-            let blocks = el_of(&rt, "block").len();
+            let (bi, b, _, t) = block_and_text(&rt).unwrap_or_else(|| panic!("{case}: a block at the end"));
+            assert_eq!(el_of(&rt, "block").len(), 1, "{case}: one block");
+            assert_eq!(rt.elements()[bi].radius, 0.0, "{case}: square corners");
+            assert!((b[3] - line_h).abs() < 0.01, "{case}: the line's height");
             match layout {
-                ViewLayout::Unified => assert_eq!(blocks, 1, "{case}: unwrapped, still a square"),
-                _ => assert_eq!(blocks, 0, "{case}: on a wrapped line the highlight stands in"),
+                ViewLayout::Unified => assert!((b[1] - t[1]).abs() < 0.01, "{case}: unwrapped, on the first line"),
+                _ => assert!(
+                    b[1] - t[1] >= line_h - 0.01,
+                    "{case}: a square on the wrapped line below: {b:?} {t:?}"
+                ),
             }
 
             keys(&mut rt, "0");

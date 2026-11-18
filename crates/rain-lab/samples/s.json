@@ -1,0 +1,94 @@
+{
+  "title": "A voucher's journey",
+  "size": [1000, 560],
+  "shapes": [
+    { "id": "voucher-form", "kind": "box", "at": [60, 80], "props": { "w": 190, "h": 56, "text": "VoucherFormComponent", "tone": "added" } },
+    { "id": "vouchers-controller", "kind": "box", "at": [400, 80], "props": { "w": 200, "h": 56, "text": "VouchersController", "tone": "added" } },
+    { "id": "voucher-service", "kind": "box", "at": [400, 250], "props": { "w": 200, "h": 56, "text": "VoucherService", "tone": "added" } },
+    { "id": "account-service", "kind": "box", "at": [720, 250], "props": { "w": 200, "h": 56, "text": "AccountService", "tone": "changed" } },
+    { "id": "total-calculator", "kind": "box", "at": [720, 80], "props": { "w": 200, "h": 56, "text": "TotalCalculator", "tone": "removed" } },
+    { "id": "voucher-table", "kind": "box", "at": [400, 420], "props": { "w": 200, "h": 56, "text": "Vouchers table", "tone": "added" } },
+    { "id": "post", "kind": "arrow", "at": [250, 108], "props": { "points": [[250, 108], [400, 108]], "text": "POST voucher", "tone": "added" } },
+    { "id": "record", "kind": "arrow", "at": [500, 136], "props": { "points": [[500, 136], [500, 250]], "text": "RecordVoucher", "tone": "added" } },
+    { "id": "insert", "kind": "arrow", "at": [500, 306], "props": { "points": [[500, 306], [500, 420]], "text": "INSERT", "tone": "added" } },
+    { "id": "refresh", "kind": "arrow", "at": [600, 278], "props": { "points": [[600, 278], [720, 278]], "text": "RefreshTotal", "tone": "added" } },
+    { "id": "sum", "kind": "arrow", "at": [820, 306], "props": { "points": [[820, 306], [820, 448], [600, 448]], "text": "SUM(Amount)", "tone": "added" } },
+    { "id": "calc", "kind": "arrow", "at": [820, 250], "props": { "points": [[820, 250], [820, 136]], "text": "Calculate", "tone": "removed" } },
+    { "id": "amount", "kind": "dot", "at": [250, 108], "props": { "r": 7, "text": "amount", "tone": "added" } },
+    { "id": "caption", "kind": "text", "at": [60, 20], "props": { "text": "One amount, from the form to the account's total" } },
+    { "id": "rule", "kind": "text", "at": [190, 158], "props": { "text": "New check: amount ≤ 0 → 400", "tone": "added" } }
+  ],
+  "beats": [
+    {
+      "t": 0.0,
+      "actions": [{ "do": "write", "target": "caption", "dur": 0.6 }, { "do": "create", "target": "voucher-form", "dur": 0.5 }],
+      "say": "Staff type an amount into the new [[voucher-form]]."
+    },
+    {
+      "t": 1.6,
+      "actions": [{ "do": "write", "target": "post", "dur": 0.6 }, { "do": "create", "target": "vouchers-controller", "dur": 0.5 }],
+      "say": "The form posts it to the new [[vouchers-controller]]."
+    },
+    {
+      "t": 3.2,
+      "actions": [{ "do": "create", "target": "amount", "dur": 0.2 }, { "do": "move", "target": "amount", "to": [400, 108], "dur": 0.8 }],
+      "say": "The [[amount]] rides along with the request."
+    },
+    {
+      "t": 4.6,
+      "actions": [{ "do": "fade", "target": "rule", "to": [0, 1], "dur": 0.3 }, { "do": "focus", "target": "vouchers-controller", "dur": 0.6 }],
+      "say": "The controller turns away an amount of zero or less with a 400: a [[rule]]."
+    },
+    {
+      "t": 6.4,
+      "actions": [
+        { "do": "focus", "target": "", "dur": 0.5 },
+        { "do": "write", "target": "record", "dur": 0.5 },
+        { "do": "create", "target": "voucher-service", "dur": 0.5 },
+        { "do": "move", "target": "amount", "to": [500, 250], "dur": 0.6 }
+      ],
+      "say": "Otherwise it hands the amount to the new [[voucher-service]]."
+    },
+    {
+      "t": 8.0,
+      "actions": [
+        { "do": "write", "target": "insert", "dur": 0.5 },
+        { "do": "create", "target": "voucher-table", "dur": 0.5 },
+        { "do": "move", "target": "amount", "to": [500, 420], "dur": 0.6 }
+      ],
+      "say": "It is stored as one row in the new [[voucher-table]]."
+    },
+    {
+      "t": 9.6,
+      "actions": [
+        { "do": "write", "target": "refresh", "dur": 0.5 },
+        { "do": "create", "target": "account-service", "dur": 0.5 },
+        { "do": "create", "target": "total-calculator", "dur": 0.5 },
+        { "do": "write", "target": "calc", "dur": 0.5 }
+      ],
+      "say": "Then [[account-service]] refreshes the total, which [[total-calculator]] used to work out."
+    },
+    {
+      "t": 11.4,
+      "actions": [{ "do": "write", "target": "sum", "dur": 0.7 }, { "do": "pulse", "target": "sum", "dur": 1.2 }],
+      "say": "[[account-service]] now sums the vouchers itself: [[sum]]."
+    },
+    {
+      "t": 13.2,
+      "actions": [
+        { "do": "morph", "target": "account-service", "into": "AccountService · total counts vouchers", "dur": 0.5 },
+        { "do": "fade", "target": "total-calculator", "to": [1, 0.45], "dur": 0.6 },
+        { "do": "fade", "target": "calc", "to": [1, 0.45], "dur": 0.6 },
+        { "do": "focus", "target": "", "dur": 0.4 }
+      ],
+      "say": "[[total-calculator]] goes; the account's total now counts its vouchers."
+    }
+  ],
+  "camera": [
+    { "t": 0.0, "center": [500, 280], "zoom": 1.0 },
+    { "t": 4.6, "center": [500, 280], "zoom": 1.0 },
+    { "t": 5.2, "center": [420, 160], "zoom": 1.2 },
+    { "t": 6.4, "center": [420, 160], "zoom": 1.2 },
+    { "t": 7.0, "center": [500, 280], "zoom": 1.0 }
+  ]
+}
