@@ -2722,7 +2722,7 @@ checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
 
 [[package]]
 name = "rain"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "rain-cli",
  "winresource",
@@ -2730,7 +2730,7 @@ dependencies = [
 
 [[package]]
 name = "rain-app"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "rain-ask",
  "rain-comments",
@@ -2753,7 +2753,7 @@ dependencies = [
 
 [[package]]
 name = "rain-ask"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "globset",
  "rain-core",
@@ -2763,7 +2763,7 @@ dependencies = [
 
 [[package]]
 name = "rain-cli"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "clap",
  "rain-app",
@@ -2778,7 +2778,7 @@ dependencies = [
 
 [[package]]
 name = "rain-comments"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "blake3",
  "rain-core",
@@ -2790,7 +2790,7 @@ dependencies = [
 
 [[package]]
 name = "rain-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "blake3",
  "pulldown-cmark",
@@ -2801,7 +2801,7 @@ dependencies = [
 
 [[package]]
 name = "rain-diagram"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "rain-core",
  "rune",
@@ -2812,7 +2812,7 @@ dependencies = [
 
 [[package]]
 name = "rain-diffview"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "blake3",
  "rain-core",
@@ -2823,7 +2823,7 @@ dependencies = [
 
 [[package]]
 name = "rain-git"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "notify",
  "rain-core",
@@ -2833,7 +2833,7 @@ dependencies = [
 
 [[package]]
 name = "rain-lab"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "rain-core",
  "rain-diagram",
@@ -2846,7 +2846,7 @@ dependencies = [
 
 [[package]]
 name = "rain-overview"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "globset",
  "rain-core",
@@ -2857,7 +2857,7 @@ dependencies = [
 
 [[package]]
 name = "rain-server"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "rain-comments",
  "rain-core",
@@ -2870,7 +2870,7 @@ dependencies = [
 
 [[package]]
 name = "rain-syntax"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "rune",
  "rune-kit",
@@ -2880,7 +2880,7 @@ dependencies = [
 
 [[package]]
 name = "rain-tree"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "rain-core",
  "rune",
@@ -2890,7 +2890,7 @@ dependencies = [
 
 [[package]]
 name = "rain-triage"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "rain-core",
  "rain-git",
@@ -4695,7 +4695,7 @@ checksum = "b9cc00251562a284751c9973bace760d86c0276c471b4be569fe6b068ee97a56"
 
 [[package]]
 name = "xtask"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "ico",
  "resvg",
