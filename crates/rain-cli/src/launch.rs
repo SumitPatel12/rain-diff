@@ -55,19 +55,48 @@ fn current_branch(dir: &Path) -> Option<String> {
 }
 
 /// `<repo folder>-<branch>` (or `-<target>` when the target names a revision other than HEAD), so
-/// two repos, or two stories in one repo, never share a session file by accident.
-pub fn default_session(dir: &Path, target: &str, fixture: Option<&Path>) -> String {
-    if let Some(f) = fixture {
+/// two repos, or two stories in one repo, never share a session file by accident. What else picks
+/// the diff follows, so a different diff never reuses a window: `-uncommitted`, `-working` or
+/// `-staged` for those targets, then `-<hash>` of the base, `--merge-base`,
+/// `--include-untracked` and the other repos when any differs from a plain `rain open <target>`.
+pub fn default_session(o: &OpenArgs, dirs: &[PathBuf], target: &str, base: &str) -> String {
+    if let Some(f) = o.fixture.as_deref() {
         let stem = f.file_stem().map_or_else(|| "fixture".into(), |s| s.to_string_lossy().into_owned());
         return sanitize(&format!("fixture-{stem}"));
     }
+    let dir = dirs.first().map_or(Path::new("."), PathBuf::as_path);
     let folder = folder_name(dir).unwrap_or_else(|| "rain".into());
     let label = if target.eq_ignore_ascii_case("HEAD") || is_special(target) {
         current_branch(dir).unwrap_or_else(|| "HEAD".into())
     } else {
         target.to_owned()
     };
-    sanitize(&format!("{folder}-{label}"))
+    let mut id = format!("{folder}-{label}");
+    if is_special(target) {
+        id.push('-');
+        id.push_str(match target.to_ascii_lowercase().as_str() {
+            "working" => "working",
+            "staged" => "staged",
+            _ => "uncommitted",
+        });
+    }
+    let plain = base == default_base(target) && !o.merge_base && !o.include_untracked && dirs.len() == 1;
+    if !plain {
+        let mut spec = format!("{base}\0{}\0{}", o.merge_base, o.include_untracked);
+        for d in &dirs[1..] {
+            spec.push('\0');
+            spec.push_str(&absolute(d).to_string_lossy());
+        }
+        id.push_str(&format!("-{:08x}", fnv1a(spec.as_bytes()) as u32));
+    }
+    sanitize(&id)
+}
+
+/// FNV-1a: a stable hash, the same in every build.
+fn fnv1a(bytes: &[u8]) -> u64 {
+    bytes
+        .iter()
+        .fold(0xcbf2_9ce4_8422_2325, |h, &b| (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3))
 }
 
 pub fn build_launch(o: &OpenArgs) -> Launch {
@@ -88,10 +117,7 @@ pub fn build_launch(o: &OpenArgs) -> Launch {
             include_untracked: o.include_untracked,
         })
         .collect();
-    let session = o
-        .session
-        .clone()
-        .unwrap_or_else(|| default_session(&dirs[0], &target, o.fixture.as_deref()));
+    let session = o.session.clone().unwrap_or_else(|| default_session(o, &dirs, &target, &base));
     Launch {
         session,
         repos,
@@ -196,14 +222,7 @@ fn reuse(o: &OpenArgs, session: &str, lock: &rain_server::Lock) -> i32 {
     }
     let port = lock.port.to_string();
     let exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("rain"));
-    let mut calls: Vec<Vec<String>> = o.comments.iter().map(|c| vec!["comment".into(), "add".into(), c.clone()]).collect();
-    if let Some(ov) = &o.overview {
-        calls.push(vec!["overview".into(), "set".into(), ov.display().to_string()]);
-    }
-    if let Some(g) = &o.goto {
-        calls.push(vec!["goto".into(), g.clone()]);
-    }
-    for c in calls {
+    for c in reuse_calls(o) {
         let code = crate::run(
             std::iter::once(exe.display().to_string())
                 .chain(c)
@@ -215,8 +234,28 @@ fn reuse(o: &OpenArgs, session: &str, lock: &rain_server::Lock) -> i32 {
             return code;
         }
     }
-    println!("{}", background::reused_line(lock.port, lock.pid));
+    println!(
+        "{}",
+        background::with_extras(&background::reused_line(lock.port, lock.pid), lock.token.as_deref(), false)
+    );
     0
+}
+
+/// The client calls that hand a running window what `o` carried. `--comment` imports keep no
+/// author, as when the window opens fresh with them: they are the reviewer's.
+fn reuse_calls(o: &OpenArgs) -> Vec<Vec<String>> {
+    let mut calls: Vec<Vec<String>> = o
+        .comments
+        .iter()
+        .map(|c| vec!["comment".into(), "add".into(), c.clone(), "--author=".into()])
+        .collect();
+    if let Some(ov) = &o.overview {
+        calls.push(vec!["overview".into(), "set".into(), ov.display().to_string()]);
+    }
+    if let Some(g) = &o.goto {
+        calls.push(vec!["goto".into(), g.clone()]);
+    }
+    calls
 }
 
 pub fn open(o: OpenArgs, rune: &RuneArgs) -> i32 {
@@ -262,15 +301,15 @@ fn open_window(o: &OpenArgs, rune: &RuneArgs) -> Result<(), String> {
         };
         let handle = start_with(shared.clone(), opts).map_err(|e| format!("cannot start the comment server: {e}"))?;
         if handle.read_only {
-            eprintln!(
-                "Warning: another window holds session {}; changes here won't be saved",
-                launch.session
-            );
+            if !background::is_child() {
+                eprintln!("{}", background::READ_ONLY_WARNING);
+            }
         } else if changed {
             save();
         }
         crate::sessions::write_record(&rain_comments::store::data_dir(), &launch);
-        println!("{}", background::handshake_line(handle.port, &handle.url, std::process::id()));
+        let line = background::handshake_line(handle.port, &handle.url, std::process::id());
+        println!("{}", background::with_extras(&line, Some(&handle.token), handle.read_only));
         let _ = std::io::stdout().flush();
         if background::is_child() {
             background::redirect_stdio(&log_path(&launch.session));
@@ -349,12 +388,86 @@ mod tests {
 
     #[test]
     fn default_session_names_the_folder_and_revision() {
-        let s = default_session(Path::new("C:/src/acme-server"), "feature/ACME-1", None);
+        let server = [PathBuf::from("C:/src/acme-server")];
+        let plain = OpenArgs::default();
+        let s = default_session(&plain, &server, "feature/ACME-1", "feature/ACME-1^");
         assert_eq!(s, "acme-server-feature_ACME-1");
-        assert_eq!(
-            default_session(Path::new("."), "HEAD", Some(Path::new("fixtures/m.patch"))),
-            "fixture-m"
-        );
+        let fixture = OpenArgs {
+            fixture: Some("fixtures/m.patch".into()),
+            ..OpenArgs::default()
+        };
+        assert_eq!(default_session(&fixture, &[PathBuf::from(".")], "HEAD", "HEAD^"), "fixture-m");
+    }
+
+    #[test]
+    fn a_different_diff_gets_a_different_default_session() {
+        let id = |args: &[&str]| {
+            let mut o = OpenArgs {
+                repos: vec![PathBuf::from("C:/src/acme-server")],
+                ..OpenArgs::default()
+            };
+            let words: Vec<&str> = args.iter().copied().filter(|a| !a.starts_with("--")).collect();
+            o.target = words.first().map(|s| (*s).to_owned());
+            o.base = words.get(1).map(|s| (*s).to_owned());
+            o.merge_base = args.contains(&"--merge-base");
+            o.include_untracked = args.contains(&"--include-untracked");
+            if args.contains(&"--repo") {
+                o.repos.push(PathBuf::from("C:/src/acme-app"));
+            }
+            build_launch(&o).session
+        };
+        let feature = id(&["feature/x"]);
+        assert_eq!(feature, "acme-server-feature_x", "a plain open keeps its name");
+        assert_eq!(id(&["feature/x", "feature/x^"]), feature, "the default base spelled out");
+        let all = [
+            feature,
+            id(&["feature/x", "origin/development"]),
+            id(&["feature/x", "origin/development", "--merge-base"]),
+            id(&["feature/x", "origin/main", "--merge-base"]),
+            id(&["feature/x", "--include-untracked"]),
+            id(&["feature/x", "--repo"]),
+            id(&["HEAD"]),
+            id(&["."]),
+            id(&["working"]),
+            id(&["staged"]),
+        ];
+        for (i, a) in all.iter().enumerate() {
+            for b in &all[i + 1..] {
+                assert_ne!(a, b);
+            }
+        }
+        assert!(all[7].ends_with("-uncommitted"), "{}", all[7]);
+        assert_eq!(id(&["feature/x", "origin/development", "--merge-base"]), all[2], "stable");
+    }
+
+    #[test]
+    fn reused_windows_get_start_up_comments_without_an_author_as_fresh_ones_do() {
+        use clap::Parser;
+
+        use crate::args::{Cli, CommentCmd, Sub};
+
+        let q = r#"{"type":"thread","filePath":"a.cs","position":{"side":"new","line":3},"body":"Why?","kind":"question"}"#;
+        let o = OpenArgs {
+            comments: vec![q.into()],
+            goto: Some("a.cs:3".into()),
+            ..OpenArgs::default()
+        };
+        let calls = reuse_calls(&o);
+        assert_eq!(calls[0], ["comment", "add", q, "--author="]);
+        assert_eq!(calls[1], ["goto", "a.cs:3"]);
+        let cli = Cli::try_parse_from(
+            std::iter::once("rain")
+                .chain(calls[0].iter().map(String::as_str))
+                .chain(["--port", "1"]),
+        )
+        .unwrap();
+        let Some(Sub::Comment { cmd: CommentCmd::Add(a) }) = cli.command else {
+            panic!("not a comment add")
+        };
+        let reused = crate::client::add_imports(&a).unwrap();
+        let fresh = prepare_session(&o, &build_launch(&o), Session::default()).unwrap();
+        assert_eq!(reused[0].body().author, None);
+        assert_eq!(fresh.threads[0].messages[0].author, None, "both are the reviewer's question");
     }
 
     #[test]

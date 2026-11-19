@@ -22,15 +22,43 @@ pub(crate) fn route(ctx: &Ctx, r: &Req) -> Option<Reply> {
             content_type: TEXT,
             body: comments_output_with(&ctx.shared.lock(), repo, all),
         },
-        (Method::Post, "/api/comment-imports") => comment_imports(ctx, repo, r.body),
-        (Method::Post, "/api/comments") => post_comments(ctx, r.body),
-        (Method::Post, p) if p.starts_with("/api/comments/") && p.ends_with("/state") => {
-            let id = &p["/api/comments/".len()..p.len() - "/state".len()];
-            post_state(ctx, &percent_decode(id), r.body)
-        }
+        (Method::Post, "/api/comment-imports") => comment_imports(ctx, repo, r.body, r.trusted),
+        (Method::Post, "/api/comments") => post_comments(ctx, r.body, r.trusted),
+        (Method::Post, p) if state_id(p).is_some() => post_state(ctx, &percent_decode(state_id(p).unwrap_or_default()), r.body),
         (Method::Delete, p) if p.starts_with("/api/comments/") => resolve(ctx, &percent_decode(&p["/api/comments/".len()..])),
         _ => return None,
     })
+}
+
+/// The `:id` of `/api/comments/:id/state`; `/api/comments/state` has none.
+fn state_id(path: &str) -> Option<&str> {
+    path.strip_prefix("/api/comments/")?.strip_suffix("/state")
+}
+
+/// Thread id → its answer (`None` while one is pending), for the threads that have one.
+fn answers(s: &Session) -> HashMap<String, Option<rain_core::Answer>> {
+    s.threads
+        .iter()
+        .filter_map(|t| {
+            let a = t.answer.as_ref()?;
+            Some((t.id.clone(), (!a.status.pending()).then(|| a.clone())))
+        })
+        .collect()
+}
+
+/// A request without the window's token can't start its answerer: an answer it made pending
+/// (a new reviewer question, or a `queued` answer) goes back to what it was, or to none, and
+/// the thread waits for the user's Ask.
+fn hold_asks(s: &mut Session, before: &HashMap<String, Option<rain_core::Answer>>) {
+    for t in &mut s.threads {
+        if t.answer.as_ref().is_some_and(|a| a.status.pending()) {
+            match before.get(&t.id) {
+                Some(None) => {}
+                Some(Some(prev)) => t.answer = Some(prev.clone()),
+                None => t.answer = None,
+            }
+        }
+    }
 }
 
 /// Thread id → message count, to tell new threads and replies apart after an import.
@@ -83,7 +111,7 @@ struct ImportReply {
     warnings: Vec<String>,
 }
 
-fn comment_imports(ctx: &Ctx, repo: Option<&str>, body: &str) -> Reply {
+fn comment_imports(ctx: &Ctx, repo: Option<&str>, body: &str, trusted: bool) -> Reply {
     let imports = serde_json::from_str::<Value>(body)
         .map_err(|e| e.to_string())
         .and_then(import::from_value);
@@ -92,12 +120,16 @@ fn comment_imports(ctx: &Ctx, repo: Option<&str>, body: &str) -> Reply {
     };
     let mut s = ctx.shared.lock();
     let before = message_counts(&s);
+    let held = (!trusted).then(|| answers(&s));
     let repo = repo.unwrap_or("");
     let r = if ctx.shared.has_excerpt_source() {
         import::apply_with_excerpts(&mut s, imports, repo, &|r, p, a| ctx.shared.excerpt(r, p, a))
     } else {
         import::apply(&mut s, imports, repo)
     };
+    if let Some(held) = &held {
+        hold_asks(&mut s, held);
+    }
     let new: Vec<String> = s
         .threads
         .iter()
@@ -135,12 +167,21 @@ struct PostReply<'a> {
     merged: bool,
     version: u64,
     threads: &'a [Thread],
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    conflicts: Vec<String>,
 }
 
-fn post_comments(ctx: &Ctx, body: &str) -> Reply {
+fn post_comments(ctx: &Ctx, body: &str, trusted: bool) -> Reply {
     let Ok(v) = serde_json::from_str::<Value>(body) else {
         return error(400, "Invalid comment data");
     };
+    if let Some(bad) = v
+        .get("threads")
+        .and_then(Value::as_array)
+        .and_then(|ts| ts.iter().find_map(rain_core::comments::unknown_value))
+    {
+        return error(400, &format!("Invalid comment data: unknown value {bad}"));
+    }
     let threads = match v.get("threads") {
         Some(t) => match serde_json::from_value::<Vec<Thread>>(t.clone()) {
             Ok(t) => t,
@@ -155,7 +196,11 @@ fn post_comments(ctx: &Ctx, body: &str) -> Reply {
     let mut s = ctx.shared.lock();
     let before = s.comments_version;
     let counts = message_counts(&s);
-    let merged = import::post_threads(&mut s, threads, base);
+    let held = (!trusted).then(|| answers(&s));
+    let posted = import::post(&mut s, &threads, base);
+    if let Some(held) = &held {
+        hold_asks(&mut s, held);
+    }
     let changed = s.comments_version != before;
     let events = if changed { import_events(&counts, &s) } else { Vec::new() };
     let saved = if changed { ctx.save(&s) } else { None };
@@ -163,9 +208,10 @@ fn post_comments(ctx: &Ctx, body: &str) -> Reply {
         200,
         &PostReply {
             success: true,
-            merged,
+            merged: posted.merged,
             version: s.comments_version,
             threads: &s.threads,
+            conflicts: posted.conflicts,
         },
     );
     drop(s);

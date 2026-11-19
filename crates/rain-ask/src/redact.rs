@@ -3,11 +3,17 @@
 use globset::{GlobBuilder, GlobSetBuilder};
 
 /// Whether `path` (repo-relative or `<repo>/<path>`, either slash) matches one of `globs`,
-/// ignoring case. A glob that doesn't parse matches nothing.
+/// ignoring case. A glob matches at any depth, as its [`deny_reads`] rule does, so
+/// `config/prod.json` also withholds `server/config/prod.json`. A glob that doesn't parse
+/// matches nothing.
 pub fn matches(path: &str, globs: &[String]) -> bool {
     let mut b = GlobSetBuilder::new();
     for g in globs {
-        if let Ok(g) = GlobBuilder::new(g).case_insensitive(true).literal_separator(false).build() {
+        if let Ok(g) = GlobBuilder::new(&format!("**/{}", rest(g)))
+            .case_insensitive(true)
+            .literal_separator(false)
+            .build()
+        {
             b.add(g);
         }
     }
@@ -29,11 +35,14 @@ pub fn deny_reads(mut argv: Vec<String>, globs: &[String]) -> Vec<String> {
     }
     argv.push("--disallowedTools".into());
     for g in globs {
-        let g = g.replace('\\', "/");
-        let rest = g.trim_start_matches('/').trim_start_matches("**/");
-        argv.push(format!("Read(//**/{rest})"));
+        argv.push(format!("Read(//**/{})", rest(g)));
     }
     argv
+}
+
+/// The glob without a leading `/` or `**/`: the part both rules match at any depth.
+fn rest(glob: &str) -> String {
+    glob.replace('\\', "/").trim_start_matches('/').trim_start_matches("**/").to_owned()
 }
 
 #[cfg(test)]
@@ -76,5 +85,21 @@ mod tests {
         }
         assert!(!matches("a.env", &[]));
         assert!(!matches("a.env", &["[".into()]));
+    }
+
+    #[test]
+    fn a_repo_relative_glob_matches_under_a_repo_id_as_its_read_rule_does() {
+        let g = vec!["config/prod.json".to_owned(), r"\keys\*.txt".to_owned()];
+        for p in ["config/prod.json", "server/config/prod.json", r"server\keys\a.txt"] {
+            assert!(matches(p, &g), "{p}");
+        }
+        for p in ["server/config/prod.json.bak", "server/myconfig/prod.json"] {
+            assert!(!matches(p, &g), "{p}");
+        }
+        let argv = deny_reads(vec!["claude".into()], &g);
+        assert_eq!(
+            argv[2..],
+            ["Read(//**/config/prod.json)", "Read(//**/keys/*.txt)"].map(String::from)
+        );
     }
 }

@@ -25,7 +25,7 @@ Rain is a desktop diff reviewer. A flow hands it a diff plus comment drafts, the
 
 | Mode | Command | Does |
 |---|---|---|
-| open | `& <skill dir>/rain-story.ps1 -Mode open -Session <s> -Key <KEY> [-Root <folder>] [-Base origin/main] [-CommentsDir <dir>] [-Overview <abs path>]` | One window over every git repo directly under `-Root` (or `$env:RAIN_REPOS_ROOT`) whose checked-out branch contains the key. Diff = `HEAD` vs merge-base with `-Base`. Imports `<CommentsDir>/<repo-folder>.json` per repo. Prints `opened`/`reused`, the pid and the repo ids. Reopening reuses the window and adds only comments it doesn't already have. |
+| open | `& <skill dir>/rain-story.ps1 -Mode open -Session <s> -Key <KEY> [-Root <folder>] [-Base origin/main] [-CommentsDir <dir>] [-Overview <abs path>]` | One window over every git repo directly under `-Root` (or `$env:RAIN_REPOS_ROOT`) whose checked-out branch contains the key. Diff = `HEAD` vs merge-base with `-Base`. Imports `<CommentsDir>/<repo-folder>.json` per repo. Prints `opened`/`reused`, the pid and the repo ids. Reopening reuses the window and adds only comments it doesn't already have. `read-only` (with a warning) means a second open raced the first: that extra window refuses every change with 423; keep using `--session` (it reaches the holder) and close the extra one with `& $r close --port <its port>`. |
 | open (explicit) | `-Repos <path>,<path>` instead of `-Key` | Worktrees, review clones, repos on a branch without the key. |
 | open (uncommitted) | add `-Uncommitted` | Target `.` with untracked files. |
 | get | `-Mode get -Session <s> -OutDir <dir>` | Writes `<dir>/rain-comments.json`: every thread in **every** state, so you see what the user dropped. |
@@ -47,7 +47,7 @@ Tell the user the window is open once; there is no URL to hand over.
 - Open the account page and add a voucher of 0: it is refused with "Amount must be positive".
 - Add a voucher of 10: the account total rises by 10 after a reload.
 ```
-Write it to a file and run `& $r brief set '<abs path>.md' --session <s>` after `open`. A Brief also fills the Overview tab, so add `## Intent` (one paragraph) when you have one; leave out sections you have nothing real for. Ticks are not part of comment readback.
+Write it to a file and run `& $r brief set '<abs path>.md' --session <s>` after `open`. A Brief also fills the Overview tab, so add `## Intent` (one paragraph) when you have one; leave out sections you have nothing real for. Ticks are not part of comment readback. The user may reword, remove or add checks; a later `brief set` keeps their edits, and `& $r brief get --session <s>` → `verify.items[]` (`text`, `done`, `source`) is the list as they have it (docs §4.2).
 
 **Overview** (optional): write it per [`references/overview-guide.md`](references/overview-guide.md), validate with `& $r overview validate <abs path>` (exit 1 prints the issues), pass `-Overview`. It drives the Map, per-file risk and intent notes. Include its `diagrams` block (guide §7a: tour almost always; flowchart, lineage, icicle when the change calls for them) — that is what puts the animated diagrams on the Map; without it the Map shows only the graph views. Repo ids come from the overview's `repos[].dir` matching the folder name. Never read back.
 

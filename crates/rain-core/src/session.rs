@@ -210,6 +210,9 @@ pub struct Session {
     /// Verify by hand items the reviewer ticked, by their text.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub verified: Vec<String>,
+    /// The reviewer's edits to the Verify checklist and how its card was left.
+    #[serde(skip_serializing_if = "is_default")]
+    pub verify: crate::verify::VerifyList,
 }
 
 impl Session {

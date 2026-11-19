@@ -515,7 +515,90 @@ fn repo_less_threads_on_a_path_in_two_repos_are_left_alone() {
 }
 
 #[test]
-fn stale_post_merges_and_fresh_post_replaces() {
+fn deleting_the_answer_reopens_the_question_for_the_next_reply() {
+    use rain_core::AnswerStatus;
+    let mut s = Session::default();
+    let q = r#"{"type":"thread","filePath":"a.cs","position":{"side":"new","line":1},"body":"why?","kind":"question"}"#;
+    apply(&mut s, from_difit_json(q).unwrap(), "");
+    let id = s.threads[0].id.clone();
+    let first = ops::reply(&mut s, &id, "because", Some("claude")).unwrap();
+    assert_eq!(s.threads[0].answer.as_ref().unwrap().message_id.as_deref(), Some(first.as_str()));
+    assert!(ops::delete_message(&mut s, &id, &first));
+    let a = s.threads[0].answer.as_ref().unwrap();
+    assert_eq!(
+        (a.status, a.message_id.as_deref()),
+        (AnswerStatus::Cancelled, None),
+        "no dangling answer"
+    );
+    let second = ops::reply(&mut s, &id, "really because", Some("claude")).unwrap();
+    let a = s.threads[0].answer.as_ref().unwrap();
+    assert_eq!((a.status, a.message_id.as_deref()), (AnswerStatus::Answered, Some(second.as_str())));
+}
+
+#[test]
+fn a_moved_thread_still_dedupes_and_takes_replies_at_its_original_line() {
+    let mut s = Session::default();
+    let add = r#"{"type":"thread","filePath":"a.cs","position":{"side":"new","line":12},"body":"check this","author":"claude"}"#;
+    apply(&mut s, from_difit_json(add).unwrap(), "");
+    let t = &mut s.threads[0];
+    t.original = Some(t.anchor);
+    t.anchor = Anchor::Line { side: Side::New, line: 15 };
+    assert!(!apply(&mut s, from_difit_json(add).unwrap(), "").changed, "no duplicate at :12");
+    assert_eq!(s.threads.len(), 1);
+    let reply = r#"{"type":"reply","filePath":"a.cs","position":{"side":"new","line":12},"body":"more","author":"claude"}"#;
+    let r = apply(&mut s, from_difit_json(reply).unwrap(), "");
+    assert!(r.warnings.is_empty(), "{:?}", r.warnings);
+    assert_eq!(s.threads[0].messages.len(), 2);
+}
+
+#[test]
+fn a_current_post_of_the_open_readback_keeps_resolved_and_other_threads() {
+    let mut s = golden_session();
+    let gone = s.threads[0].id.clone();
+    assert!(ops::resolve(&mut s, &gone));
+    let read = comments_json(&s, None);
+    let mut mine: Vec<rain_core::Thread> = serde_json::from_value(read["threads"].clone()).unwrap();
+    assert_eq!(mine.len(), s.threads.len() - 1, "readback leaves the resolved thread out");
+    mine[0].kind = Some(rain_core::ThreadKind::Nit);
+    let edited = mine[0].id.clone();
+    let base = s.comments_version;
+    let r = import::post(&mut s, &mine, Some(base));
+    assert!(!r.merged && r.conflicts.is_empty());
+    assert_eq!(s.threads.len(), 3, "a thread the client didn't send is kept");
+    assert_eq!(ops::thread(&s, &gone).unwrap().state, rain_core::ThreadState::Resolved);
+    assert_eq!(ops::thread(&s, &edited).unwrap().kind, Some(rain_core::ThreadKind::Nit));
+}
+
+#[test]
+fn a_stale_post_applies_newer_state_and_reports_what_it_kept() {
+    let mut s = golden_session();
+    let base = s.comments_version;
+    let mut mine = s.threads.clone();
+    ops::reply(&mut s, &mine[1].id, "someone else", Some("claude"));
+    mine[0].state = rain_core::ThreadState::Addressed;
+    mine[0].blocking = Some(true);
+    mine[0].updated_at = "2999-01-01T00:00:00.000Z".into();
+    mine[1].kind = Some(rain_core::ThreadKind::Praise);
+    let r = import::post(&mut s, &mine, Some(base));
+    assert!(r.merged);
+    let t0 = ops::thread(&s, &mine[0].id).unwrap();
+    assert_eq!(
+        (t0.state, t0.blocking),
+        (rain_core::ThreadState::Addressed, Some(true)),
+        "a newer copy wins"
+    );
+    let t1 = ops::thread(&s, &mine[1].id).unwrap();
+    assert_eq!(t1.kind, None, "the stored copy is newer");
+    assert_eq!(t1.messages.len(), 2);
+    assert_eq!(
+        r.conflicts,
+        vec![mine[1].id.clone()],
+        "the kept value is reported, not dropped silently"
+    );
+}
+
+#[test]
+fn stale_post_merges_and_fresh_post_never_deletes() {
     let mut s = golden_session();
     let mut mine = s.threads.clone();
     mine[2].messages[0].body = "edited".into();
@@ -527,9 +610,10 @@ fn stale_post_merges_and_fresh_post_replaces() {
     assert!(post_threads(&mut s, mine.clone(), Some(base)), "stale base merges");
     assert_eq!(s.threads[2].messages.len(), 2, "the agent's reply survives the stale push");
     assert_eq!(s.threads[2].messages[0].body, "edited");
-    let v = s.version;
+    let v = s.comments_version;
+    let kept = s.threads.clone();
     assert!(!post_threads(&mut s, vec![], Some(v)));
-    assert!(s.threads.is_empty());
+    assert_eq!(s.threads, kept, "an empty post deletes nothing");
     assert_eq!(
         import::thread_key("a", &Anchor::Line { side: Side::Old, line: 3 }, "b"),
         "a|old|3|b"

@@ -43,30 +43,30 @@ pub fn test_stem(path: &str) -> Option<String> {
     let name = file_name(path);
     let e = ext(name);
     let stem = name.strip_suffix(&format!(".{e}")).unwrap_or(name);
-    for marker in [".spec", ".test", "_spec", "_test"] {
-        if let Some(s) = stem.strip_suffix(marker)
-            && !s.is_empty()
-        {
-            return Some(s.to_owned());
-        }
-    }
-    if e == "py"
-        && let Some(s) = stem.strip_prefix("test_")
-    {
-        return Some(s.to_owned());
-    }
-    if matches!(e, "cs" | "java" | "kt" | "scala" | "swift" | "php") {
-        for marker in ["Tests", "Test", "Spec"] {
-            if let Some(s) = stem.strip_suffix(marker)
-                && !s.is_empty()
-            {
-                return Some(s.to_owned());
-            }
-        }
-    }
     let in_test_dir = segments(path)
         .any(|s| matches!(s, "test" | "tests" | "__tests__" | "spec" | "specs" | "e2e") || s.ends_with(".Tests") || s.ends_with(".Test"));
-    in_test_dir.then(|| stem.to_owned())
+    let strip = |markers: &[&str]| {
+        markers
+            .iter()
+            .find_map(|m| stem.strip_suffix(m).filter(|s| !s.is_empty()))
+            .map(str::to_owned)
+    };
+    // Each suffix counts only where it names a test by convention (`openapi.spec.yaml`,
+    // `RetrySpec.kt` and `ab_test.py` outside a test folder are code).
+    let by_name = match e {
+        "ts" | "tsx" | "js" | "jsx" | "mjs" | "cjs" | "mts" | "cts" | "vue" => strip(&[".spec", ".test", ".cy"]),
+        "go" | "dart" | "c" | "cc" | "cpp" | "exs" => strip(&["_test"]),
+        "rb" => strip(&["_spec", "_test"]),
+        "py" => stem
+            .strip_prefix("test_")
+            .map(str::to_owned)
+            .or_else(|| if in_test_dir { strip(&["_test"]) } else { None }),
+        "cs" | "java" | "kt" | "scala" | "swift" | "php" => {
+            strip(&["Tests", "Test"]).or_else(|| if in_test_dir { strip(&["Spec"]) } else { None })
+        }
+        _ => None,
+    };
+    by_name.or_else(|| in_test_dir.then(|| stem.to_owned()))
 }
 
 /// The stem a subject file is paired by: its name without the last extension.
@@ -122,15 +122,17 @@ const MONEY_WORDS: [&str; 17] = [
 ];
 
 /// The first money/auth word in the path, split at case, digit and punctuation boundaries
-/// (`Voucher0Controller.cs` has `Voucher`; `Tooltip.ts` has none).
+/// (`Voucher0Controller.cs` has `Voucher`, `JWTTokenService.cs` has `Token`; `Tooltip.ts` has none).
 pub fn money_word(path: &str) -> Option<String> {
     let mut words = Vec::new();
     let mut cur = String::new();
     let mut prev: Option<char> = None;
-    for c in path.chars() {
+    let chars: Vec<char> = path.chars().collect();
+    for (i, &c) in chars.iter().enumerate() {
+        let next_lower = chars.get(i + 1).is_some_and(|n| n.is_lowercase());
         let boundary = match prev {
             _ if !c.is_alphabetic() => true,
-            Some(p) => c.is_uppercase() && p.is_lowercase() || !p.is_alphabetic(),
+            Some(p) => c.is_uppercase() && (p.is_lowercase() || p.is_uppercase() && next_lower) || !p.is_alphabetic(),
             None => false,
         };
         if boundary && !cur.is_empty() {
@@ -226,6 +228,30 @@ mod tests {
         }
         assert_eq!(subject_stem("src/voucher1.service.ts"), "voucher1.service");
         assert_eq!(subject_stem(".gitignore"), ".gitignore");
+    }
+
+    #[test]
+    fn test_suffixes_only_where_they_name_tests() {
+        for path in [
+            "api/openapi.spec.yaml",
+            "src/main/kotlin/RetrySpec.kt",
+            "app/ab_test.py",
+            "db/001_add_test.sql",
+        ] {
+            assert_eq!(test_stem(path), None, "{path}");
+        }
+        assert_eq!(test_stem("src/test/kotlin/RetrySpec.kt").as_deref(), Some("Retry"));
+        assert_eq!(test_stem("app/tests/ab_test.py").as_deref(), Some("ab"));
+        assert_eq!(test_stem("spec/models/user_spec.rb").as_deref(), Some("user"));
+        assert_eq!(test_stem("web/cypress/flows/login.cy.ts").as_deref(), Some("login"));
+    }
+
+    #[test]
+    fn acronyms_split_before_the_next_word() {
+        assert_eq!(money_word("src/JWTTokenService.cs").as_deref(), Some("Token"));
+        assert_eq!(money_word("src/HMACSecret.cs").as_deref(), Some("Secret"));
+        assert_eq!(money_word("src/OAuthController.cs").as_deref(), Some("Auth"));
+        assert_eq!(money_word("src/TokenizerUtil.cs"), None);
     }
 
     #[test]

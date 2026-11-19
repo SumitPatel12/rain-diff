@@ -123,7 +123,13 @@ fn a_users_question_import_asks_the_window_and_an_agents_does_not() {
         {"type": "thread", "filePath": "src/a.rs", "position": {"side": "new", "line": 2}, "body": "why?", "kind": "question"},
         {"type": "thread", "filePath": "src/a.rs", "position": {"side": "new", "line": 3}, "body": "agent asks", "kind": "question", "author": "claude"}
     ]);
-    t.send("POST", "/api/comment-imports", &q.to_string());
+    // With the window's token, as its CLI sends it: without one nothing is asked.
+    t.agent
+        .post(&format!("{}/api/comment-imports", t.server.url))
+        .header("Content-Type", "application/json")
+        .header(rain_server::TOKEN_HEADER, &t.server.token)
+        .send(q.to_string())
+        .unwrap();
     let v = t.get("/api/events?kinds=ask&since=0&timeout=1");
     let asks = v["events"].as_array().unwrap();
     assert_eq!(asks.len(), 1, "{v}");

@@ -15,7 +15,7 @@ use tiny_http::{Header, Method, Request, Response, Server};
 
 mod routes;
 
-pub use routes::lock::{Lock, lock_path, pid_alive, read_lock};
+pub use routes::lock::{Lock, lock_path, pid_alive, read_lock, token_for_port};
 pub use routes::overview::{overview_state, parse_links, set_overview};
 
 /// difit's default port; taken ports are skipped upwards.
@@ -42,14 +42,21 @@ pub struct ServerOptions {
     pub repo_folder: Option<String>,
 }
 
+/// The request header that carries [`ServerHandle::token`].
+pub const TOKEN_HEADER: &str = "X-Rain-Token";
+
 /// A running server; dropping it stops accepting requests and removes its lock file.
 pub struct ServerHandle {
     pub port: u16,
     pub url: String,
     /// `sessions/<id>.lock` while the server runs; `None` for an in-memory session.
     pub lock: Option<PathBuf>,
-    /// Another live window holds the session's lock, so this one serves it but never saves it.
+    /// Another live window holds the session's lock, so this one serves it but never saves it,
+    /// and its routes that change the session answer 423.
     pub read_only: bool,
+    /// This window's secret, in its handshake and lock file: only a request that sends it in
+    /// [`TOKEN_HEADER`] may queue a question for the window's answerer.
+    pub token: String,
     servers: Vec<Arc<Server>>,
 }
 
@@ -89,11 +96,12 @@ pub fn start(shared: Arc<Shared>, preferred: Option<u16>) -> io::Result<ServerHa
 
 pub fn start_with(shared: Arc<Shared>, opts: ServerOptions) -> io::Result<ServerHandle> {
     let (servers, port) = bind(opts.preferred)?;
+    let token = new_token();
     let mut lock = opts.session_file.as_deref().map(lock_path);
     let mut session_file = opts.session_file;
-    let mut read_only = false;
+    let mut read_only = None;
     if let Some(path) = &lock
-        && let Err(live) = routes::lock::acquire(path, port)
+        && let Err(live) = routes::lock::acquire(path, port, &token)
     {
         eprintln!(
             "Rain: another window (pid {}, port {}) holds {}; this one won't save the session",
@@ -101,9 +109,15 @@ pub fn start_with(shared: Arc<Shared>, opts: ServerOptions) -> io::Result<Server
             live.port,
             path.display()
         );
+        read_only = Some(format!(
+            "This window is read-only: another Rain window (pid {}, port {}) holds session {}. Send changes to port {}.",
+            live.pid,
+            live.port,
+            path.file_stem().unwrap_or_default().to_string_lossy(),
+            live.port
+        ));
         lock = None;
         session_file = None;
-        read_only = true;
     }
     let ctx = Arc::new(Ctx {
         port,
@@ -112,6 +126,8 @@ pub fn start_with(shared: Arc<Shared>, opts: ServerOptions) -> io::Result<Server
         repo_folder: opts.repo_folder,
         lock: lock.clone(),
         in_flight: AtomicUsize::new(0),
+        token: token.clone(),
+        read_only: read_only.clone(),
     });
     for server in &servers {
         let server = server.clone();
@@ -119,7 +135,13 @@ pub fn start_with(shared: Arc<Shared>, opts: ServerOptions) -> io::Result<Server
         std::thread::Builder::new().name(format!("rain-http-{port}")).spawn(move || {
             for req in server.incoming_requests() {
                 let Some(slot) = Slot::take(&ctx) else {
-                    respond(req, error(503, "Too many requests at once"));
+                    // Health stays answerable (served here, one at a time), so a busy window is
+                    // never taken for a dead one and its lock taken over.
+                    if *req.method() == Method::Get && req.url().split('?').next() == Some("/api/health") {
+                        handle(&ctx, req);
+                    } else {
+                        respond(req, error(503, "Too many requests at once"));
+                    }
                     continue;
                 };
                 let _ = std::thread::Builder::new()
@@ -132,9 +154,31 @@ pub fn start_with(shared: Arc<Shared>, opts: ServerOptions) -> io::Result<Server
         port,
         url: format!("http://localhost:{port}"),
         lock,
-        read_only,
+        read_only: read_only.is_some(),
+        token,
         servers,
     })
+}
+
+/// 128 unpredictable bits as hex: std seeds each `RandomState` from the OS's random source.
+fn new_token() -> String {
+    use std::hash::{BuildHasher, Hasher};
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos());
+    (0..2u8)
+        .map(|i| {
+            let mut h = std::collections::hash_map::RandomState::new().build_hasher();
+            h.write_u128(nanos);
+            h.write_u8(i);
+            format!("{:016x}", h.finish())
+        })
+        .collect()
+}
+
+/// Compares in time independent of where the first difference is.
+fn same_secret(a: &str, b: &str) -> bool {
+    a.len() == b.len() && a.bytes().zip(b.bytes()).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
 fn boxed(e: Box<dyn std::error::Error + Send + Sync>) -> io::Error {
@@ -302,6 +346,9 @@ pub(crate) struct Ctx {
     pub(crate) repo_folder: Option<String>,
     pub(crate) lock: Option<PathBuf>,
     in_flight: AtomicUsize,
+    token: String,
+    /// Why the session can't be changed here, when another window holds it.
+    pub(crate) read_only: Option<String>,
 }
 
 /// One of [`MAX_IN_FLIGHT`] request threads; given back on drop.
@@ -350,6 +397,8 @@ pub(crate) struct Req<'a> {
     pub(crate) body: &'a str,
     /// The body was sent as `text/markdown` (only `PUT /api/brief` takes it).
     pub(crate) markdown: bool,
+    /// The request carried this window's token.
+    pub(crate) trusted: bool,
 }
 
 impl Req<'_> {
@@ -433,6 +482,7 @@ fn handle(ctx: &Ctx, mut req: Request) {
     let (path, query) = url.split_once('?').unwrap_or((&url, ""));
     let query = parse_query(query);
     let markdown = markdown_brief(&req);
+    let trusted = header(&req, TOKEN_HEADER).is_some_and(|t| same_secret(t, &ctx.token));
     let body = match req.method() {
         Method::Post | Method::Put => match read_body(&mut req) {
             Ok(b) => Some(b),
@@ -448,6 +498,7 @@ fn handle(ctx: &Ctx, mut req: Request) {
             query: &query,
             body: body.as_deref().unwrap_or_default(),
             markdown,
+            trusted,
         },
     );
     respond(req, reply);

@@ -14,6 +14,7 @@ pub mod overview;
 pub mod paths;
 pub mod session;
 pub mod tags;
+pub mod verify;
 
 pub use brief::{BriefDoc, Cite};
 pub use command::Command;

@@ -508,15 +508,52 @@ fn an_unreadable_session_file_is_kept_aside_not_overwritten() {
 }
 
 #[test]
+fn a_second_unreadable_session_file_does_not_replace_the_first_backup() {
+    let dir = temp_dir();
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = rain_comments::SessionFile::path_in(&dir, "twice");
+    std::fs::write(file.with_extension("json.corrupt"), b"first").unwrap();
+    std::fs::write(&file, b"second").unwrap();
+    let launch = Launch {
+        session: "twice".into(),
+        fixture: Some(story()),
+        ..Launch::default()
+    };
+    let mut a = App::new(launch, Arc::new(Shared::default()), Some(dir.clone()), None);
+    a.load_now();
+    a.autosave.take();
+    assert_eq!(std::fs::read(file.with_extension("json.corrupt")).unwrap(), b"first");
+    let backups: Vec<Vec<u8>> = std::fs::read_dir(&dir)
+        .unwrap()
+        .filter_map(Result::ok)
+        .filter(|e| e.path().extension().is_some_and(|x| x == "corrupt"))
+        .map(|e| std::fs::read(e.path()).unwrap())
+        .collect();
+    assert!(backups.contains(&b"second".to_vec()), "the newer one is kept beside it");
+}
+
+#[test]
 fn a_broken_settings_file_is_reported_and_not_saved_over() {
     let dir = temp_dir();
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("settings.json");
     std::fs::write(&path, b"{\"editor\": \"rider\",}").unwrap();
-    let a = App::new(Launch::default(), Arc::new(Shared::default()), None, Some(path.clone()));
+    let mut a = App::new(Launch::default(), Arc::new(Shared::default()), None, Some(path.clone()));
     assert!(a.status.starts_with("settings ignored"), "{}", a.status);
     a.save_settings();
     assert_eq!(std::fs::read(&path).unwrap(), b"{\"editor\": \"rider\",}");
+}
+
+#[test]
+fn a_failed_settings_save_is_shown_in_the_status_line() {
+    let dir = temp_dir();
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("settings.json");
+    let mut a = App::new(Launch::default(), Arc::new(Shared::default()), None, Some(path.clone()));
+    std::fs::create_dir_all(&path).unwrap();
+    a.settings.theme = crate::settings::Theme::Dark;
+    a.save_settings();
+    assert!(a.status.starts_with("settings not saved"), "{}", a.status);
 }
 
 #[test]

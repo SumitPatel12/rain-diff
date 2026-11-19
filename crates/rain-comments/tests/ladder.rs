@@ -202,7 +202,21 @@ fn line_map_hunk_that_removes_the_line_reads_as_deleted() {
 }
 
 #[test]
-fn rewritten_block_is_orphaned_and_a_gone_file_reads_deleted() {
+fn a_file_deleted_in_the_diff_reads_deleted_and_one_that_left_it_does_not() {
+    let mut s = Session::default();
+    let gone = post(&mut s, &added("src/gone.rs", &["x"]), line(1), "on x");
+    let left = post(&mut s, &added("src/left.rs", &["y"]), line(1), "on y");
+    let mut b = FileDiffBuilder::new(0, "src/gone.rs", FileStatus::Deleted);
+    b.push_hunk(1, 1, 0, 0, "");
+    b.push_line(LineKind::Removed, 1, 0, "x");
+    ops::mark_outdated(&mut s, &set(vec![b.finish()]));
+    let reason = |id: &str| ops::thread(&s, id).unwrap().orphan.as_ref().unwrap().reason;
+    assert_eq!(reason(&gone), OrphanReason::FileDeleted);
+    assert_eq!(reason(&left), OrphanReason::LeftDiff, "a reverted file is not a deleted one");
+}
+
+#[test]
+fn rewritten_block_is_orphaned_and_a_gone_file_reads_left_the_diff() {
     let v1 = added("src/a.rs", &["a", "b", "c", "d", "e"]);
     let mut s = Session::default();
     let id = post(&mut s, &v1, line(3), "on c");
@@ -213,7 +227,7 @@ fn rewritten_block_is_orphaned_and_a_gone_file_reads_deleted() {
         OrphanReason::ContentRewritten
     );
     let g = ops::thread(&s, &gone).unwrap();
-    assert_eq!(g.orphan.as_ref().unwrap().reason, OrphanReason::FileDeleted);
+    assert_eq!(g.orphan.as_ref().unwrap().reason, OrphanReason::LeftDiff);
     assert_eq!(g.orphan.as_ref().unwrap().snapshot.content, "x");
     let v = s.comments_version;
     assert_eq!(
@@ -276,7 +290,7 @@ fn line_notes_take_a_snapshot_and_follow_their_code() {
     );
     assert_eq!((s.notes[0].anchor, s.notes[0].anchor_state), (Some(line(3)), AnchorState::Moved));
     ops::reanchor_notes(&mut s, &set(vec![]), no_rev);
-    assert_eq!(s.notes[0].orphan.as_ref().unwrap().reason, OrphanReason::FileDeleted);
+    assert_eq!(s.notes[0].orphan.as_ref().unwrap().reason, OrphanReason::LeftDiff);
     assert_eq!(s.comments_version, 0, "notes never touch the comments version");
 }
 
@@ -488,6 +502,33 @@ fn stale_brief_cites_are_reported() {
         "{stale:?}"
     );
     assert!(stale.iter().any(|c| c.section == "how.1" && c.reason == "file not in the diff"));
+}
+
+#[test]
+fn a_huge_cite_range_is_checked_without_walking_every_line() {
+    let diff = |lines: &str| {
+        let text = fixture("brief/sample.json").replace(r#""lines": [27, 31]"#, &format!(r#""lines": {lines}"#));
+        let doc: BriefDoc = serde_json::from_str(&text).unwrap();
+        let mut f = added("src/Services/VoucherService.cs", &["x"; 40]);
+        f.repo = 0;
+        let set = DiffSet {
+            repos: vec![RepoInfo {
+                id: "server".into(),
+                ..RepoInfo::default()
+            }],
+            files: vec![f],
+            ignore_whitespace: false,
+        };
+        ops::reanchor_brief(&doc, &set)
+            .into_iter()
+            .filter(|c| c.cite.path == "server/src/Services/VoucherService.cs")
+            .map(|c| c.reason)
+            .collect::<Vec<_>>()
+    };
+    let started = std::time::Instant::now();
+    assert_eq!(diff("[41, 4294967295]"), ["lines outside the diff"]);
+    assert!(diff("[40, 4294967295]").is_empty(), "line 40 is shown");
+    assert!(started.elapsed() < std::time::Duration::from_secs(5));
 }
 
 #[test]

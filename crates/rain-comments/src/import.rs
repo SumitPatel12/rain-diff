@@ -1,5 +1,7 @@
 //! difit's comment imports (`comment add`, `--comment`, `POST /api/comment-imports`) and the
-//! stale-version thread merge of `POST /api/comments`.
+//! thread upsert of `POST /api/comments`.
+
+use std::collections::HashMap;
 
 use rain_core::{Anchor, Answer, CodeSnapshot, CommentImport, ImportBody, Message, Session, Target, TargetKind, Thread, ThreadKind};
 use serde_json::Value;
@@ -134,6 +136,11 @@ fn same_position(a: &Anchor, b: &Anchor) -> bool {
     position_key(a) == position_key(b)
 }
 
+/// The thread sits at `path`/`anchor` now, or was posted there before its code moved.
+fn at_position(t: &Thread, path: &str, anchor: &Anchor) -> bool {
+    t.file_path == path && (same_position(&t.anchor, anchor) || t.original.as_ref().is_some_and(|o| same_position(o, anchor)))
+}
+
 fn author_of(a: Option<&str>) -> &str {
     a.map_or("", str::trim)
 }
@@ -227,8 +234,8 @@ fn apply_inner(s: &mut Session, imports: Vec<CommentImport>, repo: &str, excerpt
             let dup = s.threads.iter().any(|t| {
                 b.id.as_deref().is_some_and(|id| id == t.id)
                     || (t.repo == repo
-                        && thread_key(&t.file_path, &t.anchor, t.messages.first().map_or("", |m| m.body.as_str()))
-                            == thread_key(&b.file_path, &anchor, &b.body))
+                        && t.messages.first().map_or("", |m| m.body.as_str()) == b.body
+                        && at_position(t, &b.file_path, &anchor))
             });
             if dup {
                 continue;
@@ -287,7 +294,7 @@ fn apply_inner(s: &mut Session, imports: Vec<CommentImport>, repo: &str, excerpt
         let target = s
             .threads
             .iter_mut()
-            .filter(|t| t.repo == repo && t.file_path == b.file_path && same_position(&t.anchor, &anchor))
+            .filter(|t| t.repo == repo && at_position(t, &b.file_path, &anchor))
             .rev()
             .max_by(|x, y| x.updated_at.cmp(&y.updated_at));
         let Some(t) = target else {
@@ -340,16 +347,50 @@ fn threads_match(a: &Thread, b: &Thread) -> bool {
     }
 }
 
-/// difit's `mergeCommentThreads`: incoming threads join their match (newer message edits win,
-/// replies sorted by time after the first message) or are appended.
+/// difit's `mergeCommentThreads` for a stale base: see [`upsert_threads`].
 pub fn merge_threads(existing: &[Thread], incoming: &[Thread]) -> Vec<Thread> {
+    upsert_threads(existing, incoming, false).0
+}
+
+/// Incoming threads join their match (newer message edits win, replies sorted by time after the
+/// first message) or are appended; a stored thread the client didn't send is kept. The state,
+/// kind, blocking flag and disposition come from the client when it read the current version
+/// (`current`) or its copy is newer; otherwise a different value is left alone and the thread's
+/// id is returned as a conflict.
+pub fn upsert_threads(existing: &[Thread], incoming: &[Thread], current: bool) -> (Vec<Thread>, Vec<String>) {
     let mut out: Vec<Thread> = existing.to_vec();
+    let mut by_id: HashMap<String, usize> = out.iter().enumerate().map(|(i, t)| (t.id.clone(), i)).collect();
+    let mut conflicts = Vec::new();
     for inc in incoming {
-        let Some(i) = out.iter().position(|t| threads_match(t, inc)) else {
+        let found = by_id
+            .get(&inc.id)
+            .copied()
+            .or_else(|| out.iter().position(|t| threads_match(t, inc)));
+        let Some(i) = found else {
+            by_id.insert(inc.id.clone(), out.len());
             out.push(inc.clone());
             continue;
         };
         let cur = &mut out[i];
+        let newer = current || inc.updated_at > cur.updated_at;
+        if newer {
+            cur.state = inc.state;
+            cur.state_sha.clone_from(&inc.state_sha);
+            cur.state_at.clone_from(&inc.state_at);
+            cur.dismiss_reason = inc.dismiss_reason;
+            cur.kind = inc.kind;
+            cur.blocking = inc.blocking;
+            cur.disposition = inc.disposition;
+        } else {
+            if inc.disposition.is_some() {
+                cur.disposition = inc.disposition;
+            }
+            let differs = (cur.state, &cur.state_sha, cur.dismiss_reason, cur.kind, cur.blocking)
+                != (inc.state, &inc.state_sha, inc.dismiss_reason, inc.kind, inc.blocking);
+            if differs {
+                conflicts.push(cur.id.clone());
+            }
+        }
         let mut msgs = cur.messages.clone();
         for m in &inc.messages {
             match msgs.iter().position(|x| messages_match(x, m)) {
@@ -372,23 +413,40 @@ pub fn merge_threads(existing: &[Thread], incoming: &[Thread]) -> Vec<Thread> {
         if cur.code_snapshot.is_none() {
             cur.code_snapshot = inc.code_snapshot.clone();
         }
-        if inc.disposition.is_some() {
-            cur.disposition = inc.disposition;
+        if cur.target.is_none() {
+            cur.target = inc.target.clone();
+        }
+        if cur.answer.is_none() {
+            cur.answer = inc.answer.clone();
         }
         cur.messages = msgs;
     }
-    out
+    (out, conflicts)
 }
 
-/// `POST /api/comments`: replaces the threads, or merges them in when `base_version` is stale
-/// (another writer changed them since the client read `comments_version`). Returns whether it
-/// merged; bumps the versions only when the threads changed.
-pub fn post_threads(s: &mut Session, threads: Vec<Thread>, base_version: Option<u64>) -> bool {
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PostResult {
+    /// The client's base was stale.
+    pub merged: bool,
+    /// Threads whose posted state, kind or blocking flag differs from the stored copy, which is
+    /// newer and was kept.
+    pub conflicts: Vec<String>,
+}
+
+/// `POST /api/comments`: upserts the threads ([`upsert_threads`]); a thread the client didn't
+/// send is kept, since readback leaves out resolved threads and other repos'. Deleting is
+/// `DELETE /api/comments/:id`. Bumps the versions only when the threads changed.
+pub fn post(s: &mut Session, threads: &[Thread], base_version: Option<u64>) -> PostResult {
     let stale = base_version.is_some_and(|v| v != s.comments_version);
-    let next = if stale { merge_threads(&s.threads, &threads) } else { threads };
+    let (next, conflicts) = upsert_threads(&s.threads, threads, !stale);
     if next != s.threads {
         s.threads = next;
         s.bump_comments();
     }
-    stale
+    PostResult { merged: stale, conflicts }
+}
+
+/// [`post`]; whether the base was stale.
+pub fn post_threads(s: &mut Session, threads: Vec<Thread>, base_version: Option<u64>) -> bool {
+    post(s, &threads, base_version).merged
 }

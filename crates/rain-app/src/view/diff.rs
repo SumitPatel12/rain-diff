@@ -104,10 +104,10 @@ fn viewed_toggle(g: usize, on: bool, k: &Kit) -> El {
             .child(el().size(14.0, 14.0).radius(radius::KEY).border(1.5, k.c.text_muted).a11y_hidden())
             .child(text("Viewed").font(TYPE.small).color(k.c.text_base).a11y_hidden());
     }
-    k.interactive(b).press_scale(0.97).on_press(move |s: &mut App| {
+    k.interactive(b).press_scale(0.97).on_press_tx(move |s: &mut App, tx: &mut Tx| {
         if g < s.keys.len() {
             let on = !s.is_viewed(g);
-            s.set_viewed(g, on);
+            s.mark_viewed(g, on, tx);
         }
     })
 }

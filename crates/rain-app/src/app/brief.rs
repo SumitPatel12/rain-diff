@@ -42,8 +42,6 @@ pub struct BriefState {
     /// were when it was focused.
     pub focus: Option<String>,
     focus_at: Option<ReaderSpot>,
-    /// The floating Verify checklist folded to its pill.
-    pub verify_shut: bool,
     pub show_not_covered: bool,
     pub composer: Option<ArtifactDraft>,
     pub edit: TextEdit,

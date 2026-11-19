@@ -1471,7 +1471,16 @@ impl DiffState {
             Align::Center => h / 2.0,
         };
         let target = self.row_y(r as usize) - above;
-        let top = (0..=r as usize).rev().find(|&t| self.row_y(t) <= target).unwrap_or(0);
+        let mut top = (0..=r as usize).rev().find(|&t| self.row_y(t) <= target).unwrap_or(0);
+        // Snap to the nearer row start: a tall row (a collapsed file's header, a gap) would
+        // otherwise leave the range that much lower than asked.
+        let next = top + 1;
+        if next <= r as usize
+            && self.row_y(next) - target < target - self.row_y(top)
+            && self.row_y(r as usize) - self.row_y(next) >= self.m.header
+        {
+            top = next;
+        }
         self.reveal_at_top(top as u32, tx);
         self.visible = file;
         self.nav = Some(r);
@@ -1974,6 +1983,7 @@ impl DiffState {
                 continue;
             }
             let mut blocks = ix.blocks.iter().peekable();
+            let mut folded = false;
             for gap in 0..=file.hunks.len() {
                 let g = ix.gaps[gap];
                 let (top, bottom) = self.ui[f].revealed[gap];
@@ -1986,9 +1996,16 @@ impl DiffState {
                 (0..top).for_each(|k| rows.push(ctx(k)));
                 let hidden = g.len.map(|n| n.saturating_sub(top + bottom));
                 let first_row = rows.n as u32;
-                if hidden.is_some_and(|n| n > 0) {
+                // A tail of unknown length gets a row (to load the file) when no other row offers it.
+                let tail_unknown = hidden.is_none()
+                    && gap == file.hunks.len()
+                    && !file.binary
+                    && !folded
+                    && !matches!(file.status, FileStatus::Added | FileStatus::Deleted);
+                if hidden.is_some_and(|n| n > 0) || tail_unknown {
                     rows.push(Row::Gap { f: fu, gap: gap as u32 });
                     tall(&rows, m.gap);
+                    folded = true;
                 }
                 if let Some(n) = g.len {
                     (n - bottom.min(n)..n).for_each(|k| rows.push(ctx(k)));
@@ -2574,6 +2591,26 @@ mod tests {
         s.set_mode(DiffMode::Split);
         assert_eq!(shown(&s), ["file", "1|1", "2|2", "3|3", "-|4", "4|5"]);
         assert_eq!(s.key_of(s.rows[2]), key_b);
+    }
+
+    #[test]
+    fn a_tail_of_unknown_length_still_has_a_row_to_load_it() {
+        let top = "diff --git a/m b/m\n--- a/m\n+++ b/m\n@@ -1,2 +1,2 @@\n-a\n+b\n c\n";
+        let s = DiffState::new(parse(top));
+        assert_eq!(s.hidden(0, 1), None);
+        assert!(matches!(s.rows.last(), Some(Row::Gap { gap: 1, .. })), "{:?}", s.rows);
+
+        let mid = "diff --git a/m b/m\n--- a/m\n+++ b/m\n@@ -5,2 +5,2 @@\n-a\n+b\n c\n";
+        let s = DiffState::new(parse(mid));
+        let gaps: Vec<u32> = s
+            .rows
+            .iter()
+            .filter_map(|r| match r {
+                Row::Gap { gap, .. } => Some(*gap),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(gaps, [0], "the first gap's row already loads the file");
     }
 
     #[test]

@@ -104,7 +104,12 @@ fn body(s: &App, look: &Look) -> El {
                     TreeView::new(|s: &App| &s.tree, |s: &mut App| &mut s.tree)
                         .rows_only()
                         .on_open(|s: &mut App, key: &str, tx: &mut Tx| s.goto_key(key, tx))
-                        .on_viewed(|s: &mut App, key: &str, on, _: &mut Tx| s.persist_viewed_key(key, on))
+                        .on_viewed(|s: &mut App, key: &str, on, tx: &mut Tx| {
+                            s.persist_viewed_key(key, on);
+                            if let (true, Some(g)) = (on, s.index_of(key)) {
+                                s.top_next_open(g, tx);
+                            }
+                        })
                         .on_filter_change(|s: &mut App, f: &TreeFilter, tx: &mut Tx| s.on_filter_change(f, tx))
                         .build(s, k),
                 ),
@@ -244,6 +249,15 @@ fn header(s: &App, sec: u8, l: &Listing, k: &Kit) -> El {
         h = h.child(accept_button(g, l.acceptable[sec as usize], k));
     }
     if sec == CHANGES {
+        h = h.child(
+            Ghost::new("mark-all-viewed")
+                .icon(&icons::CHECK)
+                .help("Mark all files viewed")
+                .height(22.0)
+                .build(k)
+                .label("Mark all files viewed")
+                .on_press(|s: &mut App| s.mark_all_viewed()),
+        );
         h = h.child(
             Ghost::new("changes-mode")
                 .icon(&icons::TREE)
@@ -391,7 +405,7 @@ fn file_row(s: &App, g: usize, key: String, look: &RowLook) -> El {
             .center()
             .radius(radius::KEY)
             .cursor(Cursor::Pointer)
-            .on_press(move |s: &mut App| s.set_viewed(g, !viewed))
+            .on_press_tx(move |s: &mut App, tx: &mut Tx| s.mark_viewed(g, !viewed, tx))
             .child(mark),
     );
     let r = if current {

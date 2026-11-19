@@ -141,10 +141,53 @@ impl App {
         }
     }
 
-    pub fn toggle_viewed_current(&mut self) {
+    pub fn toggle_viewed_current(&mut self, tx: &mut Tx) {
         if let Some(cur) = self.current() {
             let on = !self.is_viewed(cur);
-            self.set_viewed(cur, on);
+            self.mark_viewed(cur, on, tx);
         }
+    }
+
+    /// Marks file `g` viewed or not; marking it brings the next open file after it to the top.
+    pub fn mark_viewed(&mut self, g: usize, on: bool, tx: &mut Tx) {
+        self.set_viewed(g, on);
+        if on {
+            self.top_next_open(g, tx);
+        }
+    }
+
+    /// Puts the first file after `g` in the reader that isn't folded at the top.
+    pub(crate) fn top_next_open(&mut self, g: usize, tx: &mut Tx) {
+        if self.single_mode() {
+            return;
+        }
+        let Some(l) = self.local(g) else { return };
+        let d = self.active();
+        let Some(next) = (l + 1..d.files().len()).find(|&n| !d.collapsed(n)) else {
+            return;
+        };
+        self.active_mut().scroll_to_file(next, tx);
+        let key = self.keys[self.global(next)].clone();
+        self.tree.reveal(&key, tx);
+    }
+
+    /// Marks every file the filter shows viewed, in one change.
+    pub fn mark_all_viewed(&mut self) {
+        let keys: Vec<String> = (0..self.keys.len())
+            .filter(|&g| !self.is_viewed(g) && self.tree.is_shown(&self.keys[g]))
+            .map(|g| self.keys[g].clone())
+            .collect();
+        if keys.is_empty() {
+            self.status = "Every file is already viewed".into();
+            return;
+        }
+        self.tree.set_viewed_many(keys.iter().map(|k| (k.as_str(), true)));
+        self.persist_viewed_keys(&keys);
+        for k in &keys {
+            if let Some(g) = self.index_of(k) {
+                self.fold_viewed(g, true);
+            }
+        }
+        self.status = format!("Marked {} file{} viewed", keys.len(), if keys.len() == 1 { "" } else { "s" });
     }
 }

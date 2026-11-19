@@ -81,6 +81,14 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
         .child(top)
         .child(islands(s, &look, cx))
         .child(status::status_bar(s, &look, &mut layer));
+    // Over the whole window, so it can be dragged anywhere; under the overlays.
+    if s.phase == Phase::Ready
+        && s.reader_tab() == crate::app::ReaderTab::Changes
+        && !s.layout.is_open(Overlay::Map)
+        && let Some(v) = verify::card(s, k)
+    {
+        root = root.child(v);
+    }
     if s.phase == Phase::Ready {
         for o in s.layout.overlays.clone() {
             if let Some(e) = overlay(s, o, &look) {
@@ -273,14 +281,7 @@ fn muted(t: impl Into<String>, k: &Kit) -> El {
 
 /// The reader: the tab strip, banners, then the Overview or the find bar, filter and diff.
 fn reader(s: &App, look: &Look, cx: &mut Cx<App>) -> El {
-    let mut pane = reader_pane(s, look, cx);
-    if s.phase == Phase::Ready
-        && s.reader_tab() == crate::app::ReaderTab::Changes
-        && !s.layout.is_open(Overlay::Map)
-        && let Some(v) = verify::card(s, &look.kit)
-    {
-        pane = pane.child(v.pin(Some(14.0), None, None, Some(14.0)));
-    }
+    let pane = reader_pane(s, look, cx);
     match conversation::toasts(s, &look.kit) {
         // With the tour open they stack above its card instead, in the tour's layer.
         _ if s.layout.is_open(Overlay::Tour) => pane,
@@ -307,7 +308,10 @@ fn reader_pane(s: &App, look: &Look, cx: &mut Cx<App>) -> El {
         .min_w(0.0)
         .min_h(0.0)
         .fill(look.s.reader)
-        .on_layout(|s: &mut App, r: [f32; 4]| s.set_diff_width(r[2]));
+        .on_layout(|s: &mut App, r: [f32; 4]| {
+            s.verify_card.set_reader(r);
+            s.set_diff_width(r[2]);
+        });
     match &s.phase {
         Phase::Loading(msg) => pane.child(state_box(weather::loader(s, msg, look))),
         Phase::Error(msg) => pane.child(state_box(

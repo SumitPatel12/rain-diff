@@ -316,11 +316,17 @@ fn the_right_click_menu_runs_what_the_keys_run_on_the_clicked_line() {
     let key = menu_item(&rt, "Toggle viewed");
     click(&mut rt, &key);
     assert_eq!(rt.state.is_viewed(0), !was, "what v does");
-    // Viewed folds the file to its header; unmark it so its lines are there to click again.
+    // Viewed folds the file and brings the next one up; unmark it and go back so its lines are
+    // there to click again.
     if rt.state.is_viewed(0) {
         assert!(rt.state.active().collapsed(0), "viewed folds the file");
-        rt.update(|s, _| s.set_viewed(0, false));
-        settle(&mut rt);
+        rt.update(|s, tx| {
+            s.set_viewed(0, false);
+            s.active_mut().scroll_to_file(0, tx);
+        });
+        for _ in 0..3 {
+            settle(&mut rt);
+        }
     }
 
     right_click(&mut rt, n);

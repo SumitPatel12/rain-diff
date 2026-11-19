@@ -129,40 +129,61 @@ pub(crate) fn editor_argv(template: &str, path: &str, line: u32) -> Vec<String> 
         .collect()
 }
 
-/// Starts `argv` detached, with no console window. On Windows the program is looked up on
-/// `PATH` with `PATHEXT` (so `code`, a `.cmd`, resolves) and started directly: std quotes the
-/// arguments for an `.exe` and escapes them for a batch file, `%` included. Only a program not
-/// found that way (a cmd built-in such as `start`) goes through `cmd /C`.
+/// An empty folder of Rain's own to start the editor and the ask command in, so nothing they
+/// look up in their current folder (cmd and npm shims do) comes from the repo under review.
+pub(crate) fn neutral_dir() -> PathBuf {
+    let d = rain_comments::store::data_dir().join("run");
+    if std::fs::create_dir_all(&d).is_ok() {
+        d
+    } else {
+        std::env::temp_dir()
+    }
+}
+
+/// Starts `argv` detached, with no console window, in [`neutral_dir`]. On Windows the program is
+/// looked up on `PATH` with `PATHEXT` (so `code`, a `.cmd`, resolves) and started directly: std
+/// quotes the arguments for an `.exe` and escapes them for a batch file, `%` included. Only cmd's
+/// own `start` goes through `cmd /C`; any other name not found on `PATH` is an error.
 pub(crate) fn spawn_detached(argv: &[String]) -> io::Result<()> {
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         let pathext = std::env::var("PATHEXT").unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".into());
-        if let Some(exe) = resolve(&argv[0], std::env::var_os("PATH").as_deref(), &pathext) {
-            return std::process::Command::new(exe)
-                .args(&argv[1..])
-                .creation_flags(CREATE_NO_WINDOW)
-                .spawn()
-                .map(drop);
-        }
-        // cmd expands %VAR% even inside quotes and has no escape for it on its command line.
-        if argv.iter().any(|a| a.contains(['%', '\n', '\r'])) {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!("{} is not on PATH, and cmd would expand the % in the path", argv[0]),
-            ));
-        }
-        let line = argv.iter().map(|a| cmd_quote(a)).collect::<Vec<_>>().join(" ");
-        std::process::Command::new("cmd")
-            .raw_arg(format!("/D /V:OFF /S /C \"{line}\""))
+        let mut cmd = match resolve(&argv[0], std::env::var_os("PATH").as_deref(), &pathext) {
+            Some(exe) => {
+                let mut c = std::process::Command::new(exe);
+                c.args(&argv[1..]);
+                c
+            }
+            None => {
+                if !argv[0].eq_ignore_ascii_case("start") {
+                    return Err(io::Error::new(io::ErrorKind::NotFound, format!("{} is not on PATH", argv[0])));
+                }
+                // cmd expands %VAR% even inside quotes and has no escape for it on its command line.
+                if argv.iter().any(|a| a.contains(['%', '\n', '\r'])) {
+                    return Err(io::Error::new(io::ErrorKind::InvalidInput, "cmd would expand the % in the path"));
+                }
+                let line = argv.iter().map(|a| cmd_quote(a)).collect::<Vec<_>>().join(" ");
+                let mut c = std::process::Command::new("cmd");
+                c.raw_arg(format!("/D /V:OFF /S /C \"{line}\""));
+                c
+            }
+        };
+        // cmd (in a `.cmd` editor shim, or for `start`) then never runs a program from its folder.
+        cmd.env("NoDefaultCurrentDirectoryInExePath", "1")
+            .current_dir(neutral_dir())
             .creation_flags(CREATE_NO_WINDOW)
             .spawn()
             .map(drop)
     }
     #[cfg(not(windows))]
     {
-        std::process::Command::new(&argv[0]).args(&argv[1..]).spawn().map(drop)
+        std::process::Command::new(&argv[0])
+            .args(&argv[1..])
+            .current_dir(neutral_dir())
+            .spawn()
+            .map(drop)
     }
 }
 
@@ -217,6 +238,14 @@ mod tests {
         );
         assert!(editor_argv("   ", "p", 1).is_empty());
         assert_eq!(editor_argv("ed {path}", r"C:\r\notes{line}.md", 4), ["ed", r"C:\r\notes{line}.md"]);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn an_editor_not_on_path_is_an_error_not_a_cmd_search_of_the_current_folder() {
+        let e = spawn_detached(&["rain-no-such-editor-xyz".into(), "a.cs".into()]).unwrap_err();
+        assert_eq!(e.kind(), io::ErrorKind::NotFound);
+        assert!(e.to_string().contains("not on PATH"), "{e}");
     }
 
     #[cfg(windows)]

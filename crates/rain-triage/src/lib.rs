@@ -266,8 +266,30 @@ fn decide(f: &FileDiff, key: &str, similarity: Option<u8>, input: &Input, is_tes
     if rules::lockfile(&f.path) {
         return grouped(Group::Lockfile, "lockfile");
     }
-    if let Some(why) = generated_reason(f) {
-        return grouped(Group::Generated, why);
+    let migration = rules::migration(&f.path);
+    let mut found: Vec<(RiskLevel, String)> = Vec::new();
+    if migration {
+        found.push((RiskLevel::High, "migration".into()));
+    }
+    let added = f
+        .lines
+        .iter()
+        .enumerate()
+        .filter(|(_, l)| l.kind == LineKind::Added)
+        .map(|(i, _)| f.line_text(i as u32));
+    if let Some(what) = rules::public_api(&f.path, added) {
+        found.push((RiskLevel::High, format!("public API ({what})")));
+    }
+    if let Some(word) = rules::money_word(&f.path) {
+        found.push((RiskLevel::High, format!("money path ({word})")));
+    }
+    // A risky file is not hidden on a header, a whitespace check or the overview's ignore list.
+    let risky = !found.is_empty();
+    let mut overridden: Option<String> = None;
+    match generated_reason(f) {
+        Some(why) if risky && why != "generated (path rule)" => overridden = Some(why.into()),
+        Some(why) => return grouped(Group::Generated, why),
+        None => {}
     }
     if f.lines.len() > HUGE_LINES {
         return grouped(Group::Huge, &format!("huge ({} diff lines)", f.lines.len()));
@@ -284,41 +306,37 @@ fn decide(f: &FileDiff, key: &str, similarity: Option<u8>, input: &Input, is_tes
         );
     }
     let w = analyse(f);
-    if input.formatting_only.is_some_and(|s| s.contains(key)) {
-        return grouped(Group::FormattingOnly, "formatting-only (-w empty)");
+    let formatting = if input.formatting_only.is_some_and(|s| s.contains(key)) && !ws::indent_sensitive(&f.path) {
+        Some("formatting-only (-w empty)")
+    } else if w.changed > 0 && w.real == 0 {
+        Some("formatting-only (whitespace)")
+    } else {
+        None
+    };
+    for (skip, group) in [
+        (formatting, Group::FormattingOnly),
+        (
+            input.ignored.is_some_and(|s| s.contains(key)).then_some("ignored (overview)"),
+            Group::Ignored,
+        ),
+    ] {
+        match skip {
+            Some(why) if risky => overridden = overridden.or(Some(why.into())),
+            Some(why) => return grouped(group, why),
+            None => {}
+        }
     }
-    if w.changed > 0 && w.real == 0 {
-        return grouped(Group::FormattingOnly, "formatting-only (whitespace)");
-    }
-    if input.ignored.is_some_and(|s| s.contains(key)) {
-        return grouped(Group::Ignored, "ignored (overview)");
-    }
-    if is_test {
+    if is_test && !migration {
         return grouped(Group::Tests, "test");
     }
 
-    let mut found: Vec<(RiskLevel, String)> = Vec::new();
-    if rules::migration(&f.path) {
-        found.push((RiskLevel::High, "migration".into()));
-    }
-    let added = f
-        .lines
-        .iter()
-        .enumerate()
-        .filter(|(_, l)| l.kind == LineKind::Added)
-        .map(|(i, _)| f.line_text(i as u32));
-    if let Some(what) = rules::public_api(&f.path, added) {
-        found.push((RiskLevel::High, format!("public API ({what})")));
-    }
-    if let Some(word) = rules::money_word(&f.path) {
-        found.push((RiskLevel::High, format!("money path ({word})")));
-    }
     if changes > CHURN_LINES {
         found.push((RiskLevel::Medium, format!("heuristic: churn ({changes} lines)")));
     }
     let real_line = (w.real == 1 && w.matched > 0).then_some(w.real_line).flatten();
     let moved_from = renamed.then(|| (sibling_key(key, f, f.old_path.as_deref().unwrap_or_default()), changes));
     let mut notes: Vec<String> = found.iter().skip(1).map(|(_, t)| t.clone()).collect();
+    notes.extend(overridden);
     if let Some(l) = real_line {
         notes.push(format!("formatting + real line (L{l})"));
     }
@@ -397,15 +415,20 @@ pub fn classify(input: &Input) -> Triage {
         let rated = input.rated.and_then(|r| r.get(key));
         let mut why = None;
         if let Some(r) = rated {
-            let agent = Group::from_risk(r.risk);
+            // The agent can raise a rule's risk, not lower it.
+            let floor = d.risk.filter(|_| d.group.is_change());
+            let risk = floor.max(r.risk);
+            let agent = Group::from_risk(risk);
             if d.group.is_change() || agent == Group::Must {
                 d.group = agent;
-                d.risk = r.risk;
-                let text = match r.risk {
-                    Some(risk) => format!("rated {} (overview)", format!("{risk:?}").to_ascii_lowercase()),
-                    None => "cited (overview)".to_owned(),
-                };
-                d.reason = reason(agent, false, text);
+                if floor.is_none() || r.risk > floor {
+                    d.risk = risk;
+                    let text = match r.risk {
+                        Some(risk) => format!("rated {} (overview)", format!("{risk:?}").to_ascii_lowercase()),
+                        None => "cited (overview)".to_owned(),
+                    };
+                    d.reason = reason(agent, false, text);
+                }
             }
             why = Some(r.why.clone()).filter(|w| !w.is_empty());
         }

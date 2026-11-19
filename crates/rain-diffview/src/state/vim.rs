@@ -219,14 +219,14 @@ impl DiffState {
         self.sync_visual();
     }
 
-    /// A click on row `r`'s code on `side`, `col` display columns in: the cursor goes there and,
-    /// as in any editor, a selection (visual, Shift or lines) is dropped.
-    pub(crate) fn click_code(&mut self, r: u32, side: Side, col: u32, tx: &mut Tx) {
+    /// A click on row `r`'s code on `side`, on the grapheme holding `byte`: the cursor goes there
+    /// and, as in any editor, a selection (visual, Shift or lines) is dropped.
+    pub(crate) fn click_code(&mut self, r: u32, side: Side, byte: usize, tx: &mut Tx) {
         self.end_visual();
         self.caret_visual = false;
         self.selection = None;
         self.span = None;
-        let byte = self.row_text(r, side).map_or(0, |t| Want::Col(col).byte_in(t));
+        let byte = self.row_text(r, side).map_or(0, |t| motion::snap(t, byte));
         self.land(r, side, byte, false, tx);
         self.want = Want::Here;
     }

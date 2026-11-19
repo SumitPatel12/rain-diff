@@ -33,7 +33,7 @@ Repeat 5–8 until `review get` shows a round with the verdict you need.
 | `<target>` / `<base>` | a commit-ish, or `.` (all uncommitted), `working` (unstaged), `staged`; base defaults to the target's parent (`HEAD` for `.`/`staged`) |
 | `--merge-base` | diff against `git merge-base <target> <base>` |
 | `--repo <dir>` | a repository to show; repeat for one window over several repos (default: the current folder) |
-| `--session <id>` | session name (default `<repo folder>-<branch or target>`); threads, viewed state and the reading place persist in `%LOCALAPPDATA%\Rain\sessions\<id>.json` |
+| `--session <id>` | session name; threads, viewed state and the reading place persist in `%LOCALAPPDATA%\Rain\sessions\<id>.json`. Default `<repo folder>-<branch or target>`, then `-uncommitted`/`-working`/`-staged` for those targets, then `-<8 hex>` when the base, `--merge-base`, `--include-untracked` or extra `--repo`s differ from a plain `rain open <target>`, so a different diff never reuses a window. Pass `--session` to choose the name yourself (it is used as given) |
 | `--last` | reopen the most recently saved session as it was opened |
 | `--background` | start detached, print the handshake and exit |
 | `--port <n>` | preferred port (the next free one is used when taken) |
@@ -48,7 +48,11 @@ Repeat 5–8 until `review get` shows a round with the verdict you need.
 | `--keep-alive`, `--no-open` | accepted for difit compatibility; no effect |
 
 - **Handshake.** `rain … --background` prints one line and exits:
-  `{"port":4966,"url":"http://localhost:4966","pid":12345}`.
+  `{"port":4966,"url":"http://localhost:4966","pid":12345,"token":"<32 hex>"}`. `token` is the
+  window's secret (also in its lock file, readable only by you; see §2). `"readOnly":true` is added
+  when another window already holds the session (two opens raced): that window serves the session
+  but refuses every change with **423** and a message naming the window that holds it, and the CLI
+  warns on stderr. Use `--session <id>` (which finds the holder through the lock), not that port.
 - **By session.** Every client subcommand takes `--session <id>` instead of `--port <port>`: the
   port comes from the lock file `%LOCALAPPDATA%\Rain\sessions\<id>.lock`
   (`{"port","pid","startedAt"}`, written while the window runs, removed when it closes). Both given:
@@ -57,9 +61,9 @@ Repeat 5–8 until `review get` shows a round with the verdict you need.
   a lock whose window is gone prints `… is not running (stale lock …)`; exit 1 either way.
 - **Reuse.** Opening a session whose window is already running starts nothing: it prints that
   window's handshake with `"reused":true`
-  (`{"port":4966,"url":"http://localhost:4966","pid":12345,"reused":true}`), after handing it the
-  call's `--comment` imports, `--overview` and `--goto`. `--clean` is ignored then (with a warning).
-  Two windows never write one session file.
+  (`{"port":4966,"url":"http://localhost:4966","pid":12345,"reused":true,"token":"…"}`), after handing it the
+  call's `--comment` imports (author-less, the reviewer's, as on a fresh open), `--overview` and
+  `--goto`. `--clean` is ignored then (with a warning). Two windows never write one session file.
 - **Reopen the last one.** `rain open --last [--background]`: the most recently saved session,
   opened with the repos, revisions and diff flags it was last opened with (kept in
   `%LOCALAPPDATA%\Rain\launches\<id>.json`); `--port`, `--goto`, `--comment` given with it still
@@ -86,6 +90,13 @@ Repeat 5–8 until `review get` shows a round with the verdict you need.
 - **`@file`.** Arguments that take `JSON|@FILE` or `TEXT|@FILE` read the file when the value starts
   with `@`. PowerShell treats a bare `@name` as splatting, so quote it: `--body '@C:\tmp\note.md'`.
   Leave the value out to read stdin.
+- **Token.** Send the window's token as `X-Rain-Token: <token>` on writes (the CLI finds it in the
+  lock file by port or session and sends it itself). Without it every route still works, except
+  that a new reviewer question (or an `answer` set to `queued`) does not start the window's
+  answerer: the thread is kept and waits for the user's Ask. Reads need no token.
+- **Read-only window** (`"readOnly":true` in the handshake): every route that changes the session
+  answers **423** `This window is read-only: another Rain window (pid N, port P) holds session <id>…`;
+  reads, `reload`, `close`, `presence`, `goto` and `highlight` still work.
 - **CLI errors** print `Error: <text>` on stderr and exit 1; connection failures print
   `Error: Cannot connect to Rain server on port <port>. Is the server running?`.
 
@@ -132,7 +143,8 @@ The document (`rain-brief/v1`; ids are yours and must stay stable between versio
 to the diff. `PUT` → `{"success":true,"version":2,"stale":false,"threadsMoved":0}`; 400
 `Invalid brief: …` (not an object, or another `format`). `GET` →
 `{"brief","version","stale","check":{"phantomPaths":[],"citesOutsideDiff":[{"section","path","lines"}],
-"filesNotCited":[],"stale":[{"repo","written","loaded"}]}}`. `check` text lines:
+"filesNotCited":[],"stale":[{"repo","written","loaded"}]},"verify":{"items":[{"text","done","source"}],
+"removed":[]}}` (`verify`: §4.2). `check` text lines:
 `phantom path: <path> (not in the diff)`, `cite outside the diff: <section> cites <path>:<a>-<b>`,
 `not cited: <key>`, `stale: <repo> written against <sha>, loaded <sha>`, or
 `brief check: nothing to fix`. Generated, formatting-only and `notCovered` files are never
@@ -193,6 +205,22 @@ app/src/assets/i18n/*.json
   case-insensitive; each appears once; text goes under a `##` section; How text sits under `###`
   steps; Invariants and Tour are list items; a tour step needs a bold title and a path.
 
+### 4.2 The Verify checklist and the reviewer's edits
+
+Verify's list items (or, without a list, its paragraphs) become a checklist floating over the diff.
+The reviewer ticks items, rewords or removes any of them, including yours, and adds their own; all of
+it is saved in the session apart from the Brief, so it survives a reload, `rain reload` and a new
+`brief set`. After a new Brief the list is: your new items in order, each replaced by the reviewer's
+rewording of it (matched by its exact old text) and minus the ones they removed; then rewordings of
+items your new Brief no longer has (an edit is never dropped); then the reviewer's own items. An item
+you drop that the reviewer never touched goes away; one they removed stays removed if you send it
+again. A tick follows its item through a rewording.
+
+Read the list as the reviewer has it from `rain brief get` (`GET /api/brief`) → `verify`:
+`items[]` in screen order, each `{"text","done","source"}` with `source` `brief` (yours, untouched),
+`edited` (yours, reworded by the reviewer) or `added` (theirs); `removed[]` is the text of your items
+they removed. Rain never writes the edits back into the Brief.
+
 ## 5. Comments (threads)
 
 Threads are the review conversation; the user reads and answers them in the window. Notes (§7)
@@ -217,7 +245,8 @@ never come back through comment readback.
 - Flag form (one thread): `--body` with `--file` + `--line`/`--lines` [`--side`], or `--file
   --file-level`, or `--pr-level`.
 - `--author` (default `claude`) fills every thread or reply that names none, in both forms. An
-  empty author means the reviewer: a reviewer's `kind: question` starts the window's answerer.
+  empty author (`--author=`) means the reviewer: a reviewer's `kind: question` starts the window's
+  answerer (over HTTP only with the window's token, §2).
 - HTTP: `POST /api/comment-imports[?repo=server]` →
   `{"success":true,"changed":true,"count":1,"importId":"<sha256>","warnings":[]}` (the CLI prints
   `{"success","importId","count","warnings"}`). The same file, side, line and body twice is not added
@@ -251,7 +280,8 @@ the prompt text. Without `all` only **open** threads are listed. Round-3 fields 
 only when set): `kind`, `blocking`, `state` (`open|addressed|resolved|dismissed`), `stateSha`,
 `stateAt`, `dismissReason`, `anchorState` (`placed|moved|outdated|orphaned`), `anchorHow`
 (`exact|fuzzy|renamed|section-id|node-id|label`), `orphan` (`{"reason","lastSeenSha","snapshot","at"}`;
-reasons `line-deleted|file-deleted|file-renamed|content-rewritten|section-removed|node-removed|note-removed|ambiguous`),
+reasons `line-deleted|file-deleted|file-renamed|content-rewritten|section-removed|node-removed|note-removed|ambiguous|left-diff`;
+`left-diff`: the file is no longer in the diff, e.g. its change was reverted),
 `codeSnapshot` (the code it was written against, never replaced), `target`, `answer`
 (`{"status":"queued|answering|answered|failed|timeout|cancelled","by":"attached|launcher","startedAt","endedAt","error","messageId"}`).
 In text, such a thread reads (after its location line):
@@ -366,12 +396,15 @@ stdin: a fixed preamble, the session title and shas, the Brief's intent and the 
 touching the file, the anchored excerpt (withheld for `ask.redact` paths), the thread so far and
 the question. Its stdout becomes a reply by `claude` with `answer.by = "launcher"`; a non-zero exit
 or empty output marks it `failed` (stderr head on the card, `Retry`), `ask.timeoutSec` (120)
-`timeout`. It runs with `RAIN_PORT`, `RAIN_SESSION`, `RAIN_THREAD` set, so `rain comment get` and
-`rain goto` work from inside it without flags. Nothing leaves the machine unless that command sends
+`timeout`. It runs in Rain's own empty folder (`%LOCALAPPDATA%\Rain\run`), never the repo, so a
+program planted in the repo can't be picked up (`{repos}` gives it the repos; `--add-dir={repos}`
+inside a longer word repeats it once per repo). It runs with `RAIN_PORT`, `RAIN_SESSION`,
+`RAIN_THREAD` set, so `rain comment get` and `rain goto` work from inside it without flags. Nothing leaves the machine unless that command sends
 it; the default `claude -p` sends the prompt to the user's Claude account, so the launcher waits
 until the user allows it once (the toast's `Allow`, or `Ask: allow` in the palette; stored as
 `ask.allowed`). A `claude` command also gets `--disallowedTools "Read(//**/<glob>)"` for each
-`ask.redact` glob, so it cannot open those files itself. A second answer to the same question appends as another reply. `watch --for agent --kinds ask`
+`ask.redact` glob, so it cannot open those files itself; a glob matches at any depth for both
+(`config/prod.json` also withholds `server/config/prod.json`). A second answer to the same question appends as another reply. `watch --for agent --kinds ask`
 still delivers asks a launcher took; skip a thread whose `answer.by` is `launcher` and whose status
 is not `failed`.
 
@@ -497,9 +530,12 @@ what they have viewed (hunk-level).
   the diff loads.
 - Node kinds: `service`, `app`, `module`, `function`, `route`, `job`, `queue`, `datastore`, `cache`, `external`, `ui`, `config`, `test`, `package`, `other`.
 - Edge kinds: `call`, `http`, `rpc`, `event`, `queue`, `data`, `dependency`, `render`, `other`.
-- `POST /api/comments` (`{"threads":[…],"baseVersion"}`) replaces all threads, merging when
-  `baseVersion` is stale — difit's editor route; agents should prefer the imports above. A body
-  without `threads` is refused (400), so it can't wipe the threads.
+- `POST /api/comments` (`{"threads":[…],"baseVersion"}`) upserts threads by id and never deletes
+  one it wasn't sent (readback leaves out resolved threads and, with `?repo=`, other repos'); use
+  `DELETE /api/comments/:id` to remove. With a current `baseVersion` the posted state, kind and
+  blocking win; with a stale one they win only when the thread's `updatedAt` is newer, and the ids
+  whose stored values were kept come back in `conflicts`. difit's editor route; agents should
+  prefer the imports above. A body without `threads` is refused (400).
 - `rain version` prints the version.
 
 Versions (counters that only go up): `version` in `health` and the round-2 `events` = the session;

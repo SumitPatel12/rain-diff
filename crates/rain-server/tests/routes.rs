@@ -156,7 +156,8 @@ fn requests_past_the_in_flight_cap_get_a_503_until_a_slot_frees() {
     let deadline = Instant::now() + Duration::from_secs(6);
     let mut refused = false;
     while !refused && Instant::now() < deadline {
-        refused = t.get("/api/health").0 == 503;
+        // Not health: it is answered past the cap, so a busy window never reads as dead.
+        refused = t.get("/api/comments-json").0 == 503;
     }
     assert!(refused, "the cap refuses the request past it");
     assert!(polls.into_iter().all(|p| p.join().unwrap() == 200));
@@ -257,11 +258,25 @@ fn post_comments_merges_on_a_stale_base_version() {
     let fresh = json!({ "threads": mine, "baseVersion": version }).to_string();
     let (_, r) = t.send("POST", "/api/comments", &fresh);
     assert_eq!(r["merged"], false);
-    assert_eq!(r["threads"].as_array().unwrap().len(), 2, "a current base replaces");
-    assert_eq!(r["version"], 3);
+    assert_eq!(
+        r["threads"].as_array().unwrap().len(),
+        4,
+        "a current base upserts; threads it left out are kept"
+    );
+    assert_eq!(r["version"], 2, "nothing changed");
 
     let (status, _) = t.send("POST", "/api/comments", r#"{"threads":[{"bad":1}]}"#);
     assert_eq!(status, 400);
+
+    let mut typo = mine[0].clone();
+    typo["state"] = json!("resolvd");
+    let (status, r) = t.send(
+        "POST",
+        "/api/comments",
+        &json!({ "threads": [typo], "baseVersion": version }).to_string(),
+    );
+    assert_eq!(status, 400, "a misspelled state is refused, not quietly reopened: {r}");
+    assert!(r.to_string().contains("resolvd"));
 }
 
 #[test]
@@ -288,7 +303,30 @@ fn a_viewed_mark_does_not_make_a_post_stale() {
     let body = json!({ "threads": one, "baseVersion": now["version"] }).to_string();
     let (_, r) = t.send("POST", "/api/comments", &body);
     assert_eq!(r["merged"], false, "only thread changes count against baseVersion");
-    assert_eq!(r["threads"].as_array().unwrap().len(), 1, "a deleted thread stays deleted");
+    assert_eq!(r["threads"].as_array().unwrap().len(), 3, "a thread left out is kept");
+}
+
+#[test]
+fn a_repo_scoped_round_trip_keeps_resolved_and_other_repos_threads() {
+    let t = serve(ServerOptions::default());
+    for (repo, line) in [("server", 1), ("server", 2), ("app", 3)] {
+        let one = format!(r#"{{"type":"thread","filePath":"a.cs","position":{{"side":"new","line":{line}}},"body":"b{line}"}}"#);
+        t.send("POST", &format!("/api/comment-imports?repo={repo}"), &one);
+    }
+    let first = t.shared.lock().threads[0].id.clone();
+    t.send("DELETE", &format!("/api/comments/{first}"), "");
+    let (_, now) = t.get("/api/comments-json?repo=server");
+    let now: Value = serde_json::from_str(&now).unwrap();
+    assert_eq!(now["threads"].as_array().unwrap().len(), 1);
+    let body = json!({ "threads": now["threads"], "baseVersion": now["version"] }).to_string();
+    let (status, r) = t.send("POST", "/api/comments", &body);
+    assert_eq!(status, 200);
+    assert_eq!(
+        r["threads"].as_array().unwrap().len(),
+        3,
+        "the resolved thread and the app thread survive"
+    );
+    assert!(r.get("conflicts").is_none());
 }
 
 #[test]

@@ -17,6 +17,7 @@ pub enum Command {
     ViewedAndNext,
     ToggleViewed,
     MarkGroupViewed,
+    MarkAllViewed,
     UndoAccept,
     ToggleSplit,
     LayoutAuto,
@@ -69,7 +70,7 @@ pub enum Command {
 }
 
 impl Command {
-    pub const ALL: [Command; 55] = [
+    pub const ALL: [Command; 56] = [
         Command::CursorDown,
         Command::CursorUp,
         Command::NextHunk,
@@ -84,6 +85,7 @@ impl Command {
         Command::ViewedAndNext,
         Command::ToggleViewed,
         Command::MarkGroupViewed,
+        Command::MarkAllViewed,
         Command::UndoAccept,
         Command::ToggleSplit,
         Command::LayoutAuto,
@@ -128,7 +130,8 @@ impl Command {
     ];
 
     /// No key in any profile until the user binds one.
-    pub const PALETTE_ONLY: [Command; 6] = [
+    pub const PALETTE_ONLY: [Command; 7] = [
+        Command::MarkAllViewed,
         Command::LayoutAuto,
         Command::CopyAll,
         Command::ToggleTheme,
@@ -166,6 +169,7 @@ impl Command {
             Command::ViewedAndNext => "Mark viewed and go to next",
             Command::ToggleViewed => "Toggle viewed",
             Command::MarkGroupViewed => "Accept this group",
+            Command::MarkAllViewed => "Mark all files viewed",
             Command::UndoAccept => "Undo the last delete or accept",
             Command::ToggleSplit => "Split / unified",
             Command::LayoutAuto => "Layout: auto",
@@ -243,6 +247,7 @@ impl Command {
             Command::ViewedAndNext => "viewed-and-next",
             Command::ToggleViewed => "toggle-viewed",
             Command::MarkGroupViewed => "accept-group",
+            Command::MarkAllViewed => "mark-all-viewed",
             Command::UndoAccept => "undo",
             Command::ToggleSplit => "toggle-split",
             Command::LayoutAuto => "layout-auto",

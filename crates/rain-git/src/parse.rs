@@ -260,6 +260,8 @@ impl Parser {
 
 fn header_line(c: &mut Cur, l: &str) {
     let word = |p: &str| l.strip_prefix(p).map(str::trim);
+    // Paths verbatim: a file name may end in a space.
+    let path = |p: &str| l.strip_prefix(p);
     let gitlink = |m: &str| m == "160000";
     if let Some(m) = word("old mode ") {
         c.unavailable |= gitlink(m);
@@ -277,16 +279,16 @@ fn header_line(c: &mut Cur, l: &str) {
         c.meta.old_mode = Some(m.to_owned());
         c.status = Some(FileStatus::Deleted);
         c.new_path = None;
-    } else if let Some(p) = word("rename from ") {
+    } else if let Some(p) = path("rename from ") {
         c.old_path = Some(unquote(p));
         c.status = Some(FileStatus::Renamed);
-    } else if let Some(p) = word("rename to ") {
+    } else if let Some(p) = path("rename to ") {
         c.new_path = Some(unquote(p));
         c.status = Some(FileStatus::Renamed);
-    } else if let Some(p) = word("copy from ") {
+    } else if let Some(p) = path("copy from ") {
         c.old_path = Some(unquote(p));
         c.status = Some(FileStatus::Copied);
-    } else if let Some(p) = word("copy to ") {
+    } else if let Some(p) = path("copy to ") {
         c.new_path = Some(unquote(p));
         c.status = Some(FileStatus::Copied);
     } else if let Some(s) = word("similarity index ") {
@@ -397,10 +399,14 @@ fn strip_prefix(p: &str) -> String {
     }
 }
 
-/// The path of a `---` or `+++` line: `None` for `/dev/null`, without a trailing timestamp.
+/// The path of a `---` or `+++` line: `None` for `/dev/null`, without a trailing timestamp. git
+/// ends the name with a tab when it holds a space, so a name ending in a space keeps it.
 fn path_of(s: &str) -> Option<String> {
-    let s = if s.starts_with('"') { s } else { s.split('\t').next().unwrap_or(s) };
-    let s = s.trim_end();
+    let s = match s.split_once('\t') {
+        _ if s.starts_with('"') => s.trim_end(),
+        Some((name, _)) => name,
+        None => s.trim_end(),
+    };
     if s == "/dev/null" {
         return None;
     }
@@ -441,6 +447,20 @@ mod tests {
             (Some("sp aceé".into()), Some("sp aceé".into()))
         );
         assert_eq!(git_paths("a/x \"b/\\303\\251\""), (Some("x".into()), Some("é".into())));
+    }
+
+    #[test]
+    fn a_name_ending_in_a_space_keeps_it() {
+        // git ends a ---/+++ name holding a space with a tab.
+        let p = parse_str(
+            "diff --git a/foo  b/foo \nindex 1..2 100644\n--- a/foo \t\n+++ b/foo \t\n@@ -1 +1 @@\n-a\n+b\n\
+             diff --git a/x  b/y \nsimilarity index 90%\nrename from x \nrename to y \n",
+            0,
+        );
+        let paths: Vec<(&str, Option<&str>)> = p.files.iter().map(|f| (f.path.as_str(), f.old_path.as_deref())).collect();
+        assert_eq!(paths, [("foo ", None), ("y ", Some("x "))]);
+        assert_eq!(path_of("b/plain.cs\t2026-01-01 00:00"), Some("plain.cs".into()));
+        assert_eq!(path_of("b/plain.cs  "), Some("plain.cs".into()), "no tab: no space in the name");
     }
 
     #[test]

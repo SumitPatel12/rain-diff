@@ -527,7 +527,9 @@ impl App {
         };
         let req = Request {
             argv: rain_ask::redact::deny_reads(runner::argv(&template, &subs), &self.settings.ask.redact),
-            cwd: self.repos.first().map(|r| r.dir.clone()).filter(|d| d.is_dir()),
+            // Not the repo: a `.cmd` shim would find a planted `node.cmd` there. `--add-dir`
+            // gives the command the repos.
+            cwd: Some(super::editor::neutral_dir()),
             env,
             stdin: prompt,
             timeout: Duration::from_secs(self.settings.ask.timeout_sec.max(1)),

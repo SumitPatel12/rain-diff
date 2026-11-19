@@ -42,19 +42,34 @@ pub fn argv(template: &str, subs: &Subs) -> Vec<String> {
     if any || !cur.is_empty() {
         words.push(cur);
     }
-    let port = subs.port.map(|p| p.to_string()).unwrap_or_default();
     let mut out = Vec::new();
     for w in words {
-        if w == "{repos}" {
-            out.extend(subs.repos.iter().cloned());
-            continue;
+        if w.contains("{repos}") {
+            // One argument per repo (`--add-dir={repos}` too), never one joined path.
+            out.extend(subs.repos.iter().map(|r| fill(&w, subs, r)));
+        } else {
+            out.push(fill(&w, subs, ""));
         }
-        out.push(
-            w.replace("{repos}", &subs.repos.join(" "))
-                .replace("{port}", &port)
-                .replace("{session}", &subs.session),
-        );
     }
+    out
+}
+
+/// `word` with each placeholder filled in one pass, so a repo path holding `{port}` stays as is.
+fn fill(word: &str, subs: &Subs, repo: &str) -> String {
+    let port = subs.port.map(|p| p.to_string()).unwrap_or_default();
+    let mut out = String::with_capacity(word.len());
+    let mut rest = word;
+    while let Some(i) = rest.find('{') {
+        out.push_str(&rest[..i]);
+        rest = &rest[i..];
+        let (value, len) = [("{repos}", repo), ("{port}", port.as_str()), ("{session}", subs.session.as_str())]
+            .into_iter()
+            .find(|(p, _)| rest.starts_with(p))
+            .map_or(("{", 1), |(p, v)| (v, p.len()));
+        out.push_str(value);
+        rest = &rest[len..];
+    }
+    out.push_str(rest);
     out
 }
 
@@ -183,9 +198,19 @@ pub fn spawn(req: Request) -> io::Result<Handle> {
     if let Some(d) = &req.cwd {
         cmd.current_dir(d);
     }
-    no_window(&mut cmd);
+    // cmd (an npm `.cmd` shim) then never runs a `node` from its current folder.
+    #[cfg(windows)]
+    cmd.env("NoDefaultCurrentDirectoryInExePath", "1");
+    own_tree(&mut cmd);
     let mut child = cmd.spawn()?;
-    let tree = Tree::of(&child);
+    let tree = match Tree::of(&mut child) {
+        Ok(t) => t,
+        Err(e) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(e);
+        }
+    };
     let pid = child.id();
     let stdin = child.stdin.take();
     let input = req.stdin.clone();
@@ -270,35 +295,54 @@ fn write_log(path: &Path, argv: &[String], o: &Outcome) {
     let _ = std::fs::write(path, format!("{program}: {status}\n{}", o.stderr));
 }
 
+/// Windows: no console window, and the child starts suspended so it joins its job before it can
+/// start anything. Elsewhere: the child leads a process group of its own.
 #[cfg(windows)]
-fn no_window(cmd: &mut Command) {
+fn own_tree(cmd: &mut Command) {
     use std::os::windows::process::CommandExt;
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-    cmd.creation_flags(CREATE_NO_WINDOW);
+    const CREATE_SUSPENDED: u32 = 0x0000_0004;
+    cmd.creation_flags(CREATE_NO_WINDOW | CREATE_SUSPENDED);
 }
 
-#[cfg(not(windows))]
-fn no_window(_: &mut Command) {}
+#[cfg(unix)]
+fn own_tree(cmd: &mut Command) {
+    use std::os::unix::process::CommandExt;
+    cmd.process_group(0);
+}
+
+#[cfg(not(any(windows, unix)))]
+fn own_tree(_: &mut Command) {}
 
 /// The child and everything it starts (a `.cmd` launcher's node process included). On Windows
-/// a job object that kills its processes when closed, so they also end if Rain exits.
+/// a job object that kills its processes when closed, so they also end if Rain exits; elsewhere
+/// the child's process group.
 struct Tree {
     #[cfg(windows)]
     job: Option<job::Job>,
+    #[cfg(unix)]
+    group: i32,
 }
 
 impl Tree {
-    fn of(child: &Child) -> Tree {
+    /// Windows: puts the suspended child in a job, then lets it run.
+    fn of(child: &mut Child) -> io::Result<Tree> {
         #[cfg(windows)]
         {
-            Tree {
-                job: job::Job::for_child(child),
-            }
+            let job = job::Job::for_child(child);
+            job::resume(child.id())?;
+            Ok(Tree { job })
         }
-        #[cfg(not(windows))]
+        #[cfg(unix)]
+        {
+            Ok(Tree {
+                group: i32::try_from(child.id()).unwrap_or(0),
+            })
+        }
+        #[cfg(not(any(windows, unix)))]
         {
             let _ = child;
-            Tree {}
+            Ok(Tree {})
         }
     }
 
@@ -306,6 +350,17 @@ impl Tree {
         #[cfg(windows)]
         if let Some(j) = &self.job {
             j.terminate();
+        }
+        #[cfg(unix)]
+        if self.group > 0 {
+            unsafe extern "C" {
+                fn kill(pid: i32, sig: i32) -> i32;
+            }
+            const SIGKILL: i32 = 9;
+            // SAFETY: signals the process group this runner started; a negative pid names the group.
+            unsafe {
+                kill(-self.group, SIGKILL);
+            }
         }
         let _ = child.kill();
     }
@@ -316,18 +371,56 @@ mod job {
     use std::os::windows::io::AsRawHandle;
     use std::process::Child;
 
-    use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
+    use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, TH32CS_SNAPTHREAD, THREADENTRY32, Thread32First, Thread32Next,
+    };
     use windows_sys::Win32::System::JobObjects::{
         AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
         JobObjectExtendedLimitInformation, SetInformationJobObject, TerminateJobObject,
     };
+    use windows_sys::Win32::System::Threading::{OpenThread, ResumeThread, THREAD_SUSPEND_RESUME};
 
     pub struct Job(HANDLE);
 
     // The handle is only used to terminate and close the job, both thread-safe calls.
     unsafe impl Send for Job {}
 
+    /// Resumes the threads of the suspended process `pid` (a new process has one).
+    pub fn resume(pid: u32) -> std::io::Result<()> {
+        // SAFETY: a thread snapshot walked with a correctly sized entry; every handle opened here
+        // is checked and closed.
+        unsafe {
+            let snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+            if snap == INVALID_HANDLE_VALUE {
+                return Err(std::io::Error::last_os_error());
+            }
+            let mut e: THREADENTRY32 = std::mem::zeroed();
+            e.dwSize = size_of::<THREADENTRY32>() as u32;
+            let mut resumed = 0;
+            let mut more = Thread32First(snap, &mut e) != 0;
+            while more {
+                if e.th32OwnerProcessID == pid {
+                    let t = OpenThread(THREAD_SUSPEND_RESUME, 0, e.th32ThreadID);
+                    if !t.is_null() {
+                        if ResumeThread(t) != u32::MAX {
+                            resumed += 1;
+                        }
+                        CloseHandle(t);
+                    }
+                }
+                more = Thread32Next(snap, &mut e) != 0;
+            }
+            CloseHandle(snap);
+            if resumed == 0 {
+                return Err(std::io::Error::other("could not start the ask command's main thread"));
+            }
+            Ok(())
+        }
+    }
+
     impl Job {
+        /// A kill-on-close job holding `child`, which must not have started anything yet.
         pub fn for_child(child: &Child) -> Option<Job> {
             // SAFETY: plain Win32 calls on a handle this function owns and the child's live handle.
             unsafe {
@@ -436,6 +529,21 @@ mod tests {
             [r"C:\Program Files\a.exe", "--port=4123", "--s", "ACME-1"]
         );
         assert!(argv("   ", &subs).is_empty());
+    }
+
+    #[test]
+    fn repos_inside_a_word_spread_and_repo_paths_keep_braces() {
+        let subs = Subs {
+            repos: vec![r"C:\r\{port}".into(), r"C:\r\{session}x".into()],
+            port: Some(4123),
+            session: "ACME-1".into(),
+        };
+        assert_eq!(
+            argv("tool --add-dir={repos} --p={port} {x}", &subs),
+            ["tool", r"--add-dir=C:\r\{port}", r"--add-dir=C:\r\{session}x", "--p=4123", "{x}"]
+        );
+        let none = Subs { repos: Vec::new(), ..subs };
+        assert_eq!(argv("tool --add-dir={repos}", &none), ["tool"]);
     }
 
     #[test]

@@ -24,6 +24,8 @@ enum Fail {
 struct Http {
     port: u16,
     agent: Agent,
+    /// The window's token from its lock file, looked up on the first write.
+    token: std::cell::OnceCell<String>,
 }
 
 impl Http {
@@ -38,7 +40,11 @@ impl Http {
             .timeout_global(Some(Duration::from_secs(secs)))
             .build()
             .into();
-        Http { port, agent }
+        Http {
+            port,
+            agent,
+            token: std::cell::OnceCell::new(),
+        }
     }
 
     fn call(&self, method: &str, path: &str, body: Option<String>) -> Result<(u16, String), Fail> {
@@ -47,10 +53,25 @@ impl Http {
 
     fn call_as(&self, method: &str, path: &str, body: Option<String>, media: &str) -> Result<(u16, String), Fail> {
         let url = format!("http://localhost:{}{path}", self.port);
+        let token = || {
+            self.token
+                .get_or_init(|| rain_server::token_for_port(&rain_comments::SessionFile::dir(), self.port).unwrap_or_default())
+                .as_str()
+        };
         let sent = match (method, body) {
-            ("POST", Some(b)) => self.agent.post(&url).header("Content-Type", media).send(b),
-            ("PUT", Some(b)) => self.agent.put(&url).header("Content-Type", media).send(b),
-            ("DELETE", _) => self.agent.delete(&url).call(),
+            ("POST", Some(b)) => self
+                .agent
+                .post(&url)
+                .header("Content-Type", media)
+                .header(rain_server::TOKEN_HEADER, token())
+                .send(b),
+            ("PUT", Some(b)) => self
+                .agent
+                .put(&url)
+                .header("Content-Type", media)
+                .header(rain_server::TOKEN_HEADER, token())
+                .send(b),
+            ("DELETE", _) => self.agent.delete(&url).header(rain_server::TOKEN_HEADER, token()).call(),
             _ => self.agent.get(&url).call(),
         };
         let mut res = sent.map_err(|e| match e {
@@ -493,8 +514,13 @@ pub fn add_imports(a: &CommentAdd) -> Result<Vec<rain_core::CommentImport>, Stri
         None => {
             let text = text_arg(a.json.clone(), "comment JSON")?;
             let v = serde_json::from_str(&text).map_err(|_| "Invalid --comment JSON".to_owned())?;
-            // An empty author is the reviewer, whose questions the launcher answers.
-            with_default_author(v, &a.author)
+            // An empty author is the reviewer, whose questions the launcher answers; their
+            // imports stay author-less, as `open --comment` stores them.
+            if a.author.is_empty() {
+                v
+            } else {
+                with_default_author(v, &a.author)
+            }
         }
     };
     rain_comments::import::from_value(shape_imports(v, a.kind, a.file_level, a.pr_level))
@@ -1193,6 +1219,7 @@ fn close(port: u16, timeout: Duration) -> i32 {
             port,
             pid,
             started_at: String::new(),
+            token: None,
         };
         lock.is_stale() && !rain_server::pid_alive(pid)
     };

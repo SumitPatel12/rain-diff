@@ -124,6 +124,8 @@ mod tests {
             repo_folder: None,
             lock: None,
             in_flight: Default::default(),
+            token: String::new(),
+            read_only: None,
         }
     }
 
@@ -137,6 +139,7 @@ mod tests {
                 query: &q,
                 body,
                 markdown: false,
+                trusted: false,
             },
         )
         .expect("routed")

@@ -79,6 +79,20 @@ fn a_run_past_its_timeout_is_killed() {
 }
 
 #[test]
+fn a_timeout_ends_the_children_the_command_started_too() {
+    // The grandchild holds stdout: were it left running, reading the output would wait it out.
+    let script = if cfg!(windows) {
+        "start /b ping -n 30 127.0.0.1 & ping -n 30 127.0.0.1"
+    } else {
+        "sleep 30 & sleep 30"
+    };
+    let t = Instant::now();
+    let o = run(shell(script), "", Duration::from_secs(1));
+    assert!(o.timed_out);
+    assert!(t.elapsed() < Duration::from_millis(2500), "{:?}", t.elapsed());
+}
+
+#[test]
 fn cancel_ends_the_run_within_half_a_second() {
     let (tx, rx) = std::sync::mpsc::channel();
     let mut h = runner::spawn(Request {

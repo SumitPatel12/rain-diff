@@ -9,6 +9,7 @@ use std::time::{Duration, Instant};
 
 pub const CHILD_ENV: &str = "RAIN_BACKGROUND_CHILD";
 pub const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
+pub const READ_ONLY_WARNING: &str = "Warning: another window holds this session; this one is read-only and refuses changes (423). Use --session to reach the window that holds it.";
 
 pub fn is_child() -> bool {
     std::env::var_os(CHILD_ENV).is_some_and(|v| v == "1")
@@ -24,6 +25,24 @@ pub fn handshake_line(port: u16, url: &str, pid: u32) -> String {
 pub fn reused_line(port: u16, pid: u32) -> String {
     let line = handshake_line(port, &format!("http://localhost:{port}"), pid);
     format!("{},\"reused\":true}}", &line[..line.len() - 1])
+}
+
+/// `line` with Rain's keys after difit's: `"token"` (the window's, see `rain_server::TOKEN_HEADER`)
+/// and `"readOnly":true` when another window holds the session.
+pub fn with_extras(line: &str, token: Option<&str>, read_only: bool) -> String {
+    let mut extra = String::new();
+    if let Some(t) = token {
+        extra.push_str(&format!(",\"token\":{}", serde_json::Value::from(t)));
+    }
+    if read_only {
+        extra.push_str(",\"readOnly\":true");
+    }
+    format!("{}{extra}}}", &line[..line.len() - 1])
+}
+
+/// Whether the handshake `line` says the window is read-only.
+pub fn is_read_only(line: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(line.trim()).is_ok_and(|v| v["readOnly"] == true)
 }
 
 /// The parsed handshake, when `line` is one.
@@ -72,6 +91,9 @@ pub fn spawn(args: &[String]) -> i32 {
     match start(&exe, &child_args, HANDSHAKE_TIMEOUT) {
         Ok(line) => {
             println!("{line}");
+            if is_read_only(&line) {
+                eprintln!("{READ_ONLY_WARNING}");
+            }
             0
         }
         Err(msg) => {
@@ -230,5 +252,22 @@ mod tests {
         let reused = reused_line(4967, 1234);
         assert_eq!(reused, r#"{"port":4967,"url":"http://localhost:4967","pid":1234,"reused":true}"#);
         assert_eq!(parse_handshake(&reused), Some((4967, "http://localhost:4967".into(), 1234)));
+    }
+
+    #[test]
+    fn rain_keys_follow_difits_and_say_read_only() {
+        let line = with_extras(&handshake_line(4967, "http://localhost:4967", 1234), Some("ab12"), true);
+        assert_eq!(
+            line,
+            r#"{"port":4967,"url":"http://localhost:4967","pid":1234,"token":"ab12","readOnly":true}"#
+        );
+        assert_eq!(parse_handshake(&line), Some((4967, "http://localhost:4967".into(), 1234)));
+        assert!(is_read_only(&line));
+        let normal = with_extras(&reused_line(4967, 1234), Some("ab12"), false);
+        assert_eq!(
+            normal,
+            r#"{"port":4967,"url":"http://localhost:4967","pid":1234,"reused":true,"token":"ab12"}"#
+        );
+        assert!(!is_read_only(&normal));
     }
 }

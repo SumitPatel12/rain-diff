@@ -177,7 +177,16 @@ pub fn delete_message(s: &mut Session, thread_id: &str, message_id: &str) -> boo
     if i == 0 {
         return false;
     }
-    t.messages.remove(i);
+    let gone = t.messages.remove(i);
+    if let Some(a) = t.answer.as_mut().filter(|a| a.message_id.as_deref() == Some(gone.id.as_str())) {
+        match t.messages[1..].iter().rev().find(|m| is_agent(m.author.as_deref())) {
+            Some(m) => a.message_id = Some(m.id.clone()),
+            None => {
+                a.status = AnswerStatus::Cancelled;
+                a.message_id = None;
+            }
+        }
+    }
     t.updated_at = now_iso();
     s.bump_comments();
     true
@@ -693,7 +702,7 @@ fn ladder(diff: &DiffSet, sp: &Spot, rev_of: &impl Fn(usize, Side) -> Option<Str
     let (f, renamed) = match lookup(diff, sp.repo, sp.path) {
         Lookup::Unsure => return Step::Keep,
         Lookup::Missing if sp.state == AnchorState::Orphaned => return Step::Keep,
-        Lookup::Missing => return Step::Orphaned(OrphanReason::FileDeleted),
+        Lookup::Missing => return Step::Orphaned(OrphanReason::LeftDiff),
         Lookup::Found(f) => (f, false),
         Lookup::Renamed(f) => (f, true),
     };
@@ -883,7 +892,7 @@ fn file_level(diff: &DiffSet, t: &Thread) -> Step {
             commit: t.commit.clone(),
             path: Some(f.path.clone()),
         },
-        Lookup::Missing => Step::Orphaned(OrphanReason::FileDeleted),
+        Lookup::Missing => Step::Orphaned(OrphanReason::LeftDiff),
         _ => Step::Keep,
     }
 }
@@ -1111,7 +1120,16 @@ pub fn reanchor_brief(doc: &BriefDoc, diff: &DiffSet) -> Vec<StaleCite> {
                 (None, _) => "file not in the diff",
                 (Some(f), Some((a, b))) => {
                     let side = c.side.unwrap_or(Side::New);
-                    if (a..=b.max(a)).any(|n| line_index(f, side, n).is_some()) {
+                    let (a, b) = (u64::from(a), u64::from(b.max(a)));
+                    let shown = f.hunks.iter().any(|h| {
+                        let (start, count) = match side {
+                            Side::Old => (h.old_start, h.old_count),
+                            Side::New => (h.new_start, h.new_count),
+                        };
+                        let start = u64::from(start);
+                        count > 0 && start <= b && start + u64::from(count) > a
+                    });
+                    if shown {
                         return None;
                     }
                     "lines outside the diff"

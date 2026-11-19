@@ -76,6 +76,7 @@ pub use ruler::RulerState;
 pub(crate) use session::{comment_counts, file_of_thread};
 pub use shortcuts::ShortcutsState;
 pub use tour::{FoundBy, TourStage, TourState};
+pub use verify::VerifyCard;
 
 /// Thread authors whose messages don't count as "someone else's": the user writes without one.
 pub(crate) const ME: &str = "";
@@ -122,6 +123,8 @@ pub struct App {
     pub session_path: Option<PathBuf>,
     pub settings_path: Option<PathBuf>,
     pub settings: Settings,
+    /// The settings as this window last loaded or saved them: what a save diffs against.
+    settings_saved: Settings,
     pub autosave: Option<Autosave>,
     pub phase: Phase,
     pub repos: Vec<RepoInfo>,
@@ -183,6 +186,7 @@ pub struct App {
     pub composer_ui: ComposerUi,
     pub reloader: ReloadState,
     pub ruler: RulerState,
+    pub verify_card: VerifyCard,
     pub shortcuts: ShortcutsState,
     pub playground: PlaygroundState,
     /// Bumped whenever the active keymap is replaced, so cached hints rebuild.
@@ -275,6 +279,7 @@ impl App {
             composer_ui: ComposerUi::default(),
             reloader: ReloadState::default(),
             ruler: RulerState::default(),
+            verify_card: VerifyCard::default(),
             shortcuts: ShortcutsState::default(),
             playground: PlaygroundState::default(),
             keymap_gen: 0,
@@ -282,6 +287,7 @@ impl App {
             shared,
             session_path,
             settings_path,
+            settings_saved: settings.clone(),
             settings,
             autosave,
             phase: Phase::Loading("Starting".into()),
@@ -603,9 +609,12 @@ impl App {
         self.apply_keymap();
     }
 
-    pub fn save_settings(&self) {
-        if let Some(p) = &self.settings_path {
-            let _ = self.settings.save(p);
+    /// Writes the keys changed since the last save over the file, keeping other windows' changes.
+    pub fn save_settings(&mut self) {
+        let Some(p) = &self.settings_path else { return };
+        match self.settings.save_merged(&self.settings_saved, p) {
+            Ok(()) => self.settings_saved = self.settings.clone(),
+            Err(e) => self.status = format!("settings not saved: {}: {e}", p.display()),
         }
     }
 
@@ -782,6 +791,7 @@ impl App {
 
     /// The window was laid out at `size`; its width decides docking, its size is saved.
     pub fn set_window_size(&mut self, size: (f32, f32)) {
+        self.verify_card.set_window(size);
         if (size.0 - self.window_width).abs() >= 1.0 {
             self.window_width = size.0;
         }
@@ -921,7 +931,8 @@ impl App {
             Command::Forward => self.jump_history(false, tx),
             Command::NextWaiting => self.next_waiting(tx),
             Command::ViewedAndNext => self.viewed_and_next(tx),
-            Command::ToggleViewed => self.toggle_viewed_current(),
+            Command::ToggleViewed => self.toggle_viewed_current(tx),
+            Command::MarkAllViewed => self.mark_all_viewed(),
             Command::MarkGroupViewed => self.accept_group(tx),
             Command::UndoAccept => self.undo_latest(tx),
             Command::ToggleSplit => self.toggle_split(),
@@ -995,6 +1006,7 @@ impl App {
             || self.tree.filter_edit.focused
             || self.review.summary.focused
             || self.shortcuts.search.focused
+            || self.verify_card.typing()
             || (self.picker.edit.focused && self.layout.is_open(Overlay::Picker))
     }
 }
@@ -1017,7 +1029,13 @@ fn load_session(path: &std::path::Path) -> Result<Session, String> {
     if err.kind() != std::io::ErrorKind::InvalidData {
         return Err(format!("{} could not be read ({err}); changes are not saved", path.display()));
     }
-    let kept = path.with_extension("json.corrupt");
+    let mut kept = path.with_extension("json.corrupt");
+    if kept.exists() {
+        let ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_millis());
+        kept = path.with_extension(format!("json.{ms}.corrupt"));
+    }
     match std::fs::rename(path, &kept) {
         Ok(()) => {
             eprintln!("Rain: {} is unreadable ({err}); kept as {}", path.display(), kept.display());

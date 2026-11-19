@@ -203,6 +203,44 @@ fn is_default<T: Default + PartialEq>(v: &T) -> bool {
     *v == T::default()
 }
 
+/// `T`, or its default when a newer build wrote a value this one doesn't know, so one unknown
+/// variant doesn't fail the whole session.
+fn lenient<'de, D: serde::Deserializer<'de>, T: serde::de::DeserializeOwned + Default>(d: D) -> Result<T, D::Error> {
+    let v = serde_json::Value::deserialize(d)?;
+    Ok(serde_json::from_value(v).unwrap_or_default())
+}
+
+/// The first of a posted thread's `field: value` pairs this build doesn't know. Session files
+/// load leniently (a newer build's values fall back to defaults); API input is checked strictly
+/// so a misspelled state is refused rather than quietly reopened.
+pub fn unknown_value(thread: &serde_json::Value) -> Option<String> {
+    fn bad<T: serde::de::DeserializeOwned>(v: &serde_json::Value, field: &str) -> Option<String> {
+        let x = v.get(field).filter(|x| !x.is_null())?;
+        serde_json::from_value::<T>(x.clone()).is_err().then(|| format!("{field}: {x}"))
+    }
+    bad::<ThreadKind>(thread, "kind")
+        .or_else(|| bad::<ThreadState>(thread, "state"))
+        .or_else(|| bad::<Disposition>(thread, "disposition"))
+        .or_else(|| bad::<DismissReason>(thread, "dismissReason"))
+        .or_else(|| bad::<AnchorState>(thread, "anchorState"))
+}
+
+fn lenient_orphan_reason<'de, D: serde::Deserializer<'de>>(d: D) -> Result<OrphanReason, D::Error> {
+    let v = serde_json::Value::deserialize(d)?;
+    Ok(serde_json::from_value(v).unwrap_or(OrphanReason::Ambiguous))
+}
+
+/// An unknown status reads as cancelled: never queued again on its own, and retryable.
+fn lenient_answer_status<'de, D: serde::Deserializer<'de>>(d: D) -> Result<AnswerStatus, D::Error> {
+    let v = serde_json::Value::deserialize(d)?;
+    Ok(serde_json::from_value(v).unwrap_or(AnswerStatus::Cancelled))
+}
+
+fn lenient_target_kind<'de, D: serde::Deserializer<'de>>(d: D) -> Result<TargetKind, D::Error> {
+    let v = serde_json::Value::deserialize(d)?;
+    Ok(serde_json::from_value(v).unwrap_or(TargetKind::File))
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ThreadKind {
@@ -397,6 +435,8 @@ pub enum OrphanReason {
     NodeRemoved,
     NoteRemoved,
     Ambiguous,
+    /// The file is no longer part of the diff (its change was reverted), not deleted.
+    LeftDiff,
 }
 
 impl OrphanReason {
@@ -410,6 +450,7 @@ impl OrphanReason {
             OrphanReason::NodeRemoved => "node removed",
             OrphanReason::NoteRemoved => "note removed",
             OrphanReason::Ambiguous => "ambiguous",
+            OrphanReason::LeftDiff => "not in the diff",
         }
     }
 }
@@ -419,7 +460,7 @@ impl OrphanReason {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Orphan {
-    #[serde(alias = "orphanReason")]
+    #[serde(alias = "orphanReason", deserialize_with = "lenient_orphan_reason")]
     pub reason: OrphanReason,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_seen_sha: Option<String>,
@@ -444,6 +485,7 @@ pub enum TargetKind {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Target {
+    #[serde(deserialize_with = "lenient_target_kind")]
     pub kind: TargetKind,
     /// Brief section id (`how.2`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -504,6 +546,7 @@ impl AnswerStatus {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Answer {
+    #[serde(deserialize_with = "lenient_answer_status")]
     pub status: AnswerStatus,
     /// `attached` or `launcher`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -531,7 +574,7 @@ pub struct Thread {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub code_snapshot: Option<CodeSnapshot>,
     pub messages: Vec<Message>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, deserialize_with = "lenient", skip_serializing_if = "Option::is_none")]
     pub disposition: Option<Disposition>,
     /// Repo id the thread belongs to; empty in single-repo sessions.
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -546,23 +589,23 @@ pub struct Thread {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub original: Option<Anchor>,
     /// Stated kind; `None` on round-2 threads, read through [`Thread::kind`].
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, deserialize_with = "lenient", skip_serializing_if = "Option::is_none")]
     pub kind: Option<ThreadKind>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub blocking: Option<bool>,
-    #[serde(default, skip_serializing_if = "is_default")]
+    #[serde(default, deserialize_with = "lenient", skip_serializing_if = "is_default")]
     pub state: ThreadState,
     /// The sha a state change refers to (`addressed` in `abc123`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub state_sha: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub state_at: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, deserialize_with = "lenient", skip_serializing_if = "Option::is_none")]
     pub dismiss_reason: Option<DismissReason>,
     /// Set through [`Thread::set_anchor_state`] so `outdated` stays in step.
-    #[serde(default, skip_serializing_if = "is_default")]
+    #[serde(default, deserialize_with = "lenient", skip_serializing_if = "is_default")]
     pub anchor_state: AnchorState,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, deserialize_with = "lenient", skip_serializing_if = "Option::is_none")]
     pub anchor_how: Option<AnchorHow>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub orphan: Option<Orphan>,
@@ -915,5 +958,25 @@ mod tests {
         assert_eq!(b.answer.as_ref().unwrap().status, AnswerStatus::Queued);
         assert_eq!(b.state, Some(ThreadState::Open));
         assert_eq!(serde_json::to_string(&imp).unwrap(), json);
+    }
+
+    #[test]
+    fn a_session_from_a_newer_build_with_unknown_variants_still_loads() {
+        let json = r#"{"id":"x","future":{"a":1},"threads":[{"id":"t1","filePath":"a.cs","createdAt":"1","updatedAt":"1","position":{"side":"new","line":3},
+            "messages":[{"id":"t1","body":"b","createdAt":"1","updatedAt":"1","mood":"calm"}],
+            "kind":"riddle","state":"snoozed","disposition":"shrug","dismissReason":"vibes","anchorState":"drifting","anchorHow":"psychic",
+            "orphan":{"reason":"moon-phase","snapshot":{"content":"c"}},"target":{"kind":"slide"},"answer":{"status":"pondering"}}]}"#;
+        let s: crate::Session = serde_json::from_str(json).expect("unknown values never fail the session");
+        let t = &s.threads[0];
+        assert_eq!(
+            (t.kind, t.state, t.disposition, t.dismiss_reason),
+            (None, ThreadState::Open, None, None)
+        );
+        assert_eq!((t.anchor_state, t.anchor_how), (AnchorState::Placed, None));
+        assert_eq!(t.orphan.as_ref().unwrap().reason, OrphanReason::Ambiguous);
+        assert_eq!(t.target.as_ref().unwrap().kind, TargetKind::File);
+        assert_eq!(t.answer.as_ref().unwrap().status, AnswerStatus::Cancelled);
+        let known: Thread = serde_json::from_str(r#"{"id":"t","filePath":"a","createdAt":"1","updatedAt":"1","position":{"side":"new","line":1},"messages":[],"kind":"nit","state":"resolved"}"#).unwrap();
+        assert_eq!((known.kind, known.state), (Some(ThreadKind::Nit), ThreadState::Resolved));
     }
 }

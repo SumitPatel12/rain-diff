@@ -96,7 +96,9 @@ if ($Mode -eq 'open') {
     $raw = @(& $rain @openArgs 2>&1 | ForEach-Object { "$_" })
     $info = Get-JsonLine ($raw | Where-Object { $_ -match '"port"' })
     if ($LASTEXITCODE -ne 0 -or -not $info) { throw "rain-story: open failed: $($raw -join ' ')" }
-    $state = if ($info.reused) { 'reused' } else { 'opened' }
+    $state = if ($info.readOnly) { 'read-only' } elseif ($info.reused) { 'reused' } else { 'opened' }
+    # Lost an open race: this window refuses changes (423); --session calls reach the holder.
+    if ($info.readOnly) { Write-Output "warning: another Rain window already holds session $Session; the one just opened (pid $($info.pid)) is read-only. Calls below use --session and reach the holder; close the extra one with: rain close --port $($info.port)" }
 
     # A new window takes a moment to load its repos; poll up to ~10 s, tightly at first.
     $known = @()

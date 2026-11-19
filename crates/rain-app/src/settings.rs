@@ -314,12 +314,29 @@ impl Settings {
         a.max_concurrent = a.max_concurrent.clamp(1, 64);
     }
 
+    /// Writes every key, atomically.
     pub fn save(&self, path: &Path) -> std::io::Result<()> {
-        if let Some(dir) = path.parent() {
-            std::fs::create_dir_all(dir)?;
-        }
         let bytes = serde_json::to_vec_pretty(self).map_err(std::io::Error::other)?;
-        std::fs::write(path, bytes)
+        rain_comments::store::write_atomic(path, &bytes)
+    }
+
+    /// Writes only what changed since `base` (what this window last loaded or saved) over the
+    /// file as it is now, so another window's changes to other keys survive. A missing or
+    /// unparseable file gets every key.
+    pub fn save_merged(&self, base: &Settings, path: &Path) -> std::io::Result<()> {
+        let mine = serde_json::to_value(self).map_err(std::io::Error::other)?;
+        let was = serde_json::to_value(base).map_err(std::io::Error::other)?;
+        let mut disk = match std::fs::read(path) {
+            Ok(b) => serde_json::from_slice::<serde_json::Value>(&b)
+                .ok()
+                .filter(serde_json::Value::is_object)
+                .unwrap_or_else(|| mine.clone()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => mine.clone(),
+            Err(e) => return Err(e),
+        };
+        merge_changes(&mut disk, &was, &mine);
+        let bytes = serde_json::to_vec_pretty(&disk).map_err(std::io::Error::other)?;
+        rain_comments::store::write_atomic(path, &bytes)
     }
 
     pub fn section_collapsed(&self, section: u8) -> bool {
@@ -331,9 +348,64 @@ impl Settings {
     }
 }
 
+/// Puts into `disk` each leaf where `mine` differs from `was`; nested objects merge key by key.
+fn merge_changes(disk: &mut serde_json::Value, was: &serde_json::Value, mine: &serde_json::Value) {
+    use serde_json::Value;
+    let (Some(was), Some(mine), Some(disk)) = (was.as_object(), mine.as_object(), disk.as_object_mut()) else {
+        return;
+    };
+    for k in was.keys().chain(mine.keys().filter(|k| !was.contains_key(*k))) {
+        let (w, m) = (was.get(k), mine.get(k));
+        if w == m {
+            continue;
+        }
+        if let (Some(w @ Value::Object(_)), Some(m @ Value::Object(_)), Some(d)) = (w, m, disk.get_mut(k).filter(|d| d.is_object())) {
+            merge_changes(d, w, m);
+            continue;
+        }
+        match m {
+            Some(m) => {
+                disk.insert(k.clone(), m.clone());
+            }
+            None => {
+                disk.remove(k);
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn two_windows_saving_keep_each_others_changes() {
+        let dir = std::env::temp_dir().join(format!("rain-settings-merge-{}", std::process::id()));
+        let path = dir.join("settings.json");
+        let _ = std::fs::remove_dir_all(&dir);
+        let start = Settings::default();
+        start.save(&path).unwrap();
+        let mut a = Settings::load(&path);
+        let mut b = Settings::load(&path);
+        let (base_a, base_b) = (a.clone(), b.clone());
+        a.theme = Theme::Everforest;
+        a.ask.allowed = true;
+        a.save_merged(&base_a, &path).unwrap();
+        b.window = (800.0, 600.0);
+        b.save_merged(&base_b, &path).unwrap();
+        let back = Settings::load(&path);
+        assert_eq!(back.theme, Theme::Everforest, "B's resize doesn't undo A's theme");
+        assert!(back.ask.allowed, "nested keys merge too");
+        assert_eq!(back.window, (800.0, 600.0));
+        std::fs::write(&path, br#"{"theme": "dark", "fromANewerBuild": 1}"#).unwrap();
+        let mut c = back.clone();
+        c.code_size = CodeSize::S;
+        c.save_merged(&back, &path).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("fromANewerBuild") && text.contains(r#""theme": "dark""#), "{text}");
+        assert_eq!(Settings::load(&path).code_size, CodeSize::S);
+        let _ = std::fs::remove_dir_all(dir);
+    }
 
     #[test]
     fn settings_round_trip_and_default_on_garbage() {

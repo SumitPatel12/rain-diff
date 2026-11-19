@@ -1364,7 +1364,7 @@ impl<S: 'static> View<S> {
         }
         let (get, cell) = (self.d.get_mut.clone(), format!("{row_key}.{}", side as u8));
         let (aim, click) = (self.d.get_mut.clone(), self.d.get_mut.clone());
-        let (row_at, line_h) = (i as u32, l.font.line_height);
+        let (row_at, line_h, font) = (i as u32, l.font.line_height, l.font);
         let mut code = col()
             .grow(1.0)
             .min_w(0.0)
@@ -1378,13 +1378,9 @@ impl<S: 'static> View<S> {
             .on_press_tx(move |s: &mut S, tx: &mut Tx| {
                 let st = click(s);
                 let [x, y] = st.pointer;
-                let col = (x / cell_w).max(0.0) as u32;
                 let line = (y / line_h).max(0.0) as usize;
-                let col = match (line, st.wraps()) {
-                    (1.., true) => wrapped_col(st, row_at, side, line, col, cell_w),
-                    _ => col,
-                };
-                st.click_code(row_at, side, col, tx);
+                let byte = clicked_byte(st, row_at, side, line, x, |s| x_in(s, font, cell_w), cell_w);
+                st.click_code(row_at, side, byte, tx);
             })
             .on_hover_change(move |s: &mut S, inside, tx: &mut Tx| {
                 if !get(s).hover_text(side, &cell, inside) {
@@ -1568,6 +1564,7 @@ impl<S: 'static> View<S> {
         }
         let label = match &header {
             Some(h) => format!("{hidden} unchanged lines, then {h}"),
+            None if st.hidden(f, gap).is_none() => "Unchanged lines to the end of the file".to_owned(),
             None => format!("{hidden} unchanged lines"),
         };
         let line = |key: &'static str, top: bool| {
@@ -1806,21 +1803,51 @@ fn wrapped_line(shown: &str, at: usize, w: f32, cell_w: f32) -> (usize, usize) {
     (line, byte)
 }
 
-/// The column a click lands on, `col` cells into the `line`th line of row `r`'s wrapped code.
-fn wrapped_col(st: &DiffState, r: u32, side: Side, line: usize, col: u32, cell_w: f32) -> u32 {
-    let (Some(code), Some(row)) = (st.row_text(r, side), st.rows.get(r as usize)) else {
-        return col;
+/// The byte of row `r`'s code on `side` that a click `x` into its `line`th drawn line lands on,
+/// by the drawn text's measured width (`measure`), so wide characters and tabs land where the
+/// cursor is drawn.
+fn clicked_byte(st: &DiffState, r: u32, side: Side, line: usize, x: f32, measure: impl Fn(&str) -> f32, cell_w: f32) -> usize {
+    let Some(code) = st.row_text(r, side) else { return 0 };
+    let wrap = st.wraps();
+    let (shown, ..) = tabbed(code, Vec::new(), Vec::new(), wrap);
+    let width = st.rows.get(r as usize).and_then(|row| wrap_width(st, row.file()));
+    let (start, end) = match width.filter(|_| wrap) {
+        Some(w) => {
+            let starts = wrap_starts(&shown, (w / cell_w + 0.01).max(1.0) as u32, line + 2);
+            let at = |col: u32| {
+                shown
+                    .char_indices()
+                    .filter(|&(_, c)| c != '\u{200B}')
+                    .nth(col as usize)
+                    .map_or(shown.len(), |(b, _)| b)
+            };
+            let start = at(*starts.get(line).or(starts.last()).unwrap_or(&0));
+            (start, starts.get(line + 1).map_or(shown.len(), |&n| at(n)))
+        }
+        None => (0, shown.len()),
     };
-    let Some(w) = wrap_width(st, row.file()) else { return col };
-    let (shown, ..) = tabbed(code, Vec::new(), Vec::new(), true);
-    let starts = wrap_starts(&shown, (w / cell_w + 0.01).max(1.0) as u32, line + 2);
-    let Some(&start) = starts.get(line) else {
-        return starts.last().map_or(col, |s| s + col);
-    };
-    match starts.get(line + 1) {
-        Some(&next) => (start + col).min(next.saturating_sub(1)),
-        None => start + col,
+    let b = byte_at_x(&shown[start..end], x, measure) + start;
+    // The char drawn at `b`: a tab's padding belongs to the tab.
+    let col = crate::state::shown_to_col(code, wrap, b + 1).saturating_sub(1);
+    crate::state::byte_of_col(code, col)
+}
+
+/// The start of the grapheme of `s` whose drawn width (`measure` of the text before it and
+/// through it) covers `x`; past the end, the last grapheme. A binary search: `measure` grows with
+/// the prefix.
+fn byte_at_x(s: &str, x: f32, measure: impl Fn(&str) -> f32) -> usize {
+    let mut bounds = vec![0];
+    while let Some(&b) = bounds.last()
+        && b < s.len()
+    {
+        bounds.push(crate::motion::next_grapheme(s, b));
     }
+    if bounds.len() < 2 {
+        return 0;
+    }
+    // The last grapheme start whose left edge is at or before `x`.
+    let n = bounds[..bounds.len() - 1].partition_point(|&b| measure(&s[..b]) <= x);
+    bounds[n.saturating_sub(1)]
 }
 
 /// Where the first `lines` lines of `shown` start, in columns, wrapped at `cols` as text layout
@@ -2007,6 +2034,24 @@ mod tests {
             got,
             vec![(0, 3, Some(red), None), (3, 6, Some(red), Some(green)), (6, 8, None, Some(green))]
         );
+    }
+
+    #[test]
+    fn a_click_lands_on_the_grapheme_drawn_under_it() {
+        let st = DiffState::new(vec![crate::testing::from_texts("a.txt", "", "a界界b\n\tx\n")]);
+        // One cell a character, two for a wide one; a tab draws as one space before its padding.
+        let measure = |s: &str| s.chars().map(|c| if c > '\u{2E80}' { 2.0 } else { 1.0 }).sum::<f32>();
+        let click = |line: u32, x: f32| {
+            let r = st.row_of(0, Side::New, line).unwrap();
+            clicked_byte(&st, r, Side::New, 0, x, measure, 1.0)
+        };
+        assert_eq!(click(1, 0.5), 0);
+        assert_eq!(click(1, 3.5), 4, "cell 3 is the second wide character");
+        assert_eq!(click(1, 5.5), 7);
+        assert_eq!(click(1, 40.0), 7, "past the end, the last character");
+        assert_eq!(click(1, -3.0), 0);
+        assert_eq!(click(2, 2.5), 0, "inside the tab's padding");
+        assert_eq!(click(2, 4.2), 1);
     }
 
     #[test]

@@ -20,15 +20,26 @@ pub(crate) fn route(ctx: &Ctx, r: &Req) -> Option<Reply> {
     })
 }
 
-/// `{"brief","version","stale","check"}`; `brief` is null until an agent sets one.
+/// `{"brief","version","stale","check","verify"}`; `brief` is null until an agent sets one.
 fn get(ctx: &Ctx) -> Reply {
     let s = ctx.shared.lock();
     let stale = s.brief.as_ref().is_some_and(|b| stale(&s, b));
     let check = s.brief.as_ref().map_or(Value::Null, |b| check_of(ctx, &s, b));
     value(
         200,
-        &json!({ "brief": s.brief, "version": s.brief_version, "stale": stale, "check": check }),
+        &json!({ "brief": s.brief, "version": s.brief_version, "stale": stale, "check": check, "verify": verify_of(&s) }),
     )
+}
+
+/// The Verify checklist as the reviewer has it: the Brief's items with their edits, ticks and
+/// their own items, plus the Brief items they removed.
+fn verify_of(s: &Session) -> Value {
+    let items: Vec<Value> = s
+        .verify_items()
+        .into_iter()
+        .map(|i| json!({ "text": i.text, "done": s.verified.contains(&i.text), "source": i.source }))
+        .collect();
+    json!({ "items": items, "removed": s.verify.removed })
 }
 
 /// The window's installed check when it has one, else the brief against the files the window

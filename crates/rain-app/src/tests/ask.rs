@@ -137,6 +137,11 @@ fn with_no_agent_attached_the_launcher_answers_at_once() {
         let r = &c.reqs[0];
         assert_eq!(r.argv[0], "claude");
         assert!(r.argv.contains(&"--add-dir".to_owned()));
+        assert!(
+            r.cwd.as_ref().is_some_and(|d| d.ends_with("run")),
+            "runs in Rain's own folder, never the repo: {:?}",
+            r.cwd
+        );
         assert!(r.stdin.contains("Why is the voucher stored first?"));
         assert!(r.stdin.starts_with(rain_ask::prompt::PREAMBLE));
         assert!(r.env.contains(&("RAIN_THREAD".to_owned(), id.clone())));

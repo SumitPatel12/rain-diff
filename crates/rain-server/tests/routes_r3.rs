@@ -401,8 +401,28 @@ fn a_window_that_finds_a_live_lock_serves_but_never_saves() {
         ..ServerOptions::default()
     });
     assert!(t.server.read_only && t.server.lock.is_none());
-    t.send("POST", "/api/comment-imports", one);
-    assert_eq!(t.shared.lock().threads.len(), 1);
+    let (status, refused) = t.send("POST", "/api/comment-imports", one);
+    assert_eq!(status, 423, "a write that would be lost is refused, not answered with success");
+    let why = refused["error"].as_str().unwrap();
+    assert!(
+        why.contains("read-only") && why.contains(&format!("port {}", held["port"])),
+        "{why}"
+    );
+    assert!(t.shared.lock().threads.is_empty());
+    for (method, path, body) in [
+        ("POST", "/api/notes", r#"{"kind":"story","body":"n"}"#),
+        ("PUT", "/api/brief", r#"{"format":"rain-brief/v1"}"#),
+        ("DELETE", "/api/comments/x", ""),
+        ("POST", "/api/comments/x/state", r#"{"state":"resolved"}"#),
+    ] {
+        assert_eq!(t.send(method, path, body).0, 423, "{method} {path}");
+    }
+    assert_eq!(
+        t.send("POST", "/api/goto", r#"{"path":"a.cs","line":1}"#).0,
+        200,
+        "steering still works"
+    );
+    assert_eq!(t.get("/api/comments-json").0, 200, "reads still work");
     assert!(!session.exists(), "never saved over the other window's session");
     drop(t);
     assert_eq!(read_lock(&lock_file).map(|l| l.pid), Some(other.id()), "its lock is left alone");
@@ -419,6 +439,110 @@ fn a_window_that_finds_a_live_lock_serves_but_never_saves() {
     assert!(session.exists());
     drop(t);
     drop(busy);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_state_post_without_an_id_is_a_404_not_a_panic() {
+    let t = serve(ServerOptions::default());
+    let (status, _) = t.send("POST", "/api/comments/state", r#"{"state":"resolved"}"#);
+    assert_eq!(status, 404);
+    assert_eq!(t.get("/api/health").0, 200, "the server is unharmed");
+}
+
+#[test]
+fn health_answers_while_long_polls_fill_every_request_slot() {
+    use std::io::Write;
+    let t = serve(ServerOptions::default());
+    let port = t.server.port;
+    let polls: Vec<std::net::TcpStream> = (0..rain_server::MAX_IN_FLIGHT)
+        .map(|_| {
+            let mut s = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+            let req = format!("GET /api/events?timeout=20 HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\r\n");
+            s.write_all(req.as_bytes()).unwrap();
+            s
+        })
+        .collect();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    // Once the slots are full, other routes get a 503; health still answers as Rain.
+    while t.get("/api/comments-json").0 != 503 {
+        assert!(Instant::now() < deadline, "the long polls never filled the slots");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let (status, h) = t.get("/api/health");
+    assert_eq!((status, h["app"].clone()), (200, json!("rain")));
+    drop(polls);
+}
+
+#[test]
+fn only_a_caller_with_the_windows_token_starts_its_answerer() {
+    let t = serve(ServerOptions::default());
+    assert_eq!(t.server.token.len(), 32);
+    let question = |line: u32| {
+        json!([{"type": "thread", "filePath": "a.cs", "position": {"side": "new", "line": line}, "body": format!("why {line}?"), "kind": "question"}])
+            .to_string()
+    };
+    let asks = |t: &T| {
+        let (_, v) = t.get("/api/events?kinds=ask&since=0&timeout=1");
+        v["events"].as_array().unwrap().len()
+    };
+    let answer = |t: &T, line: u32| {
+        let s = t.shared.lock();
+        let th = s.threads.iter().find(|x| x.messages[0].body == format!("why {line}?")).unwrap();
+        th.answer.clone()
+    };
+
+    t.send("POST", "/api/comment-imports", &question(1));
+    assert_eq!(asks(&t), 0, "no token: the question is kept, but nothing runs");
+    assert_eq!(answer(&t, 1), None);
+
+    let queued = json!([{"type": "thread", "filePath": "a.cs", "position": {"side": "new", "line": 2}, "body": "why 2?",
+        "kind": "question", "author": "claude", "answer": {"status": "queued"}}]);
+    t.send("POST", "/api/comment-imports", &queued.to_string());
+    assert_eq!(answer(&t, 2), None, "nor can it queue an answer directly");
+
+    let mut r = t
+        .agent
+        .post(&t.url("/api/comment-imports"))
+        .header("Content-Type", "application/json")
+        .header(rain_server::TOKEN_HEADER, &t.server.token)
+        .send(question(3))
+        .unwrap();
+    assert_eq!(r.status().as_u16(), 200, "{}", r.body_mut().read_to_string().unwrap());
+    assert_eq!(asks(&t), 1, "the window's own CLI carries the token");
+    assert_eq!(answer(&t, 3).map(|a| a.status), Some(rain_core::AnswerStatus::Queued));
+
+    let mut r = t
+        .agent
+        .post(&t.url("/api/comment-imports"))
+        .header("Content-Type", "application/json")
+        .header(rain_server::TOKEN_HEADER, "0".repeat(32))
+        .send(question(4))
+        .unwrap();
+    assert_eq!(r.status().as_u16(), 200, "{}", r.body_mut().read_to_string().unwrap());
+    assert_eq!(answer(&t, 4), None, "a wrong token is no token");
+}
+
+#[test]
+fn the_lock_file_keeps_the_token_and_the_lock_route_does_not_serve_it() {
+    let dir = std::env::temp_dir().join(format!("rain-server-token-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let session = dir.join("TOK.json");
+    let t = serve(ServerOptions {
+        session_file: Some(session.clone()),
+        ..ServerOptions::default()
+    });
+    let on_disk = read_lock(&session.with_extension("lock")).unwrap();
+    assert_eq!(on_disk.token.as_deref(), Some(t.server.token.as_str()));
+    assert_eq!(
+        rain_server::token_for_port(&dir, t.server.port).as_deref(),
+        Some(t.server.token.as_str())
+    );
+    let (_, l) = t.get("/api/lock");
+    assert!(l["lock"]["pid"].is_number() && l["lock"].get("token").is_none(), "{l}");
+    let (_, h) = t.get("/api/health");
+    assert!(!h.to_string().contains(&t.server.token));
+    drop(t);
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -446,6 +570,14 @@ fn brief_put_validates_and_get_reports_stale() {
     assert_eq!(got["stale"], false);
     assert_eq!(got["brief"]["title"], doc["title"]);
     assert!(got["check"].is_object());
+    {
+        let mut s = t.shared.lock();
+        s.add_verify("Mine").unwrap();
+        s.verified.push("Mine".into());
+    }
+    let (_, got) = t.get("/api/brief");
+    let items = got["verify"]["items"].as_array().unwrap();
+    assert_eq!(items.last().unwrap(), &json!({"text": "Mine", "done": true, "source": "added"}));
 
     doc["writtenAgainst"] = json!([{ "repo": "server", "sha": "fff0000" }]);
     let (_, r) = t.send("PUT", "/api/brief", &doc.to_string());

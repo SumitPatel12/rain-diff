@@ -432,16 +432,34 @@ pub fn diff(repo: &Path, repo_index: u16, r: &Resolved, opts: &DiffOpts) -> Resu
 /// git treats files over `core.bigFileThreshold` as binary.
 pub const UNTRACKED_MAX_BYTES: u64 = 16 * 1024 * 1024;
 
+/// All untracked files read together stop at this many bytes or files; the rest list with no
+/// contents, so an un-ignored dependency tree can't stall the window or exhaust its memory.
+pub const UNTRACKED_TOTAL_BYTES: u64 = 256 * 1024 * 1024;
+pub const UNTRACKED_MAX_FILES: usize = 5000;
+
 /// Untracked, non-ignored files as Added diffs read from disk (the index is left alone). One that
-/// can't be read (locked, access denied) or is over [`UNTRACKED_MAX_BYTES`] lists with no contents.
+/// can't be read (locked, access denied), is over [`UNTRACKED_MAX_BYTES`], or comes after the
+/// totals are spent lists with no contents. A symlink shows its target path, as git does.
 pub fn untracked(repo: &Path, repo_index: u16) -> Result<Vec<FileDiff>, GitError> {
+    untracked_within(repo, repo_index, UNTRACKED_TOTAL_BYTES, UNTRACKED_MAX_FILES)
+}
+
+fn untracked_within(repo: &Path, repo_index: u16, mut bytes_left: u64, mut files_left: usize) -> Result<Vec<FileDiff>, GitError> {
     let out = cmd::run(repo, &["ls-files", "--others", "--exclude-standard", "-z"])?;
     let mut files = Vec::new();
     // A trailing '/' is a nested repository, not a file.
     for raw in out.split(|&b| b == 0).filter(|p| !p.is_empty() && !p.ends_with(b"/")) {
         let path = String::from_utf8_lossy(raw).into_owned();
-        match read_capped(&repo.join(&path)) {
-            Ok(Some(bytes)) => files.push(added_file(repo_index, path, &bytes)),
+        if files_left == 0 {
+            files.push(unavailable_file(repo_index, path));
+            continue;
+        }
+        match read_worktree(&repo.join(&path), UNTRACKED_MAX_BYTES.min(bytes_left)) {
+            Ok(Some(bytes)) => {
+                files_left -= 1;
+                bytes_left -= bytes.len() as u64;
+                files.push(added_file(repo_index, path, &bytes));
+            }
             Ok(None) => files.push(unavailable_file(repo_index, path)),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
             Err(e) => {
@@ -453,16 +471,37 @@ pub fn untracked(repo: &Path, repo_index: u16) -> Result<Vec<FileDiff>, GitError
     Ok(files)
 }
 
-/// The file's bytes, or `None` when it is over [`UNTRACKED_MAX_BYTES`].
-fn read_capped(path: &Path) -> std::io::Result<Option<Vec<u8>>> {
-    use std::io::Read;
-    let f = std::fs::File::open(path)?;
-    if f.metadata()?.len() > UNTRACKED_MAX_BYTES {
+/// A working-tree file's bytes as git sees them, without following a symlink: a link reads as
+/// its target path. `None` when it is over `max` bytes or not a regular file (a FIFO would block).
+fn read_worktree(path: &Path, max: u64) -> std::io::Result<Option<Vec<u8>>> {
+    let Some(f) = open_worktree(path)? else {
+        let target = link_target(path)?;
+        return Ok((target.len() as u64 <= max).then_some(target));
+    };
+    if f.metadata()?.len() > max {
         return Ok(None);
     }
     let mut bytes = Vec::new();
-    f.take(UNTRACKED_MAX_BYTES + 1).read_to_end(&mut bytes)?;
-    Ok((bytes.len() as u64 <= UNTRACKED_MAX_BYTES).then_some(bytes))
+    f.take(max + 1).read_to_end(&mut bytes)?;
+    Ok((bytes.len() as u64 <= max).then_some(bytes))
+}
+
+/// The regular file at `path` opened, or `None` when it is a symlink (see [`link_target`]);
+/// anything else (a FIFO, a device, a folder) is an error rather than a read that may block.
+fn open_worktree(path: &Path) -> std::io::Result<Option<std::fs::File>> {
+    let meta = std::fs::symlink_metadata(path)?;
+    if meta.file_type().is_symlink() {
+        return Ok(None);
+    }
+    if !meta.is_file() {
+        return Err(std::io::Error::other("not a regular file"));
+    }
+    std::fs::File::open(path).map(Some)
+}
+
+/// A symlink's content as git stores it: its target path, `/`-separated.
+fn link_target(path: &Path) -> std::io::Result<Vec<u8>> {
+    Ok(std::fs::read_link(path)?.to_string_lossy().replace('\\', "/").into_bytes())
 }
 
 fn unavailable_file(repo_index: u16, path: String) -> FileDiff {
@@ -595,8 +634,13 @@ fn heads(repo: &Path, rev: &str, paths: &[&str]) -> Result<Vec<Option<Vec<u8>>>,
         return Ok(paths
             .iter()
             .map(|p| {
+                let path = worktree_path(repo, p).ok()?;
+                let Some(file) = open_worktree(&path).ok()? else {
+                    let mut target = link_target(&path).ok()?;
+                    target.truncate(HEADER_BYTES);
+                    return Some(target);
+                };
                 let mut head = Vec::with_capacity(HEADER_BYTES);
-                let file = std::fs::File::open(worktree_path(repo, p).ok()?).ok()?;
                 file.take(HEADER_BYTES as u64).read_to_end(&mut head).ok()?;
                 Some(head)
             })
@@ -655,7 +699,17 @@ fn worktree_path(repo: &Path, path: &str) -> Result<PathBuf, GitError> {
 /// the index.
 pub fn blob(repo: &Path, rev: &str, path: &str) -> Result<Vec<u8>, GitError> {
     match TargetKind::of(rev) {
-        TargetKind::WorkingTree | TargetKind::Unstaged => Ok(std::fs::read(worktree_path(repo, path)?)?),
+        TargetKind::WorkingTree | TargetKind::Unstaged => {
+            let path = worktree_path(repo, path)?;
+            match open_worktree(&path)? {
+                Some(mut f) => {
+                    let mut bytes = Vec::new();
+                    f.read_to_end(&mut bytes)?;
+                    Ok(bytes)
+                }
+                None => Ok(link_target(&path)?),
+            }
+        }
         TargetKind::Staged => {
             worktree_path(repo, path)?;
             cmd::run(repo, &["cat-file", "blob", &format!(":{path}")])
@@ -841,4 +895,58 @@ pub fn changed_under_w(repo: &Path, r: &Resolved) -> Result<HashSet<String>, Git
         }
     }
     Ok(changed.into_iter().map(|p| String::from_utf8_lossy(p).into_owned()).collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn repo(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("rain-git-unit-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let ok = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&dir)
+            .args(["init", "-q"])
+            .status()
+            .unwrap();
+        assert!(ok.success());
+        dir
+    }
+
+    #[test]
+    fn untracked_reads_stop_at_the_totals_and_list_the_rest() {
+        let dir = repo("untracked-caps");
+        for i in 0..5 {
+            std::fs::write(dir.join(format!("f{i}.txt")), "0123456789\n").unwrap();
+        }
+        let files = untracked_within(&dir, 0, 1000, 3).unwrap();
+        assert_eq!(files.len(), 5, "every file is listed");
+        assert_eq!(files.iter().filter(|f| !f.contents_unavailable).count(), 3, "three are read");
+        let files = untracked_within(&dir, 0, 25, 100).unwrap();
+        assert_eq!(files.iter().filter(|f| !f.contents_unavailable).count(), 2, "two fit in 25 bytes");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn an_untracked_symlink_shows_its_target_not_what_it_points_at() {
+        let dir = repo("untracked-link");
+        let secret = dir.join("outside.txt");
+        std::fs::write(&secret, "SECRET\n").unwrap();
+        #[cfg(unix)]
+        let made = std::os::unix::fs::symlink(&secret, dir.join("notes.txt"));
+        #[cfg(windows)]
+        let made = std::os::windows::fs::symlink_file(&secret, dir.join("notes.txt"));
+        if made.is_err() {
+            eprintln!("skipped: this account can't create symlinks");
+            let _ = std::fs::remove_dir_all(dir);
+            return;
+        }
+        let files = untracked(&dir, 0).unwrap();
+        let link = files.iter().find(|f| f.path == "notes.txt").unwrap();
+        let text = link.line_text(0);
+        assert!(!text.contains("SECRET") && text.ends_with("outside.txt"), "{text}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
 }
