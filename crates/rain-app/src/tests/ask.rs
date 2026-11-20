@@ -122,6 +122,18 @@ fn test_builds_never_start_a_runner_by_themselves() {
 }
 
 #[test]
+fn a_read_only_window_does_not_resume_the_owners_questions() {
+    let (mut a, ctl) = setup();
+    let id = ask(&mut a, "Why?");
+    a.launch.read_only = true;
+    let before = status(&a, &id);
+    assert!(!a.ask_tick_at(Instant::now()));
+    assert!(ctl.borrow().reqs.is_empty());
+    assert_eq!(status(&a, &id), before);
+    assert!(!a.ask.is_tracking(&id));
+}
+
+#[test]
 fn with_no_agent_attached_the_launcher_answers_at_once() {
     let (mut a, ctl) = setup();
     let id = ask(&mut a, "Why is the voucher stored first?");

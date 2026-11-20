@@ -60,10 +60,10 @@ pub fn token_for_port(dir: &Path, port: u16) -> Option<String> {
         .token
 }
 
-/// Takes the lock for this process, or returns the live window that holds it. The file appears
+/// Takes the lock for this window, or returns the live window that holds it. The file appears
 /// whole and only if absent (a hard link of a finished temp file), so two windows starting at
-/// once can't both take it. When it can't be created that way, it is written over instead.
-pub(crate) fn acquire(path: &Path, port: u16, token: &str) -> Result<(), Lock> {
+/// once can't both take it. An I/O error never grants ownership.
+pub(crate) fn acquire(path: &Path, port: u16, token: &str) -> io::Result<Option<Lock>> {
     acquire_as(
         path,
         &Lock {
@@ -75,35 +75,31 @@ pub(crate) fn acquire(path: &Path, port: u16, token: &str) -> Result<(), Lock> {
     )
 }
 
-fn acquire_as(path: &Path, lock: &Lock) -> Result<(), Lock> {
-    let text = serde_json::to_string(lock).unwrap_or_default();
+fn acquire_as(path: &Path, lock: &Lock) -> io::Result<Option<Lock>> {
+    let text = serde_json::to_vec(lock).map_err(io::Error::other)?;
     for attempt in 0..5 {
-        match create_new(path, text.as_bytes()) {
-            Ok(()) => return Ok(()),
+        match create_new(path, &text) {
+            Ok(()) => return Ok(None),
             Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
                 // Gone between the two calls: another window just let go, or took it over.
-                let Ok(seen) = std::fs::read(path) else { continue };
+                let seen = match std::fs::read(path) {
+                    Ok(seen) => seen,
+                    Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
+                    Err(e) => return Err(e),
+                };
                 match serde_json::from_slice::<Lock>(&seen).ok() {
-                    Some(l) if l.pid == lock.pid => break,
-                    Some(l) if !l.is_stale() => return Err(l),
+                    Some(l) if !l.is_stale() => return Ok(Some(l)),
                     _ => take_stale(path, &seen),
                 }
             }
-            Err(e) => {
-                eprintln!("Rain: creating {} failed: {e}", path.display());
-                break;
-            }
+            Err(e) => return Err(e),
         }
         std::thread::sleep(Duration::from_millis(10 * attempt));
     }
-    if let Some(l) = read_lock(path).filter(|l| l.pid != lock.pid && !l.is_stale()) {
-        return Err(l);
-    }
-    if let Err(e) = rain_comments::store::write_atomic(path, text.as_bytes()) {
-        eprintln!("Rain: writing {} failed: {e}", path.display());
-    }
-    private(path);
-    Ok(())
+    Err(io::Error::new(
+        io::ErrorKind::WouldBlock,
+        format!("could not acquire {}", path.display()),
+    ))
 }
 
 /// Removes the lock at `path` only while it still holds `seen`, the lock judged stale, and only
@@ -139,23 +135,20 @@ fn create_new(path: &Path, bytes: &[u8]) -> io::Result<()> {
     let mut tmp = path.as_os_str().to_owned();
     tmp.push(format!(".{}.{}.tmp", std::process::id(), TMP.fetch_add(1, Ordering::Relaxed)));
     let tmp = PathBuf::from(tmp);
-    std::fs::write(&tmp, bytes)?;
-    private(&tmp);
-    let linked = std::fs::hard_link(&tmp, path);
-    let _ = std::fs::remove_file(&tmp);
-    linked
-}
-
-/// The lock holds the window's token: readable by its owner only (Windows: the per-user data
-/// folder already is).
-fn private(path: &Path) {
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    // The token must be private from creation, including while the temp file is written.
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
     }
-    #[cfg(not(unix))]
-    let _ = path;
+    let mut file = options.open(&tmp)?;
+    let written = file.write_all(bytes);
+    drop(file);
+    let linked = written.and_then(|()| std::fs::hard_link(&tmp, path));
+    let _ = std::fs::remove_file(&tmp);
+    linked
 }
 
 /// Removes the lock only while it still names this process and port, so a window that took the
@@ -352,7 +345,7 @@ mod tests {
                     let (path, barrier) = (path.clone(), barrier.clone());
                     std::thread::spawn(move || {
                         barrier.wait();
-                        acquire_as(&path, &l).is_ok()
+                        acquire_as(&path, &l).unwrap().is_none()
                     })
                 })
                 .collect();

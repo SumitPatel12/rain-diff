@@ -152,17 +152,17 @@ fn rewrite_is_outdated_then_addressed_after_an_agent_reply() {
     ops::mark_outdated(&mut s, &set(vec![added("src/a.rs", &["a", "b", "c2", "d", "e"])]));
     let t = ops::thread(&s, &id).unwrap();
     assert_eq!((t.placement(), t.outdated), (AnchorState::Outdated, true));
-    assert!(!ops::addressed_suggested(t) && !ops::waiting_on_user(t, "sumit"));
+    assert!(!ops::addressed_suggested(t) && !ops::waiting_on_user(t, "reviewer"));
 
     ops::reply(&mut s, &id, "Fixed in the next commit.", Some("claude"));
     let t = ops::thread(&s, &id).unwrap();
-    assert!(ops::addressed_suggested(t) && ops::waiting_on_user(t, "sumit"));
+    assert!(ops::addressed_suggested(t) && ops::waiting_on_user(t, "reviewer"));
     assert_eq!(t.state, ThreadState::Open, "a suggestion, never applied by itself");
 
     assert!(ops::confirm_addressed(&mut s, &id));
     let t = ops::thread(&s, &id).unwrap();
     assert_eq!(t.state, ThreadState::Addressed);
-    assert!(!ops::waiting_on_user(t, "sumit"));
+    assert!(!ops::waiting_on_user(t, "reviewer"));
 }
 
 #[test]
@@ -559,7 +559,7 @@ fn imports_snapshot_against_the_loaded_diff_or_become_file_level() {
     assert_eq!(a.status, AnswerStatus::Answered);
     assert_eq!(a.message_id.as_deref(), Some(s.threads[2].messages[1].id.as_str()));
     assert!(
-        ops::waiting_on_user(&s.threads[2], "sumit"),
+        ops::waiting_on_user(&s.threads[2], "reviewer"),
         "an answered question waits on the user"
     );
 }
@@ -572,7 +572,7 @@ fn states_keep_history_and_leave_default_readback() {
     assert!(ops::resolve(&mut s, &id));
     assert!(!ops::resolve(&mut s, &id));
     assert_eq!(s.threads.len(), 2, "resolve never deletes");
-    assert!(!ops::waiting_on_user(&s.threads[0], "sumit"));
+    assert!(!ops::waiting_on_user(&s.threads[0], "reviewer"));
     assert!(!rain_comments::comments_json_string(&s, None).contains(&id));
     assert!(rain_comments::comments_json_string_with(&s, None, true).contains(&id));
     assert!(!rain_comments::comments_output(&s, None).contains("L1"));
@@ -589,13 +589,13 @@ fn states_keep_history_and_leave_default_readback() {
     let t = ops::thread(&s, &other).unwrap();
     assert_eq!(t.state_sha.as_deref(), Some("abc123"));
     assert!(
-        ops::waiting_on_user(t, "sumit"),
+        ops::waiting_on_user(t, "reviewer"),
         "the agent's addressed waits for the user's confirm"
     );
     assert!(ops::confirm_addressed(&mut s, &other));
     let t = ops::thread(&s, &other).unwrap();
     assert_eq!(t.state_sha.as_deref(), Some("abc123"));
-    assert!(!ops::waiting_on_user(t, "sumit"));
+    assert!(!ops::waiting_on_user(t, "reviewer"));
 }
 
 #[test]

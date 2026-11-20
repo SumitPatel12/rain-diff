@@ -152,7 +152,7 @@ Fixture tiers write a seeded scratch repo to `fixtures/gen/<tier>/` (ignored); `
 
 ## License
 
-Copyright (C) 2026 Sumit Patel.
+Copyright (C) 2026 Rain contributors.
 
 Rain is licensed under the GNU Affero General Public License, version 3 only (`AGPL-3.0-only`); see
 [LICENSE](LICENSE).

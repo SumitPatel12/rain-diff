@@ -210,12 +210,15 @@ pub struct App {
 
 impl App {
     pub fn new(launch: Launch, shared: Arc<Shared>, session_dir: Option<PathBuf>, settings_path: Option<PathBuf>) -> App {
+        let headless = rune::is_headless();
         let (settings, settings_path, settings_error) = match settings_path.as_deref().map(Settings::try_load) {
             Some(Ok(s)) => (s, settings_path, None),
             // A broken hand edit is reported and left alone rather than replaced by the defaults.
             Some(Err(e)) => (Settings::default(), None, Some(format!("settings ignored: {e}"))),
             None => (Settings::default(), None, None),
         };
+        // Scenes run after construction: suppress even the initial migration and autosave.
+        let settings_path = settings_path.filter(|_| !headless);
         if let Some(e) = &settings_error {
             eprintln!("Rain: {e}");
         }
@@ -228,7 +231,7 @@ impl App {
                 let loaded = if launch.clean {
                     Session::default()
                 } else {
-                    load_session(path).unwrap_or_else(|e| {
+                    load_session(path, !headless && !launch.read_only).unwrap_or_else(|e| {
                         eprintln!("Rain: {e}");
                         session_error = Some(e);
                         Session::default()
@@ -246,7 +249,7 @@ impl App {
         }
         let autosave = session_path
             .clone()
-            .filter(|_| !launch.read_only && session_error.is_none())
+            .filter(|_| !headless && !launch.read_only && session_error.is_none())
             .map(|p| rain_comments::autosave(shared.clone(), p, std::time::Duration::from_millis(400)));
         let status = if launch.read_only {
             "Another Rain window has this session open: changes here won't be saved".to_owned()
@@ -1011,9 +1014,9 @@ impl App {
     }
 }
 
-/// The saved session at `path`; a corrupt one is moved aside first. `Err` means the file is
-/// still there unread, so nothing may autosave over it.
-fn load_session(path: &std::path::Path) -> Result<Session, String> {
+/// The saved session at `path`; a writer may move a corrupt one aside. `Err` means the file
+/// is still there unread, so nothing may autosave over it.
+fn load_session(path: &std::path::Path, recover: bool) -> Result<Session, String> {
     let mut tries = 0;
     let err = loop {
         match rain_comments::SessionFile::load(path) {
@@ -1026,7 +1029,7 @@ fn load_session(path: &std::path::Path) -> Result<Session, String> {
             Err(e) => break e,
         }
     };
-    if err.kind() != std::io::ErrorKind::InvalidData {
+    if !recover || err.kind() != std::io::ErrorKind::InvalidData {
         return Err(format!("{} could not be read ({err}); changes are not saved", path.display()));
     }
     let mut kept = path.with_extension("json.corrupt");

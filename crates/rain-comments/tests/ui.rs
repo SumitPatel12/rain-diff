@@ -307,7 +307,7 @@ fn focused_card_takes_one_key_dispositions_and_reply() {
 fn collapsed_card_is_one_line_and_expanded_shows_every_message() {
     let mut rt = runtime(1);
     let id = rt.state.s.threads[0].id.clone();
-    ops::reply(&mut rt.state.s, &id, "Agreed.", Some("sumit"));
+    ops::reply(&mut rt.state.s, &id, "Agreed.", Some("reviewer"));
     ops::reply(&mut rt.state.s, &id, "```suggestion\nfixed();\n```", Some("claude"));
     ops::reply(&mut rt.state.s, &id, "Thanks", None);
     rt.invalidate();

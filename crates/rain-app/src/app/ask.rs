@@ -189,7 +189,7 @@ impl App {
 
     /// One step of the state machine at `now`; true when anything visible changed.
     pub(crate) fn ask_tick_at(&mut self, now: Instant) -> bool {
-        if self.ask.spawner.is_none() {
+        if self.launch.read_only || rune::is_headless() || self.ask.spawner.is_none() {
             return false;
         }
         let mut changed = false;

@@ -321,19 +321,24 @@ impl Settings {
     }
 
     /// Writes only what changed since `base` (what this window last loaded or saved) over the
-    /// file as it is now, so another window's changes to other keys survive. A missing or
-    /// unparseable file gets every key.
+    /// file as it is now, so another window's changes to other keys survive. A missing file gets
+    /// every key; a malformed hand edit is reported and left untouched.
     pub fn save_merged(&self, base: &Settings, path: &Path) -> std::io::Result<()> {
         let mine = serde_json::to_value(self).map_err(std::io::Error::other)?;
         let was = serde_json::to_value(base).map_err(std::io::Error::other)?;
         let mut disk = match std::fs::read(path) {
-            Ok(b) => serde_json::from_slice::<serde_json::Value>(&b)
-                .ok()
-                .filter(serde_json::Value::is_object)
-                .unwrap_or_else(|| mine.clone()),
+            Ok(b) => {
+                serde_json::from_slice::<serde_json::Value>(&b).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?
+            }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => mine.clone(),
             Err(e) => return Err(e),
         };
+        if !disk.is_object() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "settings must be a JSON object",
+            ));
+        }
         merge_changes(&mut disk, &was, &mine);
         let bytes = serde_json::to_vec_pretty(&disk).map_err(std::io::Error::other)?;
         rain_comments::store::write_atomic(path, &bytes)
@@ -404,6 +409,14 @@ mod tests {
         let text = std::fs::read_to_string(&path).unwrap();
         assert!(text.contains("fromANewerBuild") && text.contains(r#""theme": "dark""#), "{text}");
         assert_eq!(Settings::load(&path).code_size, CodeSize::S);
+        for invalid in [r#"{"editor":"my-editor",}"#, "[]", "null"] {
+            std::fs::write(&path, invalid).unwrap();
+            let error = c
+                .save_merged(&back, &path)
+                .expect_err("a broken hand edit must survive a later save");
+            assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), invalid);
+        }
         let _ = std::fs::remove_dir_all(dir);
     }
 

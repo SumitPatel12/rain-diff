@@ -10,7 +10,7 @@ fn main() {
     res.set_icon(icon)
         .set("ProductName", "Rain")
         .set("FileDescription", "Rain — code review")
-        .set("CompanyName", "Sumit Patel")
+        .set("CompanyName", "Rain contributors")
         .set("InternalName", "Rain")
         .set("OriginalFilename", "Rain.exe");
     if let Err(e) = res.compile() {

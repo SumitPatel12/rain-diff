@@ -67,7 +67,7 @@ What was already safe:
 - Paths are absolute, so none starts with `-`.
 
 What was broken:
-- cmd expands `%NAME%` even inside quotes, and has no escape for it on a `/C` line. A repo file `a%USERNAME%.cs` opened `asumit.cs`.
+- cmd expands `%NAME%` even inside quotes, and has no escape for it on a `/C` line. For a user named `reviewer`, a repo file `a%USERNAME%.cs` opened `areviewer.cs`.
 - `!` is expanded the same way when delayed expansion is on in the registry.
 
 This was not code execution: `:` is illegal in file names, so substring and replace expansions can't be formed.

@@ -3,7 +3,7 @@
 ==================================================
 src/app.ts:L2
 F1 issue (blocking): this throws when `items` is empty.
-Reply 1 (sumit)
+Reply 1 (reviewer)
 Agreed, will guard it.
 Reply 2 (Unknown)
 Done in the next round.

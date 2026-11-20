@@ -166,7 +166,7 @@ fn span_and_disposition_lines_are_additive() {
         content: "total =".into(),
         ..CodeSnapshot::default()
     };
-    let id = ops::add_thread(&mut s, "server", "src/a.ts", span, "Rename this.", Some("sumit"), Some(snap));
+    let id = ops::add_thread(&mut s, "server", "src/a.ts", span, "Rename this.", Some("reviewer"), Some(snap));
     ops::set_disposition(&mut s, &id, Some(Disposition::Ask));
     let out = comments_output(&s, Some("server"));
     assert!(
@@ -329,9 +329,9 @@ fn ops_bump_the_version_only_on_change() {
         None,
     );
     assert_eq!(s.version, 1);
-    assert!(ops::waiting_on_user(&s.threads[0], "sumit"));
+    assert!(ops::waiting_on_user(&s.threads[0], "reviewer"));
     let m = ops::reply(&mut s, &id, "y", None).unwrap();
-    assert!(!ops::waiting_on_user(&s.threads[0], "sumit"));
+    assert!(!ops::waiting_on_user(&s.threads[0], "reviewer"));
     assert_eq!(s.version, 2);
     assert!(!ops::edit_message(&mut s, &id, &m, "y"));
     assert!(ops::edit_message(&mut s, &id, &m, "z"));

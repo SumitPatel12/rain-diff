@@ -126,6 +126,7 @@ mod tests {
             in_flight: Default::default(),
             token: String::new(),
             read_only: None,
+            stopping: Default::default(),
         }
     }
 

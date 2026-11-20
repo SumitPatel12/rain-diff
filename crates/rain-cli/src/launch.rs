@@ -57,12 +57,13 @@ fn current_branch(dir: &Path) -> Option<String> {
 /// `<repo folder>-<branch>` (or `-<target>` when the target names a revision other than HEAD), so
 /// two repos, or two stories in one repo, never share a session file by accident. What else picks
 /// the diff follows, so a different diff never reuses a window: `-uncommitted`, `-working` or
-/// `-staged` for those targets, then `-<hash>` of the base, `--merge-base`,
-/// `--include-untracked` and the other repos when any differs from a plain `rain open <target>`.
+/// `-staged` for those targets, then a stable hash of the full checkout paths and diff options.
+/// Explicit session names are unchanged; older automatic sessions can still be opened by name.
 pub fn default_session(o: &OpenArgs, dirs: &[PathBuf], target: &str, base: &str) -> String {
     if let Some(f) = o.fixture.as_deref() {
         let stem = f.file_stem().map_or_else(|| "fixture".into(), |s| s.to_string_lossy().into_owned());
-        return sanitize(&format!("fixture-{stem}"));
+        let path = absolute(f);
+        return sanitize(&format!("fixture-{stem}-{:016x}", fnv1a(path.to_string_lossy().as_bytes())));
     }
     let dir = dirs.first().map_or(Path::new("."), PathBuf::as_path);
     let folder = folder_name(dir).unwrap_or_else(|| "rain".into());
@@ -80,15 +81,18 @@ pub fn default_session(o: &OpenArgs, dirs: &[PathBuf], target: &str, base: &str)
             _ => "uncommitted",
         });
     }
-    let plain = base == default_base(target) && !o.merge_base && !o.include_untracked && dirs.len() == 1;
-    if !plain {
-        let mut spec = format!("{base}\0{}\0{}", o.merge_base, o.include_untracked);
-        for d in &dirs[1..] {
-            spec.push('\0');
-            spec.push_str(&absolute(d).to_string_lossy());
-        }
-        id.push_str(&format!("-{:08x}", fnv1a(spec.as_bytes()) as u32));
+    let mut spec = format!(
+        "{target}\0{base}\0{}\0{}\0{}\0{}",
+        o.merge_base,
+        o.include_untracked,
+        o.ignores_whitespace(),
+        o.context
+    );
+    for d in dirs {
+        spec.push('\0');
+        spec.push_str(&absolute(d).to_string_lossy());
     }
+    id.push_str(&format!("-{:016x}", fnv1a(spec.as_bytes())));
     sanitize(&id)
 }
 
@@ -391,12 +395,12 @@ mod tests {
         let server = [PathBuf::from("C:/src/acme-server")];
         let plain = OpenArgs::default();
         let s = default_session(&plain, &server, "feature/ACME-1", "feature/ACME-1^");
-        assert_eq!(s, "acme-server-feature_ACME-1");
+        assert!(s.starts_with("acme-server-feature_ACME-1-"));
         let fixture = OpenArgs {
             fixture: Some("fixtures/m.patch".into()),
             ..OpenArgs::default()
         };
-        assert_eq!(default_session(&fixture, &[PathBuf::from(".")], "HEAD", "HEAD^"), "fixture-m");
+        assert!(default_session(&fixture, &[PathBuf::from(".")], "HEAD", "HEAD^").starts_with("fixture-m-"));
     }
 
     #[test]
@@ -417,7 +421,7 @@ mod tests {
             build_launch(&o).session
         };
         let feature = id(&["feature/x"]);
-        assert_eq!(feature, "acme-server-feature_x", "a plain open keeps its name");
+        assert!(feature.starts_with("acme-server-feature_x-"), "the name stays readable");
         assert_eq!(id(&["feature/x", "feature/x^"]), feature, "the default base spelled out");
         let all = [
             feature,
@@ -436,8 +440,41 @@ mod tests {
                 assert_ne!(a, b);
             }
         }
-        assert!(all[7].ends_with("-uncommitted"), "{}", all[7]);
+        assert!(all[7].contains("-uncommitted-"), "{}", all[7]);
         assert_eq!(id(&["feature/x", "origin/development", "--merge-base"]), all[2], "stable");
+    }
+
+    #[test]
+    fn automatic_sessions_distinguish_paths_and_diff_options() {
+        let plain = OpenArgs {
+            repos: vec![PathBuf::from("/one/repo")],
+            target: Some("feature".into()),
+            ..OpenArgs::default()
+        };
+        let mut variants = vec![plain.clone(); 5];
+        variants[1].repos = vec![PathBuf::from("/two/repo")];
+        variants[2].ignore_whitespace = true;
+        variants[3].context = plain.context + 1;
+        variants[4].target = Some("feature/other".into());
+        let ids: Vec<_> = variants.iter().map(|o| build_launch(o).session).collect();
+        for (i, id) in ids.iter().enumerate() {
+            for other in &ids[i + 1..] {
+                assert_ne!(id, other, "different launch inputs must not silently reuse a window");
+            }
+        }
+        let fixture = |path: &str| {
+            build_launch(&OpenArgs {
+                fixture: Some(path.into()),
+                ..OpenArgs::default()
+            })
+            .session
+        };
+        assert_ne!(fixture("/one/review.patch"), fixture("/two/review.patch"));
+        let explicit = OpenArgs {
+            session: Some("chosen".into()),
+            ..plain
+        };
+        assert_eq!(build_launch(&explicit).session, "chosen");
     }
 
     #[test]

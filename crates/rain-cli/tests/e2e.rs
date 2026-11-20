@@ -56,6 +56,37 @@ fn json(o: &Output) -> serde_json::Value {
 }
 
 #[test]
+#[ignore = "needs cargo build -p rain and a headless GPU driver"]
+fn headless_runs_preserve_settings_and_sessions() {
+    let dir = std::env::temp_dir().join(format!("rain-headless-test-{}", std::process::id()));
+    let data = dir.join("Rain");
+    let sessions = data.join("sessions");
+    std::fs::create_dir_all(&sessions).unwrap();
+    let settings = data.join("settings.json");
+    let file = sessions.join("headless-test.json");
+    let settings_text = r#"{"splitView":false,"editor":"keep-my-editor"}"#;
+    let session_text = r#"{"id":"headless-test","version":17}"#;
+    std::fs::write(&settings, settings_text).unwrap();
+    std::fs::write(&file, session_text).unwrap();
+    for scene in [None, Some("session")] {
+        let mut cmd = Command::new(exe());
+        cmd.env("LOCALAPPDATA", &dir)
+            .arg("--fixture")
+            .arg(root().join("fixtures/m.patch"))
+            .args(["--session", "headless-test", "--frames", "3", "--size", "900x600", "--tree"])
+            .arg(dir.join("tree.json"));
+        if let Some(scene) = scene {
+            cmd.args(["--scene", scene]);
+        }
+        run(&mut cmd);
+        assert_eq!(std::fs::read_to_string(&settings).unwrap(), settings_text);
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), session_text);
+        assert_eq!(std::fs::read_dir(&sessions).unwrap().count(), 1, "no lock or tour sidecar");
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 #[ignore = "launches the app window"]
 fn agent_drives_a_running_window() {
     let repo = root().join("fixtures/gen/s/repo");

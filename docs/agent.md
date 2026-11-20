@@ -33,7 +33,7 @@ Repeat 5–8 until `review get` shows a round with the verdict you need.
 | `<target>` / `<base>` | a commit-ish, or `.` (all uncommitted), `working` (unstaged), `staged`; base defaults to the target's parent (`HEAD` for `.`/`staged`) |
 | `--merge-base` | diff against `git merge-base <target> <base>` |
 | `--repo <dir>` | a repository to show; repeat for one window over several repos (default: the current folder) |
-| `--session <id>` | session name; threads, viewed state and the reading place persist in `%LOCALAPPDATA%\Rain\sessions\<id>.json`. Default `<repo folder>-<branch or target>`, then `-uncommitted`/`-working`/`-staged` for those targets, then `-<8 hex>` when the base, `--merge-base`, `--include-untracked` or extra `--repo`s differ from a plain `rain open <target>`, so a different diff never reuses a window. Pass `--session` to choose the name yourself (it is used as given) |
+| `--session <id>` | session name; threads, viewed state and the reading place persist in `%LOCALAPPDATA%\Rain\sessions\<id>.json`. Default `<repo folder>-<branch or target>`, then `-uncommitted`/`-working`/`-staged` for those targets, then `-<16 hex>` from the absolute repo paths, target, base, merge-base, untracked, whitespace and context options. Fixtures use `fixture-<stem>-<16 hex>` from their absolute path. Pass `--session` to choose the name yourself or reopen an older automatic name |
 | `--last` | reopen the most recently saved session as it was opened |
 | `--background` | start detached, print the handshake and exit |
 | `--port <n>` | preferred port (the next free one is used when taken) |

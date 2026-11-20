@@ -444,14 +444,24 @@ fn a_read_only_window_never_saves_and_says_so() {
         read_only: true,
         ..Launch::default()
     };
-    let mut a = App::new(launch, Arc::new(Shared::default()), Some(dir.clone()), None);
+    let mut a = App::new(launch.clone(), Arc::new(Shared::default()), Some(dir.clone()), None);
     a.load_now();
     assert!(a.autosave.is_none());
     assert!(a.status.contains("won't be saved"), "{}", a.status);
     a.set_viewed(0, true);
     seed_threads(&mut a);
     drop(a);
-    assert!(!rain_comments::SessionFile::path_in(&dir, "held").exists());
+    let file = rain_comments::SessionFile::path_in(&dir, "held");
+    assert!(!file.exists());
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(&file, b"unfinished hand edit").unwrap();
+    let b = App::new(launch, Arc::new(Shared::default()), Some(dir), None);
+    drop(b);
+    assert_eq!(std::fs::read(&file).unwrap(), b"unfinished hand edit");
+    assert!(
+        !file.with_extension("json.corrupt").exists(),
+        "only the owner may recover a session"
+    );
 }
 
 #[test]

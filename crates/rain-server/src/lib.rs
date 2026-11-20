@@ -5,8 +5,8 @@ use std::collections::BTreeMap;
 use std::io::{self, Read};
 use std::net::TcpListener;
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, RwLock};
 
 use rain_core::{Session, Shared};
 use serde::Serialize;
@@ -58,24 +58,31 @@ pub struct ServerHandle {
     /// [`TOKEN_HEADER`] may queue a question for the window's answerer.
     pub token: String,
     servers: Vec<Arc<Server>>,
+    /// Mutations hold a read guard through persistence; shutdown takes the write guard.
+    stopping: Arc<RwLock<bool>>,
 }
 
 impl ServerHandle {
     /// Stops serving, runs `last` (the final save), then lets go of the lock, so a window opened
     /// next can't read the session file before that save lands.
     pub fn stop_then(self, last: impl FnOnce()) {
+        self.stop();
+        last();
+    }
+
+    fn stop(&self) {
+        // Wait for accepted mutations, not clients still uploading or long-polling events.
+        // Once set, even a request already handed to a worker cannot change the session.
+        *self.stopping.write().unwrap_or_else(|e| e.into_inner()) = true;
         for s in &self.servers {
             s.unblock();
         }
-        last();
     }
 }
 
 impl Drop for ServerHandle {
     fn drop(&mut self) {
-        for s in &self.servers {
-            s.unblock();
-        }
+        self.stop();
         if let Some(path) = &self.lock {
             routes::lock::remove(path, self.port);
         }
@@ -101,7 +108,7 @@ pub fn start_with(shared: Arc<Shared>, opts: ServerOptions) -> io::Result<Server
     let mut session_file = opts.session_file;
     let mut read_only = None;
     if let Some(path) = &lock
-        && let Err(live) = routes::lock::acquire(path, port, &token)
+        && let Some(live) = routes::lock::acquire(path, port, &token)?
     {
         eprintln!(
             "Rain: another window (pid {}, port {}) holds {}; this one won't save the session",
@@ -119,6 +126,15 @@ pub fn start_with(shared: Arc<Shared>, opts: ServerOptions) -> io::Result<Server
         lock = None;
         session_file = None;
     }
+    let running = ServerHandle {
+        port,
+        url: format!("http://localhost:{port}"),
+        lock: lock.clone(),
+        read_only: read_only.is_some(),
+        token: token.clone(),
+        servers,
+        stopping: Arc::default(),
+    };
     let ctx = Arc::new(Ctx {
         port,
         shared,
@@ -128,8 +144,9 @@ pub fn start_with(shared: Arc<Shared>, opts: ServerOptions) -> io::Result<Server
         in_flight: AtomicUsize::new(0),
         token: token.clone(),
         read_only: read_only.clone(),
+        stopping: running.stopping.clone(),
     });
-    for server in &servers {
+    for server in &running.servers {
         let server = server.clone();
         let ctx = ctx.clone();
         std::thread::Builder::new().name(format!("rain-http-{port}")).spawn(move || {
@@ -150,14 +167,7 @@ pub fn start_with(shared: Arc<Shared>, opts: ServerOptions) -> io::Result<Server
             }
         })?;
     }
-    Ok(ServerHandle {
-        port,
-        url: format!("http://localhost:{port}"),
-        lock,
-        read_only: read_only.is_some(),
-        token,
-        servers,
-    })
+    Ok(running)
 }
 
 /// 128 unpredictable bits as hex: std seeds each `RandomState` from the OS's random source.
@@ -349,6 +359,7 @@ pub(crate) struct Ctx {
     token: String,
     /// Why the session can't be changed here, when another window holds it.
     pub(crate) read_only: Option<String>,
+    stopping: Arc<RwLock<bool>>,
 }
 
 /// One of [`MAX_IN_FLIGHT`] request threads; given back on drop.
@@ -490,6 +501,18 @@ fn handle(ctx: &Ctx, mut req: Request) {
         },
         _ => None,
     };
+    let serving = ctx.stopping.read().unwrap_or_else(|e| e.into_inner());
+    if *serving {
+        drop(serving);
+        return respond(req, error(503, "The window is closing"));
+    }
+    // GET/HEAD do not persist session changes; in particular, a long poll must not hold up exit.
+    let serving = if matches!(req.method(), Method::Get | Method::Head) {
+        drop(serving);
+        None
+    } else {
+        Some(serving)
+    };
     let reply = routes::route(
         ctx,
         &Req {
@@ -501,6 +524,7 @@ fn handle(ctx: &Ctx, mut req: Request) {
             trusted,
         },
     );
+    drop(serving);
     respond(req, reply);
 }
 

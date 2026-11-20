@@ -117,7 +117,7 @@ fn view(d: &Demo, cx: &mut Cx<Demo>) -> El {
         text(format!(
             "{} threads · waiting on you: {}",
             d.s.threads.len(),
-            ops::waiting_count(&d.s, "sumit")
+            ops::waiting_count(&d.s, "reviewer")
         ))
         .font(k.ty.ui_medium)
         .color(k.c.text_muted),
