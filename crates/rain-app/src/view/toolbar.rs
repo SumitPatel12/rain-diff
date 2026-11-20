@@ -7,7 +7,7 @@ use rune::{El, Tx, el, rich, row, text};
 use rune_kit::{Kit, Menu, MenuEntry, MenuItem, Placement};
 
 use super::icons;
-use super::ui::{Ghost, primary};
+use super::ui::{Activate, Ghost, primary};
 use crate::app::{App, MoreSub};
 use crate::settings::{Density, Theme};
 use crate::theme::{Look, TYPE, radius, space};
@@ -263,7 +263,7 @@ fn more_menu(s: &App, k: &Kit, layer: &mut Vec<El>) -> El {
         .on(s.menus.more)
         .build(k)
         .expanded(s.menus.more)
-        .on_press(|s: &mut App| {
+        .on_activate(|s: &mut App| {
             let open = !s.menus.more;
             s.menus.close();
             s.menus.more = open;
@@ -336,7 +336,7 @@ pub(super) fn top_bar(s: &App, look: &Look, layer: &mut Vec<El>) -> El {
         ))
         .build(k)
         .expanded(list_open)
-        .on_press(|s: &mut App| s.toggle_list());
+        .on_activate(|s: &mut App| s.toggle_list());
     row()
         .key("toolbar")
         .w_full()
@@ -355,6 +355,6 @@ pub(super) fn top_bar(s: &App, look: &Look, layer: &mut Vec<El>) -> El {
         .child(
             primary("finish-review", "Finish review…", k)
                 .help(crate::keys::tip("Verdict and summary for this round", Command::FinishReview))
-                .on_press_tx(|s: &mut App, tx: &mut Tx| s.finish_review(tx)),
+                .on_activate_tx(|s: &mut App, tx: &mut Tx| s.finish_review(tx)),
         )
 }

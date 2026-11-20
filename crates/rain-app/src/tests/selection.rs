@@ -232,9 +232,11 @@ fn a_line_range_shows_the_toolbar_at_its_last_row() {
         bar[1] >= last[1] + last[3] && bar[1] - (last[1] + last[3]) < 20.0,
         "under the last row: {bar:?} vs {last:?}"
     );
+    let half = rt.state.active().layout(0) == rain_diffview::Layout::Split;
+    let side_left = row[0] + if half { row[2] / 2.0 } else { 0.0 };
     assert!(
-        (row[0] + row[2] - (bar[0] + bar[2]) - 16.0).abs() < 4.0,
-        "at the row's right end: {bar:?} in {row:?}"
+        bar[0] >= side_left && bar[0] < last[0],
+        "by the selected side's line numbers, not the row's far end: {bar:?} in {row:?}, code at {last:?}"
     );
     let clipboard = rune::clipboard::memory();
     rt.use_clipboard(&clipboard);
@@ -353,4 +355,47 @@ fn with_a_selection_the_menu_acts_on_it() {
     assert!(matches!(c.anchor, Anchor::Span { start_line, .. } if start_line == a));
     assert_eq!(c.preview, quoted);
     assert_eq!(rt.state.composer_ui.mode, ComposerMode::Question);
+}
+
+#[test]
+fn the_gutter_question_mark_asks_about_its_line_in_both_layouts() {
+    for size in [(1600.0, 1000.0), (1000.0, 900.0)] {
+        let mut rt = sized_runtime(app(story(), true), size);
+        let n = added_lines(&rt, 12)[0];
+        let c = code(&rt, n).rect;
+        rt.pointer_move(c[0] + 30.0, c[1] + c[3] / 2.0);
+        settle(&mut rt);
+        let row = {
+            let a = rt.state.active();
+            a.row_of_line(0, LineRef::new(Side::New, n))
+                .and_then(|r| a.row_key(r as usize))
+                .unwrap()
+        };
+        let ask = rt
+            .elements()
+            .into_iter()
+            .find(|e| !e.exiting && e.key.as_deref() == Some("ask") && e.path.contains(&format!("/{row}/")))
+            .unwrap_or_else(|| panic!("{size:?}: the hovered line shows ?"));
+        let (x, y) = (ask.rect[0] + ask.rect[2] / 2.0, ask.rect[1] + ask.rect[3] / 2.0);
+        rt.pointer_move(x, y);
+        tick(&mut rt);
+        rt.pointer_down(x, y);
+        rt.pointer_up(x, y);
+        settle(&mut rt);
+        let composer = rt
+            .state
+            .composer
+            .clone()
+            .unwrap_or_else(|| panic!("{size:?}: ? opens the composer"));
+        assert_eq!(composer.anchor, Anchor::Line { side: Side::New, line: n }, "{size:?}");
+        assert_eq!(rt.state.composer_ui.mode, ComposerMode::Question, "{size:?}");
+        assert!(
+            live(&rt, "composer") && !live(&rt, "sel-toolbar"),
+            "{size:?}: under the line, no toolbar"
+        );
+        assert!(
+            rt.state.active().selection().is_none(),
+            "{size:?}: the line number under ? was not pressed"
+        );
+    }
 }

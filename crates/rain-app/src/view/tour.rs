@@ -6,7 +6,7 @@ use rune::{Cursor, El, Tx, col, el, row, text};
 use rune_kit::{ButtonVariant, Checkbox, Kit};
 
 use super::icons;
-use super::ui::{outline, sr};
+use super::ui::{Activate, outline, sr};
 use super::{STATUS_HEIGHT, TOOLBAR_HEIGHT, muted};
 use crate::app::{App, FoundBy, TourStage};
 use crate::theme::{TYPE, radius};
@@ -79,7 +79,7 @@ fn pill(t: impl Into<String>, key: &str, k: &Kit) -> El {
 fn button(label: &str, key: &str, variant: ButtonVariant, k: &Kit, f: impl Fn(&mut App, &mut Tx) + 'static) -> El {
     let (_, r) = sr(k);
     if variant != ButtonVariant::Contrast {
-        return outline(key.to_owned(), label.to_owned(), None, 26.0, k).on_press_tx(f);
+        return outline(key.to_owned(), label.to_owned(), None, 26.0, k).on_activate_tx(f);
     }
     k.interactive_with(
         row()
@@ -98,7 +98,7 @@ fn button(label: &str, key: &str, variant: ButtonVariant, k: &Kit, f: impl Fn(&m
         k.c.contrast_pressed,
     )
     .press_scale(0.97)
-    .on_press_tx(f)
+    .on_activate_tx(f)
 }
 
 fn start(s: &App, k: &Kit) -> El {
@@ -269,7 +269,7 @@ fn nav_button(nav: Nav, key: &str, cmd: rain_core::Command, k: &Kit, f: impl Fn(
     } else {
         b.child(word).child(chev)
     };
-    k.interactive(b).press_scale(0.97).on_press_tx(f)
+    k.interactive(b).press_scale(0.97).on_activate_tx(f)
 }
 
 /// "Findings at this step": a count while hidden, else who found what.

@@ -1,7 +1,7 @@
 //! The Conversation overlay (sections, filters, orphans), the agent's presence, `i`, and the
 //! toasts that say what the agent did.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use rain_comments::ops;
@@ -166,6 +166,8 @@ pub struct ConversationState {
     pub settled_open: bool,
     /// The orphan whose `Close…` reasons are showing.
     pub closing: Option<String>,
+    /// Threads whose latest comment shows whole rather than as one line.
+    pub expanded: BTreeSet<String>,
     /// The agent's presence as of the last poll.
     pub presence: Presence,
     pub toasts: Vec<AgentToast>,
@@ -334,6 +336,14 @@ impl App {
                     Some(ThreadState::Dismissed) => None,
                 }
             }
+        }
+    }
+
+    /// Shows a thread's latest comment whole, or back to its one line.
+    pub fn toggle_comment_expanded(&mut self, id: &str) {
+        let open = &mut self.conversation.expanded;
+        if !open.remove(id) {
+            open.insert(id.to_owned());
         }
     }
 

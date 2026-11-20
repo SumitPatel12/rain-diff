@@ -4,12 +4,13 @@
 
 use rain_core::FileTag;
 use rain_tree::sample::sample;
-use rain_tree::{TreeFilter, TreeState, TreeView};
+use rain_tree::{FileIcons, TreeFilter, TreeState, TreeView};
 use rune::{AppSpec, Cx, El, col, row, text};
 use rune_kit::Kit;
 
 struct App {
     tree: TreeState,
+    icons: FileIcons,
     status: String,
 }
 
@@ -18,13 +19,16 @@ fn init() -> App {
     let tree = TreeState::build(&s.files, &s.repos, &s.tags, |k| s.viewed.contains(k), &s.comments);
     App {
         tree,
+        icons: FileIcons::default(),
         status: "Click a file, tick a checkbox, or pick a chip".into(),
     }
 }
 
 fn view(s: &App, cx: &mut Cx<App>) -> El {
     let k = Kit::neutral(cx.system_dark());
+    s.icons.set_env(cx.env().scale, !cx.system_dark());
     let tree = TreeView::new(|s: &App| &s.tree, |s: &mut App| &mut s.tree)
+        .file_icons(|s: &App| &s.icons)
         .on_open(|s: &mut App, key, _| s.status = format!("open {key}"))
         .on_viewed(|s: &mut App, key, on, _| s.status = format!("{} {key}", if on { "viewed" } else { "unviewed" }))
         .on_mark_group_viewed(|s: &mut App, tag, _| s.status = format!("marked {} viewed", tag.label()))
@@ -84,6 +88,7 @@ fn main() {
                 )
             }),
         ],
+        setup: Some(|s, waker| s.icons.start(waker)),
         ..AppSpec::new("Rain tree", (1100.0, 800.0), init, view)
     });
 }

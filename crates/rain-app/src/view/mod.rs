@@ -37,6 +37,7 @@ use rune_kit::Kit;
 
 use crate::app::{App, Overlay, Phase};
 use crate::theme::{self, Look, Scheme, radius, space};
+use ui::Activate;
 
 /// The top bar's height; overlays start under it.
 const TOOLBAR_HEIGHT: f32 = space::TOP_BAR;
@@ -66,6 +67,7 @@ pub(crate) fn window_width(s: &App) -> f32 {
 pub fn view(s: &App, cx: &mut Cx<App>) -> El {
     let scheme = scheme_of(s, cx);
     s.seen_scheme.set(scheme);
+    s.file_icons.set_env(cx.env().scale, !scheme.is_dark());
     s.rest.calm.set(cx.is_reduced_motion());
     let look = theme::look(scheme);
     let k = &look.kit;
@@ -243,7 +245,7 @@ fn side_panel(o: Overlay, content: El, width: f32, look: &Look) -> El {
         .help("Close  Esc")
         .height(24.0)
         .build(k)
-        .on_press(move |s: &mut App| {
+        .on_activate(move |s: &mut App| {
             s.close_overlay(o);
         });
     let panel = col()
@@ -342,7 +344,7 @@ fn reader_pane(s: &App, look: &Look, cx: &mut Cx<App>) -> El {
                         .child(
                             ui::outline("error-reload", "Reload", None, 24.0, k)
                                 .help(crate::keys::tip("Reload", rain_core::Command::Reload))
-                                .on_press_tx(|s: &mut App, tx: &mut rune::Tx| s.reload_now(tx)),
+                                .on_activate_tx(|s: &mut App, tx: &mut rune::Tx| s.reload_now(tx)),
                         ),
                 ),
         )),

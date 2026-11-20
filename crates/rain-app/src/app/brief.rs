@@ -5,6 +5,7 @@
 use std::cell::RefCell;
 use std::collections::BTreeSet;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use rain_comments::ops::{self, ThreadExtra};
 use rain_core::brief::BriefDoc;
@@ -19,6 +20,13 @@ use rune::{TextEdit, Tx};
 use super::App;
 use super::layout::Overlay;
 use super::overview::{PeekState, ReaderTab};
+
+/// What the Overview's Ask button asks the attached agent for.
+const BRIEF_REQUEST: &str = "Write a brief for this review and set it with `rain brief set` (docs/agent.md §4).";
+/// How long an attached agent has to set a brief before a `brief-missing` event nudges it.
+pub const BRIEF_NUDGE_AFTER: Duration = Duration::from_secs(120);
+pub const NO_AGENT_FOR_BRIEF: &str =
+    "No agent is attached, so nobody can write the brief. Open the review from Claude Code with the rain skill, then ask again.";
 
 /// The composer's two modes: a review comment, or a question the agent answers inline.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -60,6 +68,13 @@ pub struct BriefState {
     pub hover_section: Option<String>,
     /// The next pending jump puts the reader back after a reload: it keeps the tab.
     pub(crate) restore_tab: bool,
+    /// The attached agent was asked for a brief that has not arrived yet.
+    pub asked: bool,
+    /// When the `brief-missing` nudge's clock started: an agent first seen attached, or the
+    /// last ask for a brief, which the nudge never follows sooner than its full wait.
+    nudge_from: Option<Instant>,
+    /// The nudge went out, or a brief arrived: it never goes out (again).
+    nudged: bool,
     /// Lines each file shows, from the last load.
     shown: Arc<Shown>,
     /// [`App::brief_check`] as of a mirror version; dropped by each load.
@@ -87,6 +102,58 @@ fn shows(shown: &Shown, key: &str, side: Side, (a, b): (u32, u32)) -> bool {
 impl App {
     pub fn brief_doc(&self) -> Option<&BriefDoc> {
         self.mirror.brief.as_ref()
+    }
+
+    /// The no-brief card's button: an `ask` event with `request: "brief"` and no thread, which
+    /// only the attached agent takes (the launcher answers threads, and can't set a brief).
+    pub fn ask_for_brief(&mut self) {
+        if !self.agent_attached() {
+            self.brief.asked = false;
+            self.status = NO_AGENT_FOR_BRIEF.into();
+            return;
+        }
+        self.shared.push_event(Event {
+            at: rain_comments::clock::now_iso(),
+            kind: EventKind::Ask,
+            data: serde_json::json!({ "request": "brief", "question": BRIEF_REQUEST }),
+            ..Event::default()
+        });
+        self.shared.notify_waiters();
+        self.brief.asked = true;
+        self.brief.nudge_from = Some(Instant::now());
+        self.status = "Asked the agent for a brief".into();
+    }
+
+    pub(crate) fn brief_nudge_poll(&mut self, tx: &mut Tx) {
+        if let Some(d) = self.brief_nudge_at(Instant::now()) {
+            tx.wake_after(d);
+        }
+    }
+
+    /// One `brief-missing` event, [`BRIEF_NUDGE_AFTER`] after an agent first attaches with no
+    /// brief set, or after the last ask for one went that long unanswered; never once a brief
+    /// arrives. Returns how long until it is due.
+    pub(crate) fn brief_nudge_at(&mut self, now: Instant) -> Option<Duration> {
+        if self.brief.nudged || self.brief_doc().is_some() {
+            self.brief.nudged = true;
+            return None;
+        }
+        if self.brief.nudge_from.is_none() && self.agent_attached() {
+            self.brief.nudge_from = Some(now);
+        }
+        let due = self.brief.nudge_from? + BRIEF_NUDGE_AFTER;
+        if now < due {
+            return Some(due - now);
+        }
+        self.shared.push_event(Event {
+            at: rain_comments::clock::now_iso(),
+            kind: EventKind::BriefMissing,
+            data: serde_json::json!({ "request": "brief", "question": BRIEF_REQUEST }),
+            ..Event::default()
+        });
+        self.shared.notify_waiters();
+        self.brief.nudged = true;
+        None
     }
 
     /// Keeps the facts and groups of a load, and installs the check `GET /api/brief` reports.

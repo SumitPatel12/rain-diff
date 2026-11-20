@@ -154,6 +154,7 @@ fn init() -> App {
 fn setup(s: &mut App, waker: rune::Waker) {
     let w = waker.clone();
     s.shared.set_wake(move || w());
+    s.file_icons.start(waker.clone());
     // A load already under way (the loading scene's) is left to finish.
     if s.phase != Phase::Ready && !s.loading_started() {
         s.start_loading(waker);

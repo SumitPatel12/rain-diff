@@ -116,7 +116,7 @@ if ($Mode -eq 'open') {
             if (-not (Test-Path $file)) { continue }
             $id = Get-RepoId $folder $doc $known
             $out = @(& $rain comment add "@$((Resolve-Path $file).Path)" --repo $id --session $Session 2>&1 | ForEach-Object { "$_" })
-            # A warning (e.g. a line outside the diff, stored file-level) exits non-zero but still imports.
+            # A warning (e.g. a reply with no matching thread) exits non-zero but still imports.
             $res = Get-JsonLine $out
             if (-not $res.success) { Write-Output "$folder  comments FAILED  $($out -join ' ')"; continue }
             Write-Output "$folder ($id)  comments sent $($res.count) (Rain skips ones it already has)$(if ($res.warnings) { "  warnings: $($res.warnings -join '; ')" })"

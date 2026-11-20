@@ -187,6 +187,19 @@ impl App {
         }
     }
 
+    /// Runs a jump the reader didn't ask for (a deferred goto, a restored place): an open Map
+    /// stays open, at its place among the overlays.
+    pub(crate) fn keep_map(&mut self, jump: impl FnOnce(&mut App)) {
+        let at = self.layout.overlays.iter().position(|o| *o == Overlay::Map);
+        jump(self);
+        if let Some(i) = at
+            && !self.layout.is_open(Overlay::Map)
+        {
+            let i = i.min(self.layout.overlays.len());
+            self.layout.overlays.insert(i, Overlay::Map);
+        }
+    }
+
     /// The Map body was laid out `w` points wide: a new width fits the diagram again.
     pub fn map_resized(&mut self, w: f32) {
         if (w - self.diagram.seen_width).abs() >= 1.0 {

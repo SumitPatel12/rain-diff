@@ -4,7 +4,7 @@
 use rain_comments::ui::mentions_claude;
 use rain_comments::{CardAction, ComposerMode, ops};
 use rain_core::diff::Side;
-use rain_core::{Anchor, AnchorState, Disposition, EventKind, Thread, ThreadKind};
+use rain_core::{Anchor, AnchorState, Disposition, EventKind, TargetKind, Thread, ThreadKind};
 use rain_diffview::{Annotation, LineRange, LineRef};
 use rune::{TextEdit, Tx};
 use serde_json::json;
@@ -28,9 +28,13 @@ impl App {
                 let (first, last) = t.anchor.lines();
                 [first, last].iter().all(|&n| ops::line_index(file, t.anchor.side(), n).is_some())
             });
-            if t.outdated || !shown {
-                self.unplaced.entry(f).or_default().push(t.id.clone());
-            } else {
+            if !t.outdated && shown {
+                all.push((f, t.anchor, t.id.clone()));
+                continue;
+            }
+            self.unplaced.entry(f).or_default().push(t.id.clone());
+            // Off the hunks, it still sits on its line, drawn once expanding opens that line.
+            if on_its_line(t) {
                 all.push((f, t.anchor, t.id.clone()));
             }
         }
@@ -50,7 +54,39 @@ impl App {
         }
     }
 
-    /// Unsent drafts on lines the diff shows, except the one the open composer is editing.
+    /// File `g`'s threads for its outside-the-diff strip: the unplaced ones, less those whose
+    /// line the diff on screen shows now that the context around it is open.
+    pub fn strip_threads(&self, g: usize) -> Vec<&Thread> {
+        let Some(ids) = self.unplaced.get(&g) else { return Vec::new() };
+        let local = self.local(g);
+        ids.iter()
+            .filter_map(|id| ops::thread(&self.mirror, id))
+            .filter(|t| {
+                let at = LineRef::new(t.anchor.side(), t.anchor.end_line());
+                !(on_its_line(t) && local.is_some_and(|l| self.active().shows_line(l, at)))
+            })
+            .collect()
+    }
+
+    /// A strip badge's press: unfolds thread `id` and, for one that sits on a line, opens the
+    /// context around that line and goes there.
+    pub fn show_off_diff(&mut self, id: &str, tx: &mut Tx) {
+        self.unfold(id);
+        let Some(t) = ops::thread(&self.mirror, id).filter(|t| on_its_line(t)).cloned() else {
+            return;
+        };
+        let Some(l) = self.file_of_thread(&t).and_then(|g| self.local(g)) else {
+            return;
+        };
+        let at = LineRef::new(t.anchor.side(), t.anchor.end_line());
+        if self.active_mut().reveal_line(l, at) && self.active().needs_texts(l) {
+            self.fetch_texts(l);
+        }
+        self.goto_thread(id, tx);
+    }
+
+    /// Unsent drafts on their lines (drawn where the diff shows them), except the one the open
+    /// composer is editing.
     fn draft_annotations(&self) -> Vec<(usize, Anchor, String)> {
         let open = self.composer.as_ref().map(|c| (c.file, c.anchor));
         self.mirror
@@ -64,8 +100,7 @@ impl App {
                         .then(|| self.index_of(&rain_core::paths::join(&self.repos[0].id, &d.file_path)))
                         .flatten()
                 })?;
-                let file = self.diff.files().get(g)?;
-                ops::line_index(file, d.anchor.side(), d.anchor.end_line())?;
+                self.diff.files().get(g)?;
                 (open != Some((g, d.anchor))).then(|| (g, d.anchor, format!("{}{i}", App::DRAFT_PREFIX)))
             })
             .collect()
@@ -597,6 +632,11 @@ impl App {
         tx.copy(text);
         self.status = format!("Copied {n} thread(s) for Claude");
     }
+}
+
+/// A line thread still on its own line: neither outdated nor orphaned, nor about the whole file.
+fn on_its_line(t: &Thread) -> bool {
+    matches!(t.placement(), AnchorState::Placed | AnchorState::Moved) && t.target_kind() == TargetKind::Line
 }
 
 /// The side an overview reference's `revision` points at.

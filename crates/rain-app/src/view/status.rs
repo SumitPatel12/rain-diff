@@ -7,7 +7,7 @@ use rune::{Cursor, El, Tx, row, text};
 use rune_kit::{Menu, MenuItem, Placement};
 
 use super::icons;
-use super::ui::{kbd, sr};
+use super::ui::{Activate, kbd, sr};
 use crate::app::App;
 use crate::settings::ViewLayout;
 use crate::theme::{Look, TYPE, radius, space};
@@ -191,7 +191,7 @@ fn layout_menu(s: &App, look: &Look, layer: &mut Vec<El>) -> El {
                 .child(text(shown).font(TYPE.small).color(ink).a11y_hidden())
                 .child(icons::draw(&icons::CHEV_D, 14.0, ink)),
         )
-        .on_press(|s: &mut App| {
+        .on_activate(|s: &mut App| {
             let open = !s.menus.layout;
             s.menus.close();
             s.menus.layout = open;

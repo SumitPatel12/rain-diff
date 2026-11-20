@@ -9,6 +9,8 @@ use super::*;
 use crate::app::{ComposeMode, PeekTarget, ReaderTab};
 
 const STORY_BRIEF: &str = include_str!("../../../../fixtures/brief/story.json");
+/// A window narrow enough that the no-brief card can't fit its title and ask on one line.
+const NARROW_CARD: (f32, f32) = (600.0, 900.0);
 
 fn story_brief() -> BriefDoc {
     let mut d: BriefDoc = serde_json::from_str(STORY_BRIEF).unwrap();
@@ -423,4 +425,239 @@ fn tour_steps_follow_the_brief() {
     assert_eq!(steps.len(), 6, "one per how[] cite without a tour");
     assert_eq!(steps[0].key.as_deref(), Some("server/src/Api/VouchersController.cs"));
     assert_eq!(steps[5].key, None, "a cite to no diff file");
+}
+
+fn brief_asks(rt: &Runtime<App>) -> Vec<rain_core::Event> {
+    rt.state
+        .shared
+        .events_since(0, &[EventKind::Ask])
+        .into_iter()
+        .filter(|e| e.data["request"] == "brief")
+        .collect()
+}
+
+fn attach_agent(rt: &mut Runtime<App>) {
+    rt.state.shared.set_presence(rain_core::Presence {
+        state: rain_core::PresenceState::Idle,
+        seen_at: Some(rain_comments::clock::now_iso()),
+        ..rain_core::Presence::default()
+    });
+}
+
+fn live_el(rt: &Runtime<App>, key: &str) -> Option<rune::ElementInfo> {
+    rt.elements().into_iter().find(|e| !e.exiting && e.key.as_deref() == Some(key))
+}
+
+#[test]
+fn with_no_agent_attached_the_no_brief_card_shows_a_status_and_no_button() {
+    let mut rt = runtime(app(story(), false));
+    rt.update(|s, _| s.set_reader_tab(ReaderTab::Overview));
+    settle(&mut rt);
+    assert!(live_el(&rt, "ask-brief").is_none(), "no disabled button");
+    let status = live_el(&rt, "brief-no-agent").expect("the status sits in the slot");
+    assert!(
+        status
+            .help
+            .as_deref()
+            .is_some_and(|h| h.contains("rain brief set") && h.contains("docs/agent.md")),
+        "the agent's how-to is in the tooltip: {:?}",
+        status.help
+    );
+    let hint = live_el(&rt, "brief-no-agent-hint").expect("one hint line under the copy");
+    assert!(hint.text.as_deref().is_some_and(|t| t.contains("rain skill")), "{:?}", hint.text);
+    rt.update(|s, _| s.ask_for_brief());
+    settle(&mut rt);
+    assert!(brief_asks(&rt).is_empty(), "nothing is sent into the void");
+    assert_eq!(rt.state.status, crate::app::NO_AGENT_FOR_BRIEF);
+    assert!(rt.find("brief-asked").is_none());
+}
+
+#[test]
+fn the_no_agent_status_turns_into_the_button_when_an_agent_attaches() {
+    let mut rt = runtime(app(story(), false));
+    rt.update(|s, _| s.set_reader_tab(ReaderTab::Overview));
+    settle(&mut rt);
+    let status = live_el(&rt, "brief-ask-slot").expect("the slot").rect;
+    attach_agent(&mut rt);
+    settle(&mut rt);
+    assert!(live_el(&rt, "brief-no-agent").is_none());
+    assert!(live_el(&rt, "brief-no-agent-hint").is_none(), "the hint goes with it");
+    let button = live_el(&rt, "ask-brief").expect("the button replaces the status");
+    assert_eq!(button.label.as_deref(), Some("Ask the agent to write one"));
+    let slot = live_el(&rt, "brief-ask-slot").expect("the slot").rect;
+    assert_eq!(slot[1], status[1], "the slot keeps its line");
+    assert_eq!(slot[3], status[3], "and its height");
+}
+
+#[test]
+fn waiting_for_the_brief_keeps_the_slot_in_place() {
+    let mut rt = runtime(app(story(), false));
+    attach_agent(&mut rt);
+    rt.update(|s, _| s.set_reader_tab(ReaderTab::Overview));
+    settle(&mut rt);
+    let before = live_el(&rt, "brief-ask-slot").expect("the slot").rect;
+    let card = live_el(&rt, "overview-empty").expect("the card").rect;
+    click(&mut rt, "ask-brief");
+    let waiting = live_el(&rt, "brief-asked").expect("the slot waits");
+    let said: String = rt
+        .elements()
+        .into_iter()
+        .filter(|e| !e.exiting && e.path.contains("brief-asked"))
+        .filter_map(|e| e.text)
+        .collect();
+    assert!(said.contains("Waiting for the agent"), "{said}");
+    assert!(
+        rt.elements()
+            .iter()
+            .any(|e| !e.exiting && e.path.contains("brief-asked") && e.role == "progressbar"),
+        "with a spinner"
+    );
+    let after = live_el(&rt, "brief-ask-slot").expect("the slot").rect;
+    assert_eq!((after[1], after[3]), (before[1], before[3]), "no jump");
+    assert_eq!(
+        live_el(&rt, "overview-empty").expect("the card").rect[3],
+        card[3],
+        "the card keeps its height"
+    );
+    assert!(waiting.rect[0] + waiting.rect[2] <= card[0] + card[2], "inside the card");
+}
+
+#[test]
+fn the_ask_sits_on_the_title_line_and_wraps_under_it_when_narrow() {
+    let place = |size: (f32, f32)| {
+        let mut rt = sized_runtime(app(story(), false), size);
+        attach_agent(&mut rt);
+        rt.update(|s, _| s.set_reader_tab(ReaderTab::Overview));
+        settle(&mut rt);
+        let title = live_el(&rt, "brief-empty-title").expect("the title").rect;
+        let ask = live_el(&rt, "ask-brief").expect("the ask").rect;
+        let card = live_el(&rt, "overview-empty").expect("the card").rect;
+        (title, ask, card)
+    };
+    let (title, ask, card) = place((1600.0, 1000.0));
+    assert!(
+        ask[1] < title[1] + title[3] && title[1] < ask[1] + ask[3],
+        "on the title line: {title:?} {ask:?}"
+    );
+    assert!(
+        (card[0] + card[2] - 20.0 - (ask[0] + ask[2])).abs() < 1.0,
+        "right-aligned: {ask:?} in {card:?}"
+    );
+    let (title, ask, card) = place(NARROW_CARD);
+    assert!(ask[1] >= title[1] + title[3], "under the title: {title:?} {ask:?}");
+    assert!((ask[0] - (card[0] + 20.0)).abs() < 1.0, "left-aligned: {ask:?} in {card:?}");
+}
+
+#[test]
+fn the_no_brief_card_asks_the_attached_agent_and_waits_for_the_brief() {
+    let mut rt = runtime(app(story(), false));
+    let attach = attach_agent;
+    attach(&mut rt);
+    rt.update(|s, _| s.set_reader_tab(ReaderTab::Overview));
+    settle(&mut rt);
+    assert!(rt.find("brief-no-agent").is_none());
+    click(&mut rt, "ask-brief");
+    let asks = brief_asks(&rt);
+    assert_eq!(asks.len(), 1, "one ask on the agent's channel");
+    assert!(asks[0].thread.is_none(), "no thread, so the launcher never takes it");
+    let question = asks[0].data["question"].as_str().unwrap_or_default().to_owned();
+    assert!(question.contains("rain brief set"), "{question}");
+    assert!(rt.find("brief-asked").is_some(), "the card says it is waiting");
+    assert!(rt.find("ask-brief").is_none());
+    assert!(
+        rt.state.mirror.threads.iter().all(|t| t.messages[0].body != question),
+        "no thread for it"
+    );
+    {
+        let mut s = rt.state.shared.lock();
+        s.brief = Some(story_brief());
+        s.bump_brief();
+    }
+    attach(&mut rt);
+    settle(&mut rt);
+    assert!(rt.find("overview-empty").is_none(), "the brief replaces the card");
+    assert!(!rt.state.brief.asked);
+}
+
+#[test]
+fn enter_presses_the_focused_ask_button_and_ctrl_enter_does_not() {
+    let mut rt = runtime(app(story(), false));
+    attach_agent(&mut rt);
+    rt.update(|s, _| s.set_reader_tab(ReaderTab::Overview));
+    settle(&mut rt);
+    assert!(tab_to(&mut rt, "ask-brief"), "Tab reaches the button");
+    press(&mut rt, Key::Enter, ctrl());
+    assert!(brief_asks(&rt).is_empty(), "Ctrl+Enter goes on to the app's shortcuts");
+    press(&mut rt, Key::Enter, Mods::default());
+    assert_eq!(brief_asks(&rt).len(), 1, "Enter presses it");
+    assert!(rt.state.brief.asked);
+}
+
+#[test]
+fn a_pending_ask_for_a_brief_holds_the_nudge_back_a_full_wait() {
+    use std::time::{Duration, Instant};
+    let mut rt = runtime(app(story(), false));
+    settle(&mut rt);
+    let t0 = Instant::now();
+    attach_agent(&mut rt);
+    rt.state.brief_nudge_at(t0);
+    rt.update(|s, _| s.ask_for_brief());
+    settle(&mut rt);
+    let asked = Instant::now();
+    assert!(rt.state.brief_nudge_at(t0 + Duration::from_secs(9)).is_some());
+    assert!(
+        rt.state.brief_nudge_at(t0 + Duration::from_secs(120)).is_some(),
+        "the wait from attaching is not enough"
+    );
+    assert_eq!(nudges(&rt), 0, "no reminder while the ask is pending");
+    assert_eq!(rt.state.brief_nudge_at(asked + Duration::from_secs(120)), None);
+    assert_eq!(nudges(&rt), 1, "one reminder when the ask goes unanswered");
+    rt.state.brief_nudge_at(asked + Duration::from_secs(600));
+    assert_eq!(nudges(&rt), 1, "still once per session");
+}
+
+fn nudges(rt: &Runtime<App>) -> usize {
+    rt.state.shared.events_since(0, &[EventKind::BriefMissing]).len()
+}
+
+#[test]
+fn an_attached_agent_with_no_brief_is_nudged_once_after_two_minutes() {
+    use std::time::{Duration, Instant};
+    let mut rt = runtime(app(story(), false));
+    settle(&mut rt);
+    let t0 = Instant::now();
+    assert_eq!(rt.state.brief_nudge_at(t0), None, "nobody attached, nothing to wait for");
+    attach_agent(&mut rt);
+    assert_eq!(
+        rt.state.brief_nudge_at(t0),
+        Some(crate::app::BRIEF_NUDGE_AFTER),
+        "the clock starts on attach"
+    );
+    assert!(rt.state.brief_nudge_at(t0 + Duration::from_secs(119)).is_some());
+    assert_eq!(nudges(&rt), 0, "none before two minutes");
+    assert_eq!(rt.state.brief_nudge_at(t0 + Duration::from_secs(120)), None);
+    let sent = rt.state.shared.events_since(0, &[EventKind::BriefMissing]);
+    assert_eq!(sent.len(), 1, "one after");
+    assert!(sent[0].thread.is_none() && sent[0].data["request"] == "brief");
+    assert_eq!(serde_json::to_value(sent[0].kind).unwrap(), "brief-missing");
+    rt.state.brief_nudge_at(t0 + Duration::from_secs(600));
+    assert_eq!(nudges(&rt), 1, "once per session");
+}
+
+#[test]
+fn a_brief_set_before_two_minutes_stops_the_nudge() {
+    use std::time::{Duration, Instant};
+    let mut rt = runtime(app(story(), false));
+    settle(&mut rt);
+    let t0 = Instant::now();
+    attach_agent(&mut rt);
+    rt.state.brief_nudge_at(t0);
+    {
+        let mut s = rt.state.shared.lock();
+        s.brief = Some(story_brief());
+        s.bump_brief();
+    }
+    settle(&mut rt);
+    assert_eq!(rt.state.brief_nudge_at(t0 + Duration::from_secs(121)), None);
+    assert_eq!(nudges(&rt), 0, "none after a brief");
 }

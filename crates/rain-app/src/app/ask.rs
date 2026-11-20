@@ -1,7 +1,9 @@
 //! Question mode's answering runtime. Every `ask` event becomes a pending answer: an idle
-//! attached agent gets `handoffSec` to take it, otherwise (or after that) the local launcher
-//! runs `ask.command` with the prompt on stdin and posts stdout as Claude's reply. Every step is
-//! written to the thread's `answer`, so the card, the Conversation and the API all show it.
+//! attached agent gets `handoffSec` to claim it, otherwise (or after that) the local launcher
+//! runs `ask.command` with the prompt on stdin and posts stdout as Claude's reply. A claimed
+//! question stays the agent's until it replies or the ceiling passes, and an agent answer stops
+//! a launcher run. Every step is written to the thread's `answer`, so the card, the
+//! Conversation and the API all show it.
 
 use std::io;
 use std::time::{Duration, Instant};
@@ -21,7 +23,7 @@ use crate::settings::{AskPrefer, DEFAULT_ASK_COMMAND};
 /// Starts a run of the answering command; tests swap in a fake.
 pub type Spawner = Box<dyn FnMut(Request) -> io::Result<Box<dyn Job>>>;
 
-/// A heartbeat this fresh means an agent is attached.
+/// An agent heard from within `handoffSec`, and never less than this, is attached.
 pub const ATTACHED_SECS: u64 = 15;
 /// Diff lines quoted above and below the anchor.
 const EXCERPT_CONTEXT: u32 = 12;
@@ -29,9 +31,10 @@ pub const NO_ANSWERER: &str = "no agent attached · set ask.command in the palet
 pub const NOT_ALLOWED: &str = "waiting for Allow (Command palette › Ask: allow)";
 
 enum Phase {
-    /// An idle attached agent has until then to start on it.
+    /// An idle attached agent has until then to start on it; `None` while it waits behind a
+    /// question the agent still has.
     Handoff {
-        until: Instant,
+        until: Option<Instant>,
     },
     /// The attached agent said it is working on it.
     Attached,
@@ -48,6 +51,8 @@ struct Pending {
     thread: String,
     question: String,
     phase: Phase,
+    /// When the agent's hold on it began: queued for it, or claimed by it.
+    since: Instant,
     /// A follow-up asked while this one ran: asked once it ends.
     again: Option<String>,
 }
@@ -177,7 +182,9 @@ impl App {
         let mut next: Option<Duration> = None;
         for p in &self.ask.pending {
             let d = match p.phase {
-                Phase::Handoff { until } => until.saturating_duration_since(now).max(Duration::from_millis(50)),
+                Phase::Handoff { until: Some(until) } => until.saturating_duration_since(now).max(Duration::from_millis(50)),
+                // Its countdown starts on the tick that sees the question ahead end.
+                Phase::Handoff { until: None } => Duration::from_secs(1),
                 // The card's seconds counter, and runs whose end didn't wake the window.
                 Phase::Running { .. } | Phase::Attached => Duration::from_secs(1),
                 Phase::Waiting | Phase::NoAnswerer => continue,
@@ -299,14 +306,70 @@ impl App {
         self.push_ui_event(EventKind::Answer, id, data);
     }
 
-    /// The attached agent's state when one is attached (fresh heartbeat, not the launcher's own).
+    /// The attached agent's state when one is attached (heard from lately, not the launcher's own).
     fn attached(&self) -> Option<Presence> {
-        let p = self.shared.presence();
-        if self.ask.own.as_ref().is_some_and(|o| same_presence(&o.mine, &p)) {
-            return None;
-        }
+        let p = self.agent_presence();
         let ago = seen_ago(&p, now_ms())?;
-        (ago <= ATTACHED_SECS && p.state != PresenceState::Offline).then_some(p)
+        let window = self.settings.ask.handoff_sec.max(ATTACHED_SECS);
+        (ago <= window && p.state != PresenceState::Offline).then_some(p)
+    }
+
+    /// The agent said it left (never heard from is not leaving: a helper may claim without a watch).
+    fn agent_left(&self) -> bool {
+        let p = self.agent_presence();
+        p.state == PresenceState::Offline && p.seen_at.is_some()
+    }
+
+    /// How long the agent may hold a question it queued for or claimed before the launcher takes it.
+    fn agent_ceiling(&self) -> Duration {
+        Duration::from_secs(self.settings.ask.timeout_sec.max(self.settings.ask.handoff_sec).max(1))
+    }
+
+    /// The agent's last reported presence, looking past the launcher's own dot.
+    fn agent_presence(&self) -> Presence {
+        let mut p = self.shared.presence();
+        if let Some(o) = self.ask.own.as_ref().filter(|o| same_presence(&o.mine, &p)) {
+            // Under the launcher's dot the agent is what was there before, heard from by heartbeat.
+            let heard = p.seen_at != o.mine.seen_at;
+            p = Presence {
+                seen_at: if heard { p.seen_at } else { o.before.seen_at.clone() },
+                ..o.before.clone()
+            };
+        }
+        p
+    }
+
+    pub fn agent_attached(&self) -> bool {
+        self.attached().is_some()
+    }
+
+    /// The attached agent takes new questions: it is free, or answering questions.
+    fn agent_takes_questions(&self, p: &Presence) -> bool {
+        matches!(p.state, PresenceState::Idle | PresenceState::Done) || self.agent_busy_answering(p)
+    }
+
+    /// Working on a question (one it holds or has answered, while it may answer others in
+    /// parallel): questions behind it wait without a countdown until it goes idle.
+    fn agent_busy_answering(&self, p: &Presence) -> bool {
+        p.state == PresenceState::Working
+            && p.on
+                .as_deref()
+                .is_some_and(|on| self.agent_holds(on) || ops::thread(&self.mirror, on).is_some_and(|t| t.answer.is_some()))
+    }
+
+    /// A question waiting on the attached agent, or being answered by it.
+    fn agent_holds(&self, id: &str) -> bool {
+        self.ask
+            .pending
+            .iter()
+            .any(|q| q.thread == id && matches!(q.phase, Phase::Handoff { .. } | Phase::Attached))
+    }
+
+    fn agent_holds_any(&self) -> bool {
+        self.ask
+            .pending
+            .iter()
+            .any(|q| matches!(q.phase, Phase::Handoff { .. } | Phase::Attached))
     }
 
     fn take_ask(&mut self, id: &str, question: String, now: Instant) -> bool {
@@ -324,18 +387,34 @@ impl App {
             self.set_answer(id, |a| *a = Answer::default());
         }
         let question = if question.trim().is_empty() { last_question(&t) } else { question };
-        let phase = match (self.settings.ask.prefer, self.attached()) {
-            (AskPrefer::Attached, Some(p)) if p.state == PresenceState::Working && p.on.as_deref() == Some(id) => {
+        let attached = self.attached();
+        let held = self.agent_holds_any();
+        let working_on_it = attached
+            .as_ref()
+            .is_some_and(|p| p.state == PresenceState::Working && p.on.as_deref() == Some(id));
+        // While it holds a question the agent stays attached, however quiet its heartbeat.
+        let takes = match &attached {
+            Some(p) => self.agent_takes_questions(p),
+            None => held && !self.agent_left(),
+        };
+        let phase = match self.settings.ask.prefer {
+            _ if ops::claimed(&t) => Phase::Attached,
+            AskPrefer::Attached if working_on_it => {
                 self.mark_attached(id);
                 Phase::Attached
             }
-            (AskPrefer::Attached, Some(p)) if matches!(p.state, PresenceState::Idle | PresenceState::Done) => {
-                self.status = format!(
-                    "Asked the attached agent; the launcher takes over in {} s",
-                    self.settings.ask.handoff_sec
-                );
+            AskPrefer::Attached if takes => {
+                let behind = held || attached.as_ref().is_some_and(|p| self.agent_busy_answering(p));
+                self.status = if behind {
+                    "Queued for the attached agent, after the question it has".to_owned()
+                } else {
+                    format!(
+                        "Asked the attached agent; the launcher takes over in {} s",
+                        self.settings.ask.handoff_sec
+                    )
+                };
                 Phase::Handoff {
-                    until: now + Duration::from_secs(self.settings.ask.handoff_sec),
+                    until: (!behind).then(|| now + Duration::from_secs(self.settings.ask.handoff_sec)),
                 }
             }
             _ => Phase::Waiting,
@@ -344,6 +423,7 @@ impl App {
             thread: id.to_owned(),
             question,
             phase,
+            since: now,
             again: None,
         });
         true
@@ -375,6 +455,14 @@ impl App {
             self.dismiss_toast(&format!("ask-{id}"));
             return None;
         }
+        let claimed = t.as_ref().is_some_and(ops::claimed);
+        let agents = t
+            .as_ref()
+            .and_then(|t| t.answer.as_ref())
+            .is_some_and(|a| a.by.as_deref() == Some("attached"));
+        if running && agents {
+            return self.agent_overtook(i, &id, claimed, now);
+        }
         if running {
             let Phase::Running { job } = &mut self.ask.pending[i].phase else {
                 unreachable!()
@@ -392,27 +480,60 @@ impl App {
             return None;
         }
         let attached = self.attached();
-        let working_on_it = attached
-            .as_ref()
-            .is_some_and(|p| p.state == PresenceState::Working && p.on.as_deref() == Some(id.as_str()));
+        let working_on_it = claimed
+            || attached
+                .as_ref()
+                .is_some_and(|p| p.state == PresenceState::Working && p.on.as_deref() == Some(id.as_str()));
+        let held_too_long = now >= self.ask.pending[i].since + self.agent_ceiling();
         match self.ask.pending[i].phase {
             Phase::Handoff { until } => {
                 if working_on_it {
-                    self.mark_attached(&id);
+                    if !claimed {
+                        self.mark_attached(&id);
+                    }
                     self.ask.pending[i].phase = Phase::Attached;
+                    self.ask.pending[i].since = now;
                     return Some(true);
                 }
-                let still_idle = attached
-                    .as_ref()
-                    .is_some_and(|p| matches!(p.state, PresenceState::Idle | PresenceState::Done));
-                if now >= until || !still_idle {
+                // A delivered question stays the agent's while its heartbeat is quiet; only
+                // leaving, or a state that turns questions away, hands it over early.
+                let turned_away = attached.as_ref().is_some_and(|p| !self.agent_takes_questions(p));
+                if self.agent_left() || turned_away {
                     self.ask.pending[i].phase = Phase::Waiting;
                     return Some(true);
                 }
-                Some(false)
+                // Queued behind a question the agent still has: its handoffSec starts once it is next.
+                let busy = attached.as_ref().is_some_and(|p| self.agent_busy_answering(p));
+                let ahead = self.ask.pending[..i]
+                    .iter()
+                    .any(|q| matches!(q.phase, Phase::Handoff { .. } | Phase::Attached));
+                if (busy || ahead) && until.is_none() && held_too_long {
+                    self.ask.pending[i].phase = Phase::Waiting;
+                    return Some(true);
+                }
+                if busy || ahead {
+                    self.ask.pending[i].phase = Phase::Handoff { until: None };
+                    return Some(false);
+                }
+                match until {
+                    None => {
+                        self.ask.pending[i].phase = Phase::Handoff {
+                            until: Some(now + Duration::from_secs(self.settings.ask.handoff_sec)),
+                        };
+                        Some(false)
+                    }
+                    Some(t) if now >= t => {
+                        self.ask.pending[i].phase = Phase::Waiting;
+                        Some(true)
+                    }
+                    Some(_) => Some(false),
+                }
             }
+            // Claimed: the agent keeps it, heartbeat or not, until it leaves, gives it back or
+            // runs past the ceiling.
             Phase::Attached => {
-                if attached.is_none() {
+                let released = status == Some(AnswerStatus::Queued);
+                if self.agent_left() || released || held_too_long {
                     self.ask.pending[i].phase = Phase::Waiting;
                     return Some(true);
                 }
@@ -424,6 +545,32 @@ impl App {
             }
             _ => Some(false),
         }
+    }
+
+    /// The agent answered or claimed a question the launcher is running: the agent wins, the run
+    /// stops and its late answer is never posted.
+    fn agent_overtook(&mut self, i: usize, id: &str, claimed: bool, now: Instant) -> Option<bool> {
+        if let Phase::Running { job } = &mut self.ask.pending[i].phase {
+            job.cancel();
+        }
+        self.dismiss_toast(&format!("ask-{id}"));
+        let name = ops::thread(&self.mirror, id).map(short_name).unwrap_or_default();
+        self.status = format!("The attached agent took {name}; the launcher stopped");
+        let p = &mut self.ask.pending[i];
+        p.since = now;
+        if claimed {
+            p.phase = Phase::Attached;
+            return Some(true);
+        }
+        let q = p.again.take()?;
+        p.question = if q.trim().is_empty() {
+            last_question(ops::thread(&self.mirror, id)?)
+        } else {
+            q
+        };
+        p.phase = Phase::Handoff { until: None };
+        self.set_answer(id, |a| *a = Answer::default());
+        Some(true)
     }
 
     fn launcher_ready(&self) -> bool {
@@ -449,9 +596,14 @@ impl App {
                 }
                 let a = &self.settings.ask;
                 let why = if a.enabled && !a.command.trim().is_empty() && !a.allowed {
+                    let nobody = if self.attached().is_some() {
+                        "No attached agent picked up the question"
+                    } else {
+                        "No agent is attached"
+                    };
                     self.push_toast(
                         "ask-allow".into(),
-                        "Questions run the local command (claude -p), which sends the excerpt to your Claude account".into(),
+                        format!("{nobody}. Allow the fallback, the local command (claude -p)? It sends the excerpt to your Claude account"),
                         Some(super::conversation::ToastAction::AllowAsk),
                     );
                     NOT_ALLOWED
@@ -630,6 +782,11 @@ impl App {
         self.ask.own = self.shared.update_presence(|cur| match (running, own) {
             (Some(on), own) => {
                 let before = match own {
+                    // A heartbeat since the last tick: the agent behind the dot is still there.
+                    Some(o) if same_presence(&o.mine, cur) && cur.seen_at != o.mine.seen_at => Presence {
+                        seen_at: cur.seen_at.clone(),
+                        ..o.before
+                    },
                     Some(o) if same_presence(&o.mine, cur) => o.before,
                     // The attached agent posted its own state: leave the dot to it for this run.
                     Some(o) => return Some(o),
@@ -744,6 +901,13 @@ impl App {
             }
         }
         for id in ids {
+            // An answer the attached agent already gave, or is giving, stays its own.
+            let agents = ops::thread(&self.mirror, &id)
+                .and_then(|t| t.answer.as_ref())
+                .is_some_and(|a| !a.status.pending() || a.by.as_deref() == Some("attached"));
+            if agents {
+                continue;
+            }
             self.set_answer(&id, |a| {
                 a.status = AnswerStatus::Cancelled;
                 a.ended_at = Some(now_iso());
@@ -880,7 +1044,7 @@ pub(crate) fn palette_rows(s: &App, query: &str) -> Vec<(AskItem, String, String
             if a.allowed {
                 "Ask: stop allowing the local command".to_owned()
             } else {
-                "Ask: allow the local command to answer (sends the excerpt to your Claude account)".to_owned()
+                "Ask: allow the local command to answer when no agent does (sends the excerpt to your Claude account)".to_owned()
             },
             if a.allowed { "allowed".into() } else { "not allowed".into() },
         ),

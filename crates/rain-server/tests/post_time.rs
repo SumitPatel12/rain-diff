@@ -87,13 +87,14 @@ fn imported_threads_snapshot_the_loaded_code_and_its_commit_at_post_time() {
         "/api/comment-imports",
         &json!([thread("src/a.rs", 5, "in"), thread("src/a.rs", 99, "out")]).to_string(),
     );
-    assert_eq!(r["warnings"].as_array().unwrap().len(), 1, "{r}");
+    assert!(r["warnings"].as_array().is_none_or(Vec::is_empty), "{r}");
     let s = t.shared.lock();
     let inside = s.threads.iter().find(|t| t.messages[0].body == "in").unwrap();
     assert_eq!(inside.code_snapshot.as_ref().unwrap().content, "line 5");
     assert_eq!(inside.commit.as_deref(), Some(TARGET));
     let outside = s.threads.iter().find(|t| t.messages[0].body == "out").unwrap();
-    assert_eq!(outside.target.as_ref().map(|t| t.kind), Some(rain_core::TargetKind::File));
+    assert!(outside.target.is_none() && outside.code_snapshot.is_none() && outside.commit.is_none());
+    assert!(matches!(outside.anchor, Anchor::Line { line: 99, .. }));
 }
 
 #[test]

@@ -418,3 +418,45 @@ fn build_5k_files_under_50ms() {
     println!("5k files: build {best:.2} ms, apply {apply:.2} ms");
     assert!(best <= 50.0, "build took {best:.2} ms");
 }
+
+#[test]
+fn file_icons_follow_the_material_theme_rules() {
+    use crate::icon_name;
+    for (name, icon) in [
+        ("main.rs", "rust"),
+        ("foo.component.ts", "angular-component"),
+        ("foo.spec.ts", "test-ts"),
+        ("index.d.ts", "typescript-def"),
+        ("app.ts", "typescript"),
+        ("Dockerfile", "docker"),
+        ("package.json", "nodejs"),
+        ("tsconfig.app.json", "tsconfig"),
+        ("x.cs", "csharp"),
+        ("X.CS", "csharp"),
+        ("README.md", "readme"),
+        ("notes.md", "markdown"),
+        (".gitignore", "git"),
+        ("Cargo.lock", "lock"),
+        ("data.unknownext", "file"),
+        ("Makefile.unknown", "file"),
+        ("noextension", "file"),
+    ] {
+        assert_eq!(icon_name(name), icon, "{name}");
+    }
+}
+
+#[test]
+fn every_shipped_icon_rasterizes_and_the_tables_are_sorted() {
+    use crate::material::{FILE_EXTENSIONS, FILE_NAMES, ICONS};
+    for table in [&FILE_NAMES[..], &FILE_EXTENSIONS[..]] {
+        assert!(table.windows(2).all(|w| w[0].0 < w[1].0), "sorted and unique for binary search");
+        assert!(table.iter().all(|(_, i)| (*i as usize) < ICONS.len()));
+    }
+    let cache = rune::ImageCache::new(std::sync::Arc::new(|| {}));
+    for svg in &ICONS {
+        for bytes in std::iter::once(svg.dark).chain(svg.light) {
+            let image = cache.svg(bytes, 16.0, 2.0);
+            assert!(image.wait().is_ok(), "{} fails to rasterize: {:?}", svg.name, image.error());
+        }
+    }
+}

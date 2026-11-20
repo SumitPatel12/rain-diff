@@ -150,6 +150,53 @@ fn state_route_sets_addressed_dismissed_and_reopens() {
 }
 
 #[test]
+fn claim_route_takes_and_gives_back_a_pending_question() {
+    let t = serve(ServerOptions::default());
+    t.import();
+    let (_, r) = t.send("POST", "/api/comments/t-line/claim", "");
+    assert_eq!(
+        (r["claimed"].clone(), r["changed"].clone()),
+        (json!(false), json!(false)),
+        "nothing pending"
+    );
+    t.shared.lock().threads.iter_mut().find(|t| t.id == "t-line").unwrap().answer = Some(rain_core::Answer::default());
+    let (status, r) = t.send("POST", "/api/comments/t-line/claim", "");
+    assert_eq!(status, 200, "{r}");
+    assert_eq!((r["claimed"].clone(), r["changed"].clone()), (json!(true), json!(true)));
+    let a = t
+        .shared
+        .lock()
+        .threads
+        .iter()
+        .find(|t| t.id == "t-line")
+        .unwrap()
+        .answer
+        .clone()
+        .unwrap();
+    assert_eq!((a.status, a.by.as_deref()), (rain_core::AnswerStatus::Answering, Some("attached")));
+    assert_eq!(
+        t.send("POST", "/api/comments/t-line/claim", "{}").1["changed"],
+        false,
+        "claiming twice changes nothing"
+    );
+    let (_, r) = t.send("POST", "/api/comments/t-line/claim", r#"{"release":true}"#);
+    assert_eq!((r["claimed"].clone(), r["changed"].clone()), (json!(false), json!(true)));
+    let a = t
+        .shared
+        .lock()
+        .threads
+        .iter()
+        .find(|t| t.id == "t-line")
+        .unwrap()
+        .answer
+        .clone()
+        .unwrap();
+    assert_eq!(a.status, rain_core::AnswerStatus::Queued);
+    assert_eq!(t.send("POST", "/api/comments/nope/claim", "").0, 404);
+    assert_eq!(t.send("POST", "/api/comments/t-line/claim", "[1]").0, 400);
+}
+
+#[test]
 fn legacy_events_shape_is_untouched_and_hides_resolved() {
     let t = serve(ServerOptions::default());
     t.import();

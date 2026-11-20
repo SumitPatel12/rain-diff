@@ -35,6 +35,7 @@ State (1M rows)
 - `repo_ids`/`display_path` prefix header paths with a repo id; `set_collapsed_where`, `into_files`, `row_key`, `row_count`, `heap_bytes` added.
 - Round 2 row API for an overview ruler: `visible_rows`, `file_rows`, `hunk_row(file, hunk)`, `row_file(row)`, `row_of_line(file, LineRef)` (public `row_of`), `annotation_rows()`; `row_y(row)` / `rows_height()` estimate a row's top from the fixed row heights, by binary search over a per-rebuild `tall_rows` table (headers, notes, gap bars: O(files + hunks)).
 - Whole file: `FileUi.whole`; `whole`, `set_whole`, `set_whole_where` (one rebuild), `needs_texts`, `opened`/`set_opened` (carry a file's whole and revealed state to another diff over the same files). Whole opens every range of known length (the trailing one once texts exist); `set_texts` re-applies it, `collapse_expanded` ends it.
+- `shows_line(file, LineRef)`: the line sits in a hunk or an opened unchanged range (a collapsed file still counts); `reveal_line(file, LineRef)` opens the range holding it, now or once texts arrive (`request_expand`).
 
 View
 - Row keys come from `key_of` (`Cow::Owned`), not a stored vector.

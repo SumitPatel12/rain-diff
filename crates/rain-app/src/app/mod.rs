@@ -57,6 +57,8 @@ use crate::theme::Scheme;
 pub use ask::AskState;
 pub use board::BoardState;
 pub use brief::{ArtifactDraft, BriefState, ComposeMode};
+#[cfg(test)]
+pub use brief::{BRIEF_NUDGE_AFTER, NO_AGENT_FOR_BRIEF};
 pub use chapters::Subset;
 pub use composer::ComposerUi;
 pub use conversation::ConversationState;
@@ -139,8 +141,8 @@ pub struct App {
     pub tags: BTreeMap<String, FileTag>,
     /// The overview's `why` per file key.
     pub why: BTreeMap<String, String>,
-    /// Threads shown in their file's "Outdated" strip instead of on a line: their code changed,
-    /// or their lines are outside the diff. By file.
+    /// Threads not on a hunk line, by file: their code changed, or their lines are outside the
+    /// diff. The strip shows them less those whose opened context shows ([`App::strip_threads`]).
     pub unplaced: BTreeMap<usize, Vec<String>>,
     pub chapters: Chapters,
     /// The session as last seen, and its version.
@@ -193,6 +195,7 @@ pub struct App {
     pub keymap_gen: u64,
     pub diff_width: f32,
     pub window_width: f32,
+    pub window_height: f32,
     /// A window size laid out since the last save.
     window_size: Option<(f32, f32)>,
     pub status: String,
@@ -200,6 +203,7 @@ pub struct App {
     /// The code palette the highlighter was made for, and the scheme the view last drew.
     hl_palette: Option<rain_syntax::Palette>,
     pub seen_scheme: Cell<Scheme>,
+    pub file_icons: rain_tree::FileIcons,
     pending_goto: Option<String>,
     rx: Option<Receiver<Msg>>,
     texts_tx: Option<Sender<Msg>>,
@@ -327,11 +331,13 @@ impl App {
             layouts: Vec::new(),
             diff_width: f32::MAX,
             window_width: 0.0,
+            window_height: 0.0,
             window_size: None,
             status,
             warm: false,
             hl_palette: None,
             seen_scheme: Cell::new(Scheme::Dark),
+            file_icons: rain_tree::FileIcons::default(),
             pending_goto: goto,
             rx: None,
             texts_tx: None,
@@ -552,10 +558,10 @@ impl App {
             }
             if let Some(g) = self.pending_goto.take() {
                 let tab = std::mem::take(&mut self.brief.restore_tab).then(|| self.brief.tab.replace(ReaderTab::Changes));
-                match g.strip_prefix("thread:") {
-                    Some(id) => self.goto_thread(id, tx),
-                    None => self.goto_spec(&g, tx),
-                }
+                self.keep_map(|s| match g.strip_prefix("thread:") {
+                    Some(id) => s.goto_thread(id, tx),
+                    None => s.goto_spec(&g, tx),
+                });
                 if let Some(t) = tab {
                     self.brief.tab = t;
                 }
@@ -566,6 +572,7 @@ impl App {
             changed |= self.apply_requests(tx);
             changed |= self.rounds_poll(tx);
             changed |= self.ask_poll(tx);
+            self.brief_nudge_poll(tx);
         }
         changed |= self.rest_poll(tx);
         changed |= self.playground_poll(tx);
@@ -794,6 +801,9 @@ impl App {
         self.verify_card.set_window(size);
         if (size.0 - self.window_width).abs() >= 1.0 {
             self.window_width = size.0;
+        }
+        if (size.1 - self.window_height).abs() >= 1.0 {
+            self.window_height = size.1;
         }
         if (size.0 - self.settings.window.0).abs() >= 1.0 || (size.1 - self.settings.window.1).abs() >= 1.0 {
             self.window_size = Some(size);

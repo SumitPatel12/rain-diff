@@ -5,7 +5,7 @@ use rain_core::command::Command;
 use rune::{Cursor, El, Tx, el, row, text};
 
 use super::icons;
-use super::ui::{Ghost, vsep};
+use super::ui::{Activate, Ghost, vsep};
 use crate::app::{App, Overlay, ReaderTab};
 use crate::theme::{Look, TYPE, radius, space};
 
@@ -119,7 +119,7 @@ pub(super) fn strip(s: &App, look: &Look) -> El {
                 .help(crate::keys::tip("Find in diff", Command::Find))
                 .on(s.find.open)
                 .build(k)
-                .on_press_tx(run(Command::Find)),
+                .on_activate_tx(run(Command::Find)),
         )
         .child(
             Ghost::new("tool-tour")
@@ -128,7 +128,7 @@ pub(super) fn strip(s: &App, look: &Look) -> El {
                 .help(crate::keys::tip("Tour", Command::Tour))
                 .on(s.layout.is_open(Overlay::Tour))
                 .build(k)
-                .on_press_tx(run(Command::Tour)),
+                .on_activate_tx(run(Command::Tour)),
         );
     if s.has_map() {
         r = r.child(
@@ -138,7 +138,7 @@ pub(super) fn strip(s: &App, look: &Look) -> El {
                 .help(crate::keys::tip("Map", Command::Map))
                 .on(s.layout.is_open(Overlay::Map))
                 .build(k)
-                .on_press_tx(run(Command::Map)),
+                .on_activate_tx(run(Command::Map)),
         );
     }
     let waiting = s.waiting_count();
@@ -161,11 +161,13 @@ pub(super) fn strip(s: &App, look: &Look) -> El {
                 .child(text(waiting.to_string()).font(TYPE.micro).color(k.c.warning.fg)),
         );
     }
-    r.child(vsep(k)).child(conv.build(k).on_press_tx(run(Command::Conversation))).child(
-        el().key("reader-tool-line")
-            .pin(Some(0.0), None, Some(0.0), Some(0.0))
-            .h(1.0)
-            .fill(look.s.hairline)
-            .a11y_hidden(),
-    )
+    r.child(vsep(k))
+        .child(conv.build(k).on_activate_tx(run(Command::Conversation)))
+        .child(
+            el().key("reader-tool-line")
+                .pin(Some(0.0), None, Some(0.0), Some(0.0))
+                .h(1.0)
+                .fill(look.s.hairline)
+                .a11y_hidden(),
+        )
 }

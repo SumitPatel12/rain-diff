@@ -30,6 +30,11 @@ The arrow keys go to whatever has focus first: the palette, the picker, the file
 lists keep using them as before. The diff takes them only when it is the active surface (the
 Changes tab, with no Map or Conversation over it).
 
+In the Vim profile the Ctrl+P picker has two modes. It opens in insert mode: typing goes into the
+query and the arrows move. Escape switches to normal mode, keeping the query: `j` / `k` and the
+arrows move, `gg` / `G` go to the top and bottom, Enter goes, `i` or `/` type again, and Escape
+closes. In the other profiles Escape closes the picker straight away.
+
 ## Command keys by profile
 
 Bare letters are bound only in Vim; in VS Code and JetBrains every command key has a modifier or

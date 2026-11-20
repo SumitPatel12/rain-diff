@@ -108,6 +108,11 @@ fn caret_of(c: Chord) -> Option<(Caret, bool)> {
 }
 
 impl App {
+    /// The rain and a shortcut recording hear every key before any focused control.
+    pub(crate) fn holds_every_key(&self) -> bool {
+        self.raining() || self.shortcuts.recording.is_some()
+    }
+
     /// The keys every profile shares on the diff: cursor keys (Shift extends), Ctrl+A, and
     /// Escape out of a Shift selection outside Vim. `None` leaves the key to the rest.
     fn universal_key(&mut self, chord: Option<Chord>, tx: &mut Tx) -> Option<bool> {
@@ -163,6 +168,9 @@ pub fn on_key(s: &mut App, ev: &KeyEvent, tx: &mut Tx) -> bool {
     }
     if matches!(ev.key, Key::Modifier { .. }) {
         return s.active_mut().key(ev, tx);
+    }
+    if s.picker_normal() {
+        return s.picker_normal_key(ev, tx);
     }
     let chord = chord_of(ev);
     if s.shortcuts.recording.is_some() {

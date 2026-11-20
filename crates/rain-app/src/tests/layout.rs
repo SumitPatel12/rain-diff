@@ -303,3 +303,44 @@ fn the_status_line_says_overview_on_that_tab() {
     assert!(hints.starts_with("Overview"), "{hints}");
     assert!(rt.find("current-bar").is_none(), "no file is lit in the list on the Overview");
 }
+
+/// A patch adding one file under a very long path.
+fn long_path_patch() -> std::path::PathBuf {
+    let path = format!(
+        "src/Acme.Shop.IntegrationSpecs/Acme.Shop.Api/Features/StorefrontTheme/{}/GetStorefrontThemeStylesControllerSpecs.cs",
+        "Nested/Deeper/StillDeeper/GetStorefrontThemeStyles"
+    );
+    let p = format!("diff --git a/{path} b/{path}\nnew file mode 100644\n--- /dev/null\n+++ b/{path}\n@@ -0,0 +1,2 @@\n+one\n+two\n");
+    let d = temp_dir();
+    std::fs::create_dir_all(&d).unwrap();
+    let f = d.join("long.patch");
+    std::fs::write(&f, p).unwrap();
+    f
+}
+
+#[test]
+fn a_long_path_is_cut_in_the_middle_and_leaves_the_header_actions_in_place() {
+    let rt = sized_runtime(app(long_path_patch(), false), (1200.0, 800.0));
+    let els = rt.elements();
+    let find = |key: &str| {
+        els.iter()
+            .find(|e| !e.exiting && e.key.as_deref() == Some(key))
+            .unwrap_or_else(|| panic!("no {key}"))
+    };
+    let area = find("diff-area");
+    let right = area.rect[0] + area.rect[2];
+    for key in ["viewed-0", "file-more-0"] {
+        let e = find(key);
+        assert!(
+            e.rect[2] > 20.0 && e.rect[0] + e.rect[2] <= right + 0.5,
+            "{key} stays whole and in view: {:?} in {:?}",
+            e.rect,
+            area.rect
+        );
+    }
+    let name = find("name");
+    assert!(
+        name.rect[0] + name.rect[2] < find("viewed-0").rect[0],
+        "the file name stays before Viewed"
+    );
+}

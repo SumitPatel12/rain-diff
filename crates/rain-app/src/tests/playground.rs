@@ -221,7 +221,13 @@ fn the_step_buttons_and_reduced_motion_land_on_steps() {
     on(&mut rt, "playground-forward");
     assert_eq!(rt.state.playground.lab.step().map(|(i, _)| i), Some(1));
     on(&mut rt, "playground-play");
-    assert!(rt.state.playground.lab.clock.at_end(), "reduced motion plays to the end state");
+    assert!(
+        rt.state.playground.lab.playing(),
+        "reduced motion plays, it does not jump to the end"
+    );
+    rt.update(|s, _| s.playground.lab.seek_frac(1.0));
+    settle(&mut rt);
+    assert!(rt.state.playground.lab.clock.at_end());
     let last = rt.state.playground.lab.rig().unwrap().steps.len() - 1;
     on(&mut rt, "playground-back");
     assert_eq!(

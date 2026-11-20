@@ -6,15 +6,17 @@ use rain_comments::label::first_sentence;
 use rain_core::command::Command;
 use rain_core::{AnchorState, AnswerStatus, PresenceState, TargetKind, Thread, ThreadKind, ThreadState, Verdict};
 use rune::{Color, El, ScrollSpec, Tx, col, el, row, text};
-use rune_kit::{ButtonVariant, Kit};
+use rune_kit::{ButtonVariant, Kit, Markdown};
 
-use super::ui::{Ghost, outline, sr};
+use super::ui::{Activate, Ghost, md_style, outline, sr};
 use super::{icons, muted};
 use crate::app::conversation::{Section, by_agent, short_name};
 use crate::app::{App, Overlay};
 use crate::theme::{TYPE, radius};
 
 const WIDTH: f32 = 380.0;
+/// A card's text width: the panel less the list's and the card's padding.
+const SAID_WIDTH: f32 = WIDTH - 2.0 * 10.0 - 2.0 * 12.0;
 const CLOSE_REASONS: [&str; 3] = ["fixed elsewhere", "no longer applies", "duplicate"];
 
 fn presence_color(p: PresenceState, k: &Kit) -> Color {
@@ -130,7 +132,7 @@ pub(super) fn toasts(s: &App, k: &Kit) -> Option<El> {
             } else {
                 outline(format!("toast-{}-action", t.key), label, undo.then_some("u"), 24.0, k)
             };
-            card = card.child(b.on_press_tx(move |s: &mut App, tx: &mut Tx| s.toast_action(&act, tx)));
+            card = card.child(b.on_activate_tx(move |s: &mut App, tx: &mut Tx| s.toast_action(&act, tx)));
         }
         card = card.child(
             Ghost::new(format!("toast-{}-close", t.key))
@@ -138,7 +140,7 @@ pub(super) fn toasts(s: &App, k: &Kit) -> Option<El> {
                 .help("Dismiss")
                 .height(24.0)
                 .build(k)
-                .on_press(move |s: &mut App| s.dismiss_toast(&close)),
+                .on_activate(move |s: &mut App| s.dismiss_toast(&close)),
         );
         stack = stack.child(card);
     }
@@ -226,7 +228,7 @@ fn small_button(key: String, label: &str, variant: ButtonVariant, f: impl Fn(&mu
     } else {
         outline(key, label.to_owned(), None, 24.0, k)
     };
-    b.on_press_tx(f)
+    b.on_activate_tx(f)
 }
 
 /// A quoted excerpt in mono on the well: the post-time snapshot, first `max` lines.
@@ -248,6 +250,15 @@ fn excerpt(key: String, content: &str, max: usize, k: &Kit) -> El {
                 .into_iter()
                 .map(|l| text(l.to_owned()).font(TYPE.micro_mono.lh(18.0)).color(k.c.text_muted).truncate()),
         )
+}
+
+/// Whether the row's one line, `said`, leaves out any of `body`: more lines, more sentences, or
+/// wider than the card.
+fn clipped(body: &str, said: &str) -> bool {
+    let mut lines = body.lines().map(str::trim).filter(|l| !l.is_empty());
+    let Some(first) = lines.next() else { return false };
+    let plain = first.replace("**", "").replace(['`', '*'], "");
+    lines.next().is_some() || said.chars().count() < plain.chars().count() || rune::text::advance(said, TYPE.small) > SAID_WIDTH
 }
 
 /// `VouchersController.cs:23`, or the artifact's title.
@@ -277,8 +288,10 @@ fn thread_row(s: &App, t: &Thread, section: Section, k: &Kit) -> El {
     let in_reader = !t.is_artifact() && s.file_of_thread(t).is_some_and(|g| s.current() == Some(g));
     let who = if by_agent(t) { "claude" } else { "you" };
     let head = format!("{} {} · {} · {who}", glyph(t), short_name(t), t.kind().label());
-    let last = t.messages.last();
-    let said = last.map_or(String::new(), |m| first_sentence(&m.body, 90));
+    let body = t.messages.last().map_or("", |m| m.body.trim());
+    let said = first_sentence(body, 90);
+    let clipped = clipped(body, &said);
+    let open = clipped && s.conversation.expanded.contains(&t.id);
     let chip_text = chip(t);
     let (chip_fg, chip_bg) = match section {
         Section::Waiting => (k.c.danger.fg, k.c.danger.bg),
@@ -327,8 +340,37 @@ fn thread_row(s: &App, t: &Thread, section: Section, k: &Kit) -> El {
         .fill(surf.card_head)
         .border(1.0, surf.card_border)
         .on_press_tx(move |s: &mut App, tx: &mut Tx| s.show_thread(&id, tx))
-        .child(top)
-        .child(text(said).font(TYPE.small).color(k.c.text_base).truncate());
+        .child(top);
+    c = if open {
+        c.child(
+            col()
+                .key(format!("conv-full-{}", t.id))
+                .w_full()
+                .child(Markdown::new(body.to_owned()).style(md_style(k).body_font(TYPE.small)).build(k)),
+        )
+    } else {
+        c.child(text(said).font(TYPE.small).color(k.c.text_base).truncate())
+    };
+    if clipped {
+        let id = t.id.clone();
+        let more = Ghost::new(format!("conv-more-{}", t.id))
+            .label(if open { "Show less" } else { "Show more" })
+            .child(icons::draw(
+                if open { &icons::CHEV_U } else { &icons::CHEV_D },
+                14.0,
+                k.c.text_muted,
+            ))
+            .height(24.0)
+            .build(k)
+            .label(if open {
+                "Show less of this comment"
+            } else {
+                "Show the whole comment"
+            })
+            .expanded(open)
+            .on_activate(move |s: &mut App| s.toggle_comment_expanded(&id));
+        c = c.child(row().child(more));
+    }
     c = if focused { c.fill(k.c.pressed) } else { k.interactive(c) };
     if section == Section::Orphaned {
         let snap = t.orphan.as_ref().map(|o| &o.snapshot).or(t.code_snapshot.as_ref());
@@ -619,7 +661,7 @@ pub(super) fn conversation(s: &App, k: &Kit) -> Option<El> {
             .help("Close  Esc")
             .height(24.0)
             .build(k)
-            .on_press(|s: &mut App| {
+            .on_activate(|s: &mut App| {
                 s.close_overlay(Overlay::Conversation);
             }),
     );

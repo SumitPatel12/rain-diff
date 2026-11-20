@@ -1,32 +1,39 @@
 //! The `Ctrl+P` picker panel: fuzzy rows on the left, the selected file's first hunk on the right.
 
 use rain_core::LineKind;
-use rune::{El, Key, KeyEvent, ScrollSpec, Tx, col, el, row, text};
+use rune::{Cursor, Drag, El, Key, KeyEvent, ScrollSpec, Tx, col, el, row, text};
 use rune_kit::{Kit, TextInput};
 
 use super::icons;
 use super::ui::{group_tag, sr};
 use crate::app::App;
-use crate::app::picker::Target;
+use crate::app::picker::{PICKER_TOP, Target};
 use crate::theme::{TYPE, radius};
 
 /// Lines the preview holds from the first change on; it scrolls through them both ways.
 const PREVIEW_LINES: usize = 120;
-/// The preview pane's width (the panel less the list and its rule).
-const PREVIEW_W: f32 = 539.0;
+/// The list's width, at most; it gives way to the preview in a narrow panel.
+const LIST_W: f32 = 400.0;
+/// How far in from the panel's edges a resize drag starts.
+const GRIP: f32 = 6.0;
 
 fn picker_key(s: &mut App, ev: &KeyEvent, tx: &mut Tx) -> bool {
     match ev.key {
         Key::Down => {
-            s.picker_move(true);
+            s.picker_move(true, tx);
             true
         }
         Key::Up => {
-            s.picker_move(false);
+            s.picker_move(false, tx);
             true
         }
         Key::Enter => {
             s.picker_go(ev.mods.ctrl || ev.mods.cmd, tx);
+            true
+        }
+        // Vim: Esc leaves the query for normal mode (`App::picker_normal_key`).
+        Key::Escape if s.keymap_profile().vim_motions() => {
+            s.picker.edit.focused = false;
             true
         }
         Key::Escape => {
@@ -34,6 +41,25 @@ fn picker_key(s: &mut App, ev: &KeyEvent, tx: &mut Tx) -> bool {
             true
         }
         _ => false,
+    }
+}
+
+/// A drag strip on the panel's right edge, bottom edge or bottom-right corner.
+fn resize_grip(key: &'static str, label: &'static str, cursor: Cursor, x: bool, y: bool) -> El {
+    let e = el()
+        .key(key)
+        .role("separator")
+        .label(label)
+        .cursor(cursor)
+        .on_drag(move |s: &mut App, d: &mut Drag, tx: &mut Tx| {
+            tx.instant();
+            let (dx, dy) = (if x { d.dx } else { 0.0 }, if y { d.dy } else { 0.0 });
+            s.drag_picker(d.phase, dx, dy, d.cancelled());
+        });
+    match (x, y) {
+        (true, false) => e.pin(None, Some(0.0), Some(0.0), Some(GRIP)).w(GRIP),
+        (false, true) => e.pin(Some(0.0), None, Some(GRIP), Some(0.0)).h(GRIP),
+        _ => e.pin(None, None, Some(0.0), Some(0.0)).size(GRIP * 2.0, GRIP * 2.0),
     }
 }
 
@@ -68,7 +94,10 @@ pub(super) fn picker(s: &App, k: &Kit) -> Option<El> {
             Target::Thread(_) => &icons::CHAT,
         };
         line = line
-            .child(icons::draw(glyph, 14.0, k.c.text_muted))
+            .child(match e.target {
+                Target::File(g) => s.file_icons.file(s.keys[g].rsplit('/').next().unwrap_or_default(), 14.0),
+                _ => icons::draw(glyph, 14.0, k.c.text_muted),
+            })
             .child(text(e.label.clone()).font(TYPE.ui).color(k.c.text_base).truncate().shrink());
         if let Target::File(g) = e.target {
             let f = &s.diff.files()[g];
@@ -103,7 +132,12 @@ pub(super) fn picker(s: &App, k: &Kit) -> Option<El> {
     if rows.is_empty() {
         list = list.child(text("Nothing matches").font(TYPE.small).color(k.c.text_muted).px(8.0).py(6.0));
     }
-    let preview = rows.get(sel).map(|e| preview(s, &e.target, k)).unwrap_or_else(col);
+    let (w, h) = s.picker_size();
+    let list_w = LIST_W.min(w * 0.45).floor();
+    let preview = rows
+        .get(sel)
+        .map(|e| preview(s, &e.target, w - list_w - 1.0, k))
+        .unwrap_or_else(col);
     let input = row()
         .key("picker-input-row")
         .w_full()
@@ -120,29 +154,48 @@ pub(super) fn picker(s: &App, k: &Kit) -> Option<El> {
                     .width(None)
                     .plain()
                     .on_edit(|s: &mut App| &mut s.picker.edit)
-                    .on_change(|s: &mut App, _: &mut Tx| s.picker.sel = 0)
+                    .on_change(|s: &mut App, tx: &mut Tx| s.picker_select(0, tx))
                     .on_key(picker_key)
                     .build(k)
                     .key("picker-input"),
             ),
         );
-    let foot = row()
+    let vim = s.keymap_profile().vim_motions();
+    let normal = s.picker_normal();
+    let hint = |t: &'static str| text(t).font(TYPE.small).color(k.c.text_faint);
+    let mut foot = row()
+        .key("picker-foot")
         .w_full()
         .h(34.0)
         .px(14.0)
         .gap(16.0)
         .items_center()
-        .fill(surf.card_head)
-        .child(text("↑↓ move").font(TYPE.small).color(k.c.text_faint))
-        .child(text("Enter go").font(TYPE.small).color(k.c.text_faint))
-        .child(text("Ctrl+Enter go and zoom").font(TYPE.small).color(k.c.text_faint).grow(1.0))
-        .child(text("Esc close").font(TYPE.small).color(k.c.text_faint));
+        .fill(surf.card_head);
+    if vim {
+        foot = foot.child(
+            text(if normal { "NORMAL" } else { "INSERT" })
+                .key("picker-mode")
+                .font(TYPE.micro_mono)
+                .color(if normal { r.accent } else { k.c.text_muted }),
+        );
+    }
+    foot = if normal {
+        foot.child(hint("j/k move"))
+            .child(hint("Enter go"))
+            .child(hint("i search").grow(1.0))
+            .child(hint("Esc close"))
+    } else {
+        foot.child(hint("↑↓ move"))
+            .child(hint("Enter go"))
+            .child(hint("Ctrl+Enter go and zoom").grow(1.0))
+            .child(hint(if vim { "Esc normal mode" } else { "Esc close" }))
+    };
     let panel = col()
         .key("picker")
         .role("dialog")
         .label("Go to file")
-        .w(940.0)
-        .h(520.0)
+        .w(w)
+        .h(h)
         .radius(radius::ISLAND)
         .fill(r.raised)
         .border(1.0, surf.card_border)
@@ -159,7 +212,7 @@ pub(super) fn picker(s: &App, k: &Kit) -> Option<El> {
                 .child(
                     col()
                         .key("picker-list")
-                        .w(400.0)
+                        .w(list_w)
                         .h_full()
                         .scroll(ScrollSpec { stick_bottom: false })
                         .child(list),
@@ -168,12 +221,33 @@ pub(super) fn picker(s: &App, k: &Kit) -> Option<El> {
                 .child(preview),
         )
         .child(el().w_full().h(1.0).fill(surf.hairline))
-        .child(foot);
-    Some(col().w_full().items_center().pt(34.0).child(panel))
+        .child(foot)
+        .child(resize_grip(
+            "picker-grip-right",
+            "Resize the picker's width",
+            Cursor::ResizeColumn,
+            true,
+            false,
+        ))
+        .child(resize_grip(
+            "picker-grip-bottom",
+            "Resize the picker's height",
+            Cursor::ResizeRow,
+            false,
+            true,
+        ))
+        .child(resize_grip(
+            "picker-grip-corner",
+            "Resize the picker",
+            Cursor::Crosshair,
+            true,
+            true,
+        ));
+    Some(col().w_full().items_center().pt(PICKER_TOP).child(panel))
 }
 
 /// The selected file's first hunk as the diff draws it, or a note that there is none.
-fn preview(s: &App, t: &Target, k: &Kit) -> El {
+fn preview(s: &App, t: &Target, width: f32, k: &Kit) -> El {
     let (surf, r) = sr(k);
     let pane = col().key("picker-preview").w(0.0).grow(1.0).min_w(0.0).h_full().fill(surf.reader);
     let Target::File(g) = *t else {
@@ -219,7 +293,7 @@ fn preview(s: &App, t: &Target, k: &Kit) -> El {
             ),
     );
     let num = rune::tok::TextStyle::new(12.0, 400.0).mono().lh(20.0);
-    let mut body = col().key("picker-preview-lines").min_w(PREVIEW_W).pb(6.0);
+    let mut body = col().key("picker-preview-lines").min_w(width).pb(6.0);
     for i in start..(start + PREVIEW_LINES).min(f.lines.len()) {
         let l = &f.lines[i];
         let (sign, ink, fill) = match l.kind {

@@ -125,6 +125,78 @@ fn a_diagram_plays_on_the_map_without_rebuilds_and_idles_at_zero_work() {
 }
 
 #[test]
+fn play_on_the_map_runs_partway_on_the_frame_clock_with_or_without_reduced_motion() {
+    for reduced in [false, true] {
+        let mut rt = runtime(diagram_app());
+        rt.poll = Some(crate::poll);
+        rt.set_system_reduced_motion(reduced);
+        typed(&mut rt, "m");
+        assert_eq!(rt.state.map_tab(), MapTab::Lab(style("tour")));
+        on(&mut rt, "map-lab-play");
+        let d = rt.state.diagram.lab.as_ref().unwrap().clock.duration();
+        for _ in 0..(d * 0.3 * 60.0) as usize {
+            rt.frame(1.0 / 60.0);
+        }
+        let lab = rt.state.diagram.lab.as_ref().unwrap();
+        let (t, last) = (lab.clock.t(), lab.rig().unwrap().steps.len() - 1);
+        assert!(lab.playing(), "reduced {reduced}: still playing at {t} of {d}");
+        assert!(t > 0.2 * d && t < 0.6 * d, "reduced {reduced}: partway, at {t} of {d}");
+        let step = lab.step().map(|(i, _)| i).unwrap();
+        assert!(step > 0 && step < last, "reduced {reduced}: a middle step, not {step} of {last}");
+    }
+}
+
+#[test]
+fn the_reader_tabs_and_the_file_list_leave_the_map_and_escape_still_does() {
+    use crate::app::ReaderTab;
+    let mut rt = runtime(diagram_app());
+    for (key, tab) in [("tab-overview", ReaderTab::Overview), ("tab-changes", ReaderTab::Changes)] {
+        typed(&mut rt, "m");
+        assert!(rt.state.layout.is_open(Overlay::Map));
+        on(&mut rt, key);
+        assert!(!rt.state.layout.is_open(Overlay::Map), "{key} leaves the Map");
+        assert_eq!(rt.state.reader_tab(), tab, "{key} shows its tab");
+        assert!(rt.find("overlay-map").is_none(), "{key}: the reader is back");
+    }
+
+    typed(&mut rt, "m");
+    let row = (0..rt.state.keys.len())
+        .map(|g| (g, format!("file-{}", rt.state.keys[g])))
+        .find(|(g, k)| rt.state.current() != Some(*g) && rt.find(k).is_some())
+        .expect("a list row for another file");
+    on(&mut rt, &row.1);
+    assert!(!rt.state.layout.is_open(Overlay::Map), "a file in the list leaves the Map");
+    assert_eq!(rt.state.reader_tab(), ReaderTab::Changes);
+    assert_eq!(rt.state.current(), Some(row.0), "and opens that file");
+
+    typed(&mut rt, "m");
+    rt.update(|s, _| s.reload());
+    settle(&mut rt);
+    assert!(rt.state.layout.is_open(Overlay::Map), "a reload restoring the place keeps the Map");
+    press(&mut rt, Key::Escape, Mods::default());
+    assert!(!rt.state.layout.is_open(Overlay::Map), "Escape still leaves it");
+}
+
+#[test]
+fn the_map_diagram_canvas_follows_the_window_when_it_narrows() {
+    let mut rt = sized_runtime(diagram_app(), (3400.0, 1300.0));
+    typed(&mut rt, "m");
+    settle(&mut rt);
+    let wide = rt.state.diagram.lab_size[0];
+    rt.set_viewport((1600.0, 1000.0), 1.0);
+    settle(&mut rt);
+    settle(&mut rt);
+    let narrow = rt.state.diagram.lab_size[0];
+    let main = rt.presented("main").unwrap().0;
+    let canvas = rt.presented("map-lab-canvas").unwrap().0;
+    let figure = rt.presented("tour-figure").unwrap().0;
+    assert!(
+        narrow < 1600.0 && canvas[0] + canvas[2] <= main[0] + main[2] + 1.0 && figure[0] + figure[2] <= main[0] + main[2] + 1.0,
+        "wide {wide}, narrow {narrow}, main {main:?}, canvas {canvas:?}, figure {figure:?}"
+    );
+}
+
+#[test]
 fn the_node_pane_closes_and_stays_closed_until_a_node_is_pressed() {
     let mut rt = runtime(diagram_app());
     typed(&mut rt, "m");

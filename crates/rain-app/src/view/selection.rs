@@ -44,7 +44,7 @@ pub(super) fn toolbar(s: &App, k: &Kit, cx: &mut Cx<App>) -> Vec<El> {
 }
 
 /// What the toolbar floats by, in window points: the first and last line boxes of the text
-/// selected, or for selected lines the right end of the last line's row; and the diff column.
+/// selected, or for selected lines the last line's row by its numbers; and the diff column.
 /// `None` when nothing selected is on screen.
 struct Boxes {
     first: [f32; 4],
@@ -64,8 +64,11 @@ fn selection_boxes(s: &App, cx: &Cx<App>, width: f32) -> Option<Boxes> {
         let rows = [sel.start, sel.end].map(|at| a.row_of_line(sel.file, at));
         let last = rows.iter().flatten().max()?;
         let r = cx.window_layout(&a.row_key(*last as usize)?)?;
-        let right = [r[0] + r[2] - width - 16.0, r[1], width, LINE_H];
-        (right, right, true)
+        // By the line numbers that were clicked: the new half of a split row starts mid-way.
+        let half = a.layout(sel.file) == Layout::Split && sel.end.side == Side::New;
+        let left = r[0] + if half { r[2] / 2.0 } else { 0.0 } + 8.0;
+        let by = [left, r[1], width, LINE_H];
+        (by, by, true)
     };
     let shown = last[1] + last[3] > column[1] + HEAD_H && first[1] < column[1] + column[3];
     shown.then_some(Boxes {

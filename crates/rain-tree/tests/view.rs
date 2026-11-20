@@ -3,13 +3,14 @@
 
 use rain_core::FileTag;
 use rain_tree::sample::sample;
-use rain_tree::{TREE_KEY, TreeFilter, TreeState, TreeView};
+use rain_tree::{FileIcons, TREE_KEY, TreeFilter, TreeState, TreeView};
 use rune::{Cx, El, Env, Key, KeyEvent, Mods, Runtime, col};
 use rune_kit::Kit;
 use serde_json::Value;
 
 struct App {
     tree: TreeState,
+    icons: FileIcons,
     opened: Vec<String>,
     viewed: Vec<(String, bool)>,
     groups: Vec<FileTag>,
@@ -20,6 +21,7 @@ fn view(s: &App, _: &mut Cx<App>) -> El {
     let k = Kit::neutral(true);
     col().size(420.0, 600.0).child(
         TreeView::new(|s: &App| &s.tree, |s: &mut App| &mut s.tree)
+            .file_icons(|s: &App| &s.icons)
             .on_open(|s: &mut App, key, _| s.opened.push(key.to_owned()))
             .on_viewed(|s: &mut App, key, on, _| s.viewed.push((key.to_owned(), on)))
             .on_mark_group_viewed(|s: &mut App, tag, _| s.groups.push(tag))
@@ -37,6 +39,7 @@ fn runtime(n: usize) -> Runtime<App> {
 fn runtime_with(tree: TreeState) -> Runtime<App> {
     let app = App {
         tree,
+        icons: FileIcons::default(),
         opened: Vec::new(),
         viewed: Vec::new(),
         groups: Vec::new(),
@@ -322,4 +325,29 @@ fn every_row_chip_and_checkbox_has_a_label() {
         vouchers["description"].as_str().unwrap_or("").contains("files viewed"),
         "{vouchers}"
     );
+}
+
+#[test]
+fn a_file_row_draws_its_material_icon_before_the_name() {
+    let mut rt = runtime(40);
+    rt.update(|s, tx| {
+        s.tree.reveal(VOUCHERS, tx);
+    });
+    settle(&mut rt);
+    let els = rt.elements();
+    let label = els
+        .iter()
+        .find(|e| e.key.as_deref() == Some("label") && e.text.as_deref() == Some("VouchersController.cs"))
+        .expect("the file's row");
+    let middle = label.rect[1] + label.rect[3] / 2.0;
+    let icon = els
+        .iter()
+        .find(|e| e.key.as_deref() == Some("file-icon") && e.rect[1] <= middle && middle <= e.rect[1] + e.rect[3])
+        .expect("an icon on the file's row");
+    assert_eq!([icon.rect[2], icon.rect[3]], [16.0, 16.0]);
+    let gap = label.rect[0] - (icon.rect[0] + icon.rect[2]);
+    assert!((3.5..=4.5).contains(&gap), "the icon sits in the slot before the name: {gap}");
+    assert!(els.iter().any(|e| e.key.as_deref() == Some("folder-icon")), "folders draw theirs");
+    let image = rt.state.icons.file_image("VouchersController.cs", 16.0);
+    assert_eq!(image.wait(), Ok([16, 16]), "the C# icon rasterized at 16 px for scale 1");
 }

@@ -15,7 +15,7 @@ use rune::{Color, Cursor, El, GrowthSpec, ScrollSpec, Tx, col, el, row, text};
 use rune_kit::{Button, ButtonVariant, ControlSize, Kit};
 
 use super::icons;
-use super::ui::{Ghost, outline, sr};
+use super::ui::{Activate, Ghost, outline, sr};
 use super::{messages, muted};
 use crate::app::board::{CHANGE_GROUPS, CHANGES, Listing, Pick, Row, WAITING, change_title, section_group, section_of, section_title};
 use crate::app::{App, ME};
@@ -44,7 +44,12 @@ struct RowLook {
     kit: Kit,
     s: Surfaces,
     r: Roles,
+    /// The rows' width as last laid out; `None` before the first layout.
+    width: Option<f32>,
 }
+
+/// The narrowest folder hint worth drawing: an ellipsis and a few letters.
+const MIN_HINT: f32 = 36.0;
 
 fn slug(g: Group) -> String {
     g.label().to_lowercase()
@@ -103,6 +108,7 @@ fn body(s: &App, look: &Look) -> El {
                 col().key("list-files").w_full().grow(1.0).min_h(0.0).child(
                     TreeView::new(|s: &App| &s.tree, |s: &mut App| &mut s.tree)
                         .rows_only()
+                        .file_icons(|s: &App| &s.file_icons)
                         .on_open(|s: &mut App, key: &str, tx: &mut Tx| s.goto_key(key, tx))
                         .on_viewed(|s: &mut App, key: &str, on, tx: &mut Tx| {
                             s.persist_viewed_key(key, on);
@@ -119,6 +125,7 @@ fn body(s: &App, look: &Look) -> El {
         kit: k.clone(),
         s: look.s,
         r: look.r,
+        width: rune::memo::layout_size("list-files").map(|size| size[0]),
     });
     let n = listing.rows.len();
     let rows = col()
@@ -256,7 +263,7 @@ fn header(s: &App, sec: u8, l: &Listing, k: &Kit) -> El {
                 .height(22.0)
                 .build(k)
                 .label("Mark all files viewed")
-                .on_press(|s: &mut App| s.mark_all_viewed()),
+                .on_activate(|s: &mut App| s.mark_all_viewed()),
         );
         h = h.child(
             Ghost::new("changes-mode")
@@ -269,7 +276,7 @@ fn header(s: &App, sec: u8, l: &Listing, k: &Kit) -> El {
                 .height(22.0)
                 .on(s.board.folders)
                 .build(k)
-                .on_press(|s: &mut App| s.toggle_changes_mode()),
+                .on_activate(|s: &mut App| s.toggle_changes_mode()),
         );
     }
     h
@@ -286,10 +293,29 @@ fn accept_button(g: Group, n: usize, k: &Kit) -> El {
             ),
             None => format!("Mark {n} {} files viewed without reading", g.label().to_lowercase()),
         })
-        .on_press_tx(move |s: &mut App, tx: &mut Tx| s.accept(g, tx))
+        .on_activate_tx(move |s: &mut App, tx: &mut Tx| s.accept(g, tx))
 }
 
-/// Group tag · name · dim folder · `+n −m` · thread count · ✓ once viewed.
+/// A file row's icon, in points square.
+const FILE_ICON: f32 = 16.0;
+
+/// What a file row of `width` leaves its folder hint once the icon, the whole name, the counts,
+/// the comment pill, the viewed slot and the gaps are in; `None` before the first layout.
+fn folder_room(width: Option<f32>, name: &str, plus: &str, minus: &str, threads: u32) -> Option<f32> {
+    use rune::text::advance;
+    const GAP: f32 = 6.0;
+    // The row's inset (6 + 6) and padding (10 + 8), then the 20 point viewed slot.
+    let mut used = 30.0 + 20.0 + FILE_ICON + advance(name, TYPE.ui).ceil();
+    used += advance(plus, TYPE.micro_mono).ceil() + 4.0 + advance(minus, TYPE.micro_mono).ceil();
+    // Between icon · name · folder · counts · viewed.
+    used += 4.0 * GAP;
+    if threads > 0 {
+        used += GAP + 5.0 + 12.0 + 2.0 + advance(&threads.to_string(), TYPE.micro).ceil() + 5.0;
+    }
+    width.map(|w| (w - used).floor())
+}
+
+/// Group tag · icon · name · dim folder · `+n −m` · thread count · ✓ once viewed.
 fn file_row(s: &App, g: usize, key: String, look: &RowLook) -> El {
     let k = &look.kit;
     let path = &s.keys[g];
@@ -311,6 +337,8 @@ fn file_row(s: &App, g: usize, key: String, look: &RowLook) -> El {
     }
     let current = s.reader_tab() == crate::app::ReaderTab::Changes && s.current() == Some(g);
     let dir = dir.replacen('/', " · ", 1);
+    let (plus, minus) = (format!("+{}", f.additions), format!("−{}", f.deletions));
+    let room = folder_room(look.width, name, &plus, &minus, threads);
     let h = row_height(s);
     let name_color = if viewed || group == Group::Skim {
         k.c.text_muted
@@ -332,6 +360,7 @@ fn file_row(s: &App, g: usize, key: String, look: &RowLook) -> El {
         .radius(radius::BUTTON)
         .cursor(Cursor::Pointer)
         .on_press_tx(move |s: &mut App, tx: &mut Tx| s.goto_file(g, tx))
+        .child(s.file_icons.file(name, FILE_ICON))
         .child(
             text(name.to_owned())
                 // One weight whether current or not, so selecting a row moves nothing in it.
@@ -341,33 +370,46 @@ fn file_row(s: &App, g: usize, key: String, look: &RowLook) -> El {
                 .shrink()
                 .min_w(60.0)
                 .a11y_hidden(),
-        )
-        .child(
-            text(dir)
+        );
+    // Too narrow to say anything, the folder goes rather than leave a stub of an ellipsis.
+    r = match room {
+        Some(w) if w < MIN_HINT => r.child(el().grow(1.0).a11y_hidden()),
+        _ => {
+            let hint = text(dir)
                 .font(TYPE.small)
                 .color(k.c.text_faint)
                 .truncate_head()
                 .grow(1.0)
                 .shrink()
                 .min_w(0.0)
-                .a11y_hidden(),
-        )
-        .child(
-            row()
-                .gap(4.0)
-                .a11y_hidden()
-                .child(text(format!("+{}", f.additions)).font(TYPE.micro_mono).color(k.c.success.fg))
-                .child(text(format!("−{}", f.deletions)).font(TYPE.micro_mono).color(k.c.danger.fg)),
-        );
+                .a11y_hidden();
+            r.child(match room {
+                Some(w) => hint.max_w(w),
+                None => hint,
+            })
+        }
+    };
+    r = r.child(
+        row()
+            .gap(4.0)
+            .a11y_hidden()
+            .child(text(plus).font(TYPE.micro_mono).color(k.c.success.fg))
+            .child(text(minus).font(TYPE.micro_mono).color(k.c.danger.fg)),
+    );
     if threads > 0 {
+        // A tinted pill, so files with comments stand out from the counts beside them.
         r = r.child(
             row()
                 .key("threads")
+                .h(16.0)
+                .px(5.0)
                 .gap(2.0)
                 .items_center()
+                .radius(8.0)
+                .fill(k.c.info.bg)
                 .a11y_hidden()
-                .child(icons::draw(&icons::CHAT, 12.0, k.c.text_muted))
-                .child(text(threads.to_string()).font(TYPE.micro).color(k.c.text_muted)),
+                .child(icons::draw(&icons::CHAT, 12.0, k.c.info.fg))
+                .child(text(threads.to_string()).font(TYPE.micro).color(k.c.info.fg)),
         );
     }
     // The group's colour as a thin bar at the row's left; the heading above names it.
@@ -436,7 +478,7 @@ fn accepted_row(s: &App, a: usize, key: String, k: &Kit) -> El {
             ),
             None => format!("Undo this accept: its files go back to {group}, unviewed"),
         })
-        .on_press(move |s: &mut App| s.undo_accept_at(a));
+        .on_activate(move |s: &mut App| s.undo_accept_at(a));
     k.interactive(
         row()
             .key(key)
@@ -835,7 +877,7 @@ fn landing(s: &App, k: &Kit) -> El {
         if n > 0 {
             line = line.child(
                 outline(format!("landing-accept-{}", slug(g)), format!("Accept {n}"), None, 24.0, k)
-                    .on_press_tx(move |s: &mut App, tx: &mut Tx| s.accept(g, tx)),
+                    .on_activate_tx(move |s: &mut App, tx: &mut Tx| s.accept(g, tx)),
             );
         }
         list = list.child(
@@ -869,7 +911,7 @@ fn landing(s: &App, k: &Kit) -> El {
                 k.c.contrast_pressed,
             )
             .press_scale(0.97)
-            .on_press_tx(|s: &mut App, tx: &mut Tx| s.step_item(true, tx)),
+            .on_activate_tx(|s: &mut App, tx: &mut Tx| s.step_item(true, tx)),
         ),
     );
     if s.board.pick == Pick::Brief {

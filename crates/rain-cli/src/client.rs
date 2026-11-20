@@ -265,6 +265,11 @@ pub fn comment(cmd: CommentCmd) -> i32 {
                 repo.as_deref(),
             )
         }),
+        CommentCmd::Claim { thread, release, conn } => on(&conn, |p| {
+            let path = format!("/api/comments/{}/claim", encode(&thread));
+            let body = json!({ "release": release }).to_string();
+            report(Http::new(p).json("POST", &path, Some(body), "Failed to claim the question"))
+        }),
         CommentCmd::SetState {
             id,
             state,
@@ -1096,6 +1101,13 @@ fn brief_body(arg: Option<String>) -> Result<(String, &'static str), String> {
     serde_json::from_str::<Value>(&t)
         .map(|v| (v.to_string(), "application/json"))
         .map_err(|_| "Invalid brief JSON".to_owned())
+}
+
+/// Whether the window on `port` holds a brief; `None` when it does not answer.
+pub fn has_brief(port: u16) -> Option<bool> {
+    let text = Http::new(port).json("GET", "/api/brief", None, "Failed to read the brief").ok()?;
+    let v: Value = serde_json::from_str(&text).ok()?;
+    Some(!v["brief"].is_null())
 }
 
 /// Exit 0 when the check finds nothing, 1 when it finds anything or there is no brief.

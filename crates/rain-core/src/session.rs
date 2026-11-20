@@ -283,6 +283,9 @@ pub enum EventKind {
     Brief,
     Notes,
     Overview,
+    /// An attached agent has had a while and set no brief.
+    #[serde(rename = "brief-missing")]
+    BriefMissing,
 }
 
 /// One typed change, for `/api/events` readers that want deltas instead of a dump.

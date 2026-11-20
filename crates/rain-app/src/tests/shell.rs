@@ -705,6 +705,73 @@ fn unchanged_ranges_open_once_the_whole_file_is_read() {
 }
 
 #[test]
+fn a_thread_outside_the_diff_sits_on_its_line_while_its_context_is_open() {
+    let dir = scratch_repo();
+    let shared = Arc::new(Shared::default());
+    let mut a = repo_app(&dir, shared.clone(), false);
+    let f = a.keys.iter().position(|k| k.ends_with("a.cs")).unwrap();
+    let files = a.diff.files().to_vec();
+    let excerpt = move |_: &str, p: &str, an: &Anchor| {
+        files
+            .iter()
+            .find(|f| f.path == p)
+            .and_then(|f| rain_comments::ops::snapshot_at(f, an, p))
+    };
+    let json = r#"{"type":"thread","filePath":"a.cs","position":{"side":"new","line":10},"body":"why ten?","author":"claude"}"#;
+    let r = a.mutate(|s| rain_comments::apply_with_excerpts(s, rain_comments::from_difit_json(json).unwrap(), "", &excerpt));
+    assert!(r.warnings.is_empty(), "{:?}", r.warnings);
+    a.rebuild_annotations();
+    let id = a.mirror.threads[0].id.clone();
+    let at = LineRef::new(Side::New, 10);
+    let in_strip = |a: &App| a.strip_threads(f).iter().any(|t| t.id == id);
+    let inline = |a: &App| a.diff.row_of_line(f, at).is_some() && a.diff.annotations().iter().any(|x| x.id == id);
+    assert!(a.unplaced[&f].contains(&id));
+    assert!(in_strip(&a) && !inline(&a), "folded away, it waits in the strip");
+
+    a.diff.request_expand(f, 0, rain_diffview::Expand::All);
+    a.fetch_texts(f);
+    assert!(inline(&a) && !in_strip(&a), "expanded, it sits on line 10");
+    a.diff.collapse_expanded(f);
+    assert!(in_strip(&a) && !inline(&a), "collapsed, it goes back to the strip");
+
+    let mut tx = rune::Tx::default();
+    a.toggle_whole(f, &mut tx);
+    assert!(inline(&a) && !in_strip(&a), "whole file shows it on its line");
+    a.toggle_whole(f, &mut tx);
+    assert!(in_strip(&a));
+
+    a.toggle_fold(&id);
+    a.show_off_diff(&id, &mut tx);
+    assert!(!a.is_folded(&id) && inline(&a), "a strip badge opens its line");
+
+    a.open_composer(f, Anchor::Line { side: Side::New, line: 12 }, String::new(), None, &mut tx);
+    a.submit_composer("and twelve?".into());
+    let mine = a
+        .mirror
+        .threads
+        .iter()
+        .find(|t| t.messages[0].body == "and twelve?")
+        .unwrap()
+        .id
+        .clone();
+    assert!(
+        !a.strip_threads(f).iter().any(|t| t.id == mine),
+        "a comment on an opened line stays there"
+    );
+
+    let back: serde_json::Value = serde_json::from_str(&rain_comments::comments_json_string(&shared.lock(), None)).unwrap();
+    let t = back["threads"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["id"] == id.as_str())
+        .unwrap()
+        .clone();
+    assert_eq!(t["position"]["line"], 10);
+    assert!(t.get("target").is_none(), "a line thread, not a file-level one");
+}
+
+#[test]
 fn a_thread_follows_its_line_when_a_commit_moves_it() {
     let dir = scratch_repo();
     let shared = Arc::new(Shared::default());

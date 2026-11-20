@@ -118,9 +118,11 @@ fn is_agent(author: Option<&str>) -> bool {
     author.map(str::trim).is_some_and(|a| !a.is_empty())
 }
 
-/// An agent's reply to a question whose answer is pending marks it answered by that message.
+/// An agent's reply to a question, or to any thread whose answer is pending (an `@claude` reply
+/// on a comment), marks it answered by that message.
 pub(crate) fn record_answer(t: &mut Thread, message_id: &str, author: Option<&str>, at: &str) {
-    if t.kind() != ThreadKind::Question || !is_agent(author) {
+    let asked = t.answer.as_ref().is_some_and(|a| a.status.pending());
+    if (t.kind() != ThreadKind::Question && !asked) || !is_agent(author) {
         return;
     }
     let a = t.answer.get_or_insert_with(Answer::default);
@@ -128,10 +130,39 @@ pub(crate) fn record_answer(t: &mut Thread, message_id: &str, author: Option<&st
         return;
     }
     a.status = AnswerStatus::Answered;
-    a.by.get_or_insert_with(|| "attached".to_owned());
+    // The launcher's own reply re-marks it `launcher` once its run ends.
+    a.by = Some("attached".to_owned());
     a.ended_at = Some(at.to_owned());
     a.message_id = Some(message_id.to_owned());
     a.error = None;
+}
+
+/// Whether the attached agent holds `t`'s pending question.
+pub fn claimed(t: &Thread) -> bool {
+    t.answer
+        .as_ref()
+        .is_some_and(|a| a.status == AnswerStatus::Answering && a.by.as_deref() == Some("attached"))
+}
+
+/// The attached agent takes `id`'s pending question, or with `release` gives it back to the
+/// queue; `Some(true)` when that changed it, `None` for an unknown thread.
+pub fn claim(s: &mut Session, id: &str, release: bool) -> Option<bool> {
+    let t = thread_mut(s, id)?;
+    if t.answer.as_ref().is_none_or(|a| !a.status.pending()) || claimed(t) != release {
+        return Some(false);
+    }
+    let a = t.answer.get_or_insert_with(Answer::default);
+    if release {
+        *a = Answer::default();
+    } else {
+        a.status = AnswerStatus::Answering;
+        a.by = Some("attached".to_owned());
+        a.started_at = Some(now_iso());
+        a.ended_at = None;
+        a.error = None;
+    }
+    s.bump_comments();
+    Some(true)
 }
 
 /// Appends a reply; returns the new message's id, or `None` for an unknown thread.

@@ -5,7 +5,7 @@ use rune::{Cursor, El, Tx, el, row, text};
 use rune_kit::Kit;
 
 use super::icons;
-use super::ui::{outline, sr};
+use super::ui::{Activate, outline, sr};
 use crate::app::App;
 use crate::theme::{TYPE, radius};
 
@@ -89,7 +89,7 @@ pub(crate) fn banner(key: &str, msg: String, tone: Tone, actions: &[Action], k: 
         } else {
             quiet_button(format!("{key}-action-{i}"), label, k)
         };
-        r = r.child(b.on_press_tx(f));
+        r = r.child(b.on_activate_tx(f));
     }
     r.child(
         el().pin(Some(0.0), None, Some(0.0), Some(0.0))
@@ -137,7 +137,7 @@ pub(crate) fn inset_banner(key: &str, msg: String, tone: Tone, actions: &[Action
         } else {
             quiet_button(format!("{key}-action-{i}"), label, k)
         };
-        r = r.child(b.on_press_tx(f));
+        r = r.child(b.on_activate_tx(f));
     }
     row().w_full().px(10.0).pt(8.0).child(r)
 }

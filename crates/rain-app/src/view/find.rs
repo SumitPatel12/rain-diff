@@ -5,7 +5,7 @@ use rune::{El, Key, KeyEvent, Tx, col, el, row, text};
 use rune_kit::{Kit, TextInput};
 
 use super::icons;
-use super::ui::{Ghost, sr};
+use super::ui::{Activate, Ghost, sr};
 use crate::app::App;
 use crate::theme::TYPE;
 
@@ -66,7 +66,7 @@ pub(super) fn find_bar(s: &App, k: &Kit) -> El {
                 .help("Previous match  Shift+Enter")
                 .height(24.0)
                 .build(k)
-                .on_press_tx(|s: &mut App, tx: &mut Tx| s.find_step(false, tx)),
+                .on_activate_tx(|s: &mut App, tx: &mut Tx| s.find_step(false, tx)),
         )
         .child(
             Ghost::new("find-next")
@@ -74,7 +74,7 @@ pub(super) fn find_bar(s: &App, k: &Kit) -> El {
                 .help("Next match  Enter")
                 .height(24.0)
                 .build(k)
-                .on_press_tx(|s: &mut App, tx: &mut Tx| s.find_step(true, tx)),
+                .on_activate_tx(|s: &mut App, tx: &mut Tx| s.find_step(true, tx)),
         )
         .child(el().grow(1.0).a11y_hidden())
         .child(text("Enter next · Shift+Enter previous").font(TYPE.small).color(k.c.text_faint))
@@ -84,7 +84,7 @@ pub(super) fn find_bar(s: &App, k: &Kit) -> El {
                 .help("Close find  Esc")
                 .height(24.0)
                 .build(k)
-                .on_press(|s: &mut App| s.close_find()),
+                .on_activate(|s: &mut App| s.close_find()),
         )
         .child(
             el().pin(Some(0.0), None, Some(0.0), Some(0.0))

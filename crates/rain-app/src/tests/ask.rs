@@ -426,20 +426,215 @@ fn an_attached_agents_heartbeat_during_a_run_leaves_it_idle_after() {
     assert_eq!(ctl.borrow().reqs.len(), 1, "the next question goes to the attached agent first");
 }
 
+/// The agent's presence as last heard `secs` ago.
+fn presence_ago(a: &App, state: PresenceState, on: Option<&str>, secs: i64) {
+    a.shared.set_presence(Presence {
+        state,
+        on: on.map(str::to_owned),
+        reason: None,
+        seen_at: Some(iso_from_millis(crate::app::conversation::now_ms() - secs * 1_000)),
+    });
+}
+
+fn claim(a: &mut App, id: &str, release: bool) {
+    let tid = id.to_owned();
+    assert_eq!(a.mutate(|s| ops::claim(s, &tid, release)), Some(true));
+}
+
+fn reply(a: &mut App, id: &str, body: &str) {
+    let tid = id.to_owned();
+    a.mutate(|s| ops::reply(s, &tid, body, Some("claude")));
+}
+
 #[test]
-fn a_second_answer_from_the_other_answerer_appends() {
+fn the_agents_answer_stops_a_running_launcher_and_drops_its_late_reply() {
     let (mut a, ctl) = setup();
     let id = ask(&mut a, "Why?");
     let now = Instant::now();
     a.ask_tick_at(now);
-    let tid = id.clone();
-    a.mutate(|s| ops::reply(s, &tid, "Attached says: UoW.", Some("claude")));
-    let first = status(&a, &id).message_id.clone();
+    reply(&mut a, &id, "Attached says: UoW.");
     answer(&ctl, 0, ok("Launcher says: UoW too."));
     a.ask_tick_at(now + Duration::from_secs(1));
+    assert!(ctl.borrow().cancelled[0], "the launcher run is stopped");
     let t = thread(&a, &id);
-    assert_eq!(t.messages.len(), 3, "both answers kept");
-    assert_eq!(t.answer.unwrap().message_id, first, "the first answer stays the answer");
+    assert_eq!(t.messages.len(), 2, "only the agent's answer is posted");
+    assert_eq!(t.messages[1].body, "Attached says: UoW.");
+    let ans = t.answer.unwrap();
+    assert_eq!((ans.status, ans.by.as_deref()), (AnswerStatus::Answered, Some("attached")));
+    assert!(!a.ask.is_tracking(&id));
+    assert_eq!(a.shared.asks().running, 0);
+    assert_eq!(a.shared.presence(), Presence::default(), "the launcher's dot goes");
+}
+
+#[test]
+fn a_claim_stops_a_running_launcher_and_the_agent_answers() {
+    let (mut a, ctl) = setup();
+    let id = ask(&mut a, "Why?");
+    let now = Instant::now();
+    a.ask_tick_at(now);
+    assert_eq!(status(&a, &id).by.as_deref(), Some("launcher"));
+    claim(&mut a, &id, false);
+    a.ask_tick_at(now + Duration::from_secs(1));
+    assert!(ctl.borrow().cancelled[0]);
+    let ans = status(&a, &id);
+    assert_eq!((ans.status, ans.by.as_deref()), (AnswerStatus::Answering, Some("attached")));
+    a.ask_tick_at(now + Duration::from_secs(60));
+    assert_eq!(ctl.borrow().reqs.len(), 1, "the launcher stays off a claimed question");
+    reply(&mut a, &id, "UoW.");
+    a.ask_tick_at(now + Duration::from_secs(61));
+    assert_eq!(thread(&a, &id).messages.len(), 2);
+    assert_eq!(status(&a, &id).by.as_deref(), Some("attached"));
+}
+
+#[test]
+fn an_agent_that_answers_25_s_after_taking_a_question_is_never_raced() {
+    let (mut a, ctl) = setup();
+    presence(&a, PresenceState::Idle, None);
+    let id = ask(&mut a, "Why?");
+    let now = Instant::now();
+    a.ask_tick_at(now);
+    presence(&a, PresenceState::Working, Some(&id));
+    a.ask_tick_at(now + Duration::from_secs(1));
+    presence_ago(&a, PresenceState::Working, Some(&id), 25);
+    a.ask_tick_at(now + Duration::from_secs(25));
+    assert!(
+        ctl.borrow().reqs.is_empty(),
+        "a quiet heartbeat does not hand a taken question over"
+    );
+    reply(&mut a, &id, "Inside the unit of work.");
+    a.ask_tick_at(now + Duration::from_secs(26));
+    assert!(ctl.borrow().reqs.is_empty(), "no launcher run started");
+    let t = thread(&a, &id);
+    assert_eq!(t.messages.len(), 2, "a single answer");
+    let ans = t.answer.unwrap();
+    assert_eq!((ans.status, ans.by.as_deref()), (AnswerStatus::Answered, Some("attached")));
+}
+
+#[test]
+fn a_delivered_ask_waits_out_handoff_sec_while_the_heartbeat_is_quiet() {
+    let (mut a, ctl) = setup();
+    presence_ago(&a, PresenceState::Idle, None, 5);
+    ask(&mut a, "Why?");
+    let now = Instant::now();
+    a.ask_tick_at(now);
+    presence_ago(&a, PresenceState::Idle, None, 24);
+    a.ask_tick_at(now + Duration::from_secs(19));
+    assert!(ctl.borrow().reqs.is_empty(), "the agent has it until handoffSec passes");
+    a.ask_tick_at(now + Duration::from_secs(21));
+    assert_eq!(ctl.borrow().reqs.len(), 1, "then the launcher takes it");
+}
+
+#[test]
+fn an_agent_heard_within_handoff_sec_is_still_attached() {
+    let (mut a, ctl) = setup();
+    a.settings.ask.handoff_sec = 40;
+    presence_ago(&a, PresenceState::Idle, None, 30);
+    ask(&mut a, "Why?");
+    a.ask_tick_at(Instant::now());
+    assert!(ctl.borrow().reqs.is_empty(), "30 s quiet is attached when handoffSec is 40");
+    let (mut a, _ctl) = setup();
+    a.settings.ask.handoff_sec = 0;
+    presence_ago(&a, PresenceState::Idle, None, 10);
+    assert!(a.agent_attached(), "never less than the floor");
+}
+
+#[test]
+fn a_second_question_queues_for_a_working_agent_whose_heartbeat_went_quiet() {
+    let (mut a, ctl) = setup();
+    presence(&a, PresenceState::Idle, None);
+    let one = ask(&mut a, "First?");
+    let now = Instant::now();
+    a.ask_tick_at(now);
+    presence(&a, PresenceState::Working, Some(&one));
+    a.ask_tick_at(now + Duration::from_secs(1));
+    presence_ago(&a, PresenceState::Working, Some(&one), 25);
+    let two = ask(&mut a, "Second?");
+    a.ask_tick_at(now + Duration::from_secs(2));
+    a.ask_tick_at(now + Duration::from_secs(40));
+    assert!(ctl.borrow().reqs.is_empty(), "the second waits for the agent, not the launcher");
+    assert_eq!(status(&a, &two).status, AnswerStatus::Queued);
+    assert!(a.ask.is_tracking(&two));
+    reply(&mut a, &one, "One.");
+    presence(&a, PresenceState::Idle, None);
+    a.ask_tick_at(now + Duration::from_secs(41));
+    claim(&mut a, &two, false);
+    a.ask_tick_at(now + Duration::from_secs(50));
+    reply(&mut a, &two, "Two.");
+    a.ask_tick_at(now + Duration::from_secs(80));
+    assert!(ctl.borrow().reqs.is_empty());
+    for id in [&one, &two] {
+        let ans = status(&a, id);
+        assert_eq!((ans.status, ans.by.as_deref()), (AnswerStatus::Answered, Some("attached")));
+    }
+}
+
+#[test]
+fn three_questions_claimed_at_once_and_answered_after_30_s_never_reach_the_launcher() {
+    let (mut a, ctl) = setup();
+    a.settings.ask.max_concurrent = 3;
+    presence(&a, PresenceState::Idle, None);
+    let ids = [ask(&mut a, "First?"), ask(&mut a, "Second?"), ask(&mut a, "Third?")];
+    let now = Instant::now();
+    a.ask_tick_at(now);
+    for id in &ids {
+        claim(&mut a, id, false);
+    }
+    a.ask_tick_at(now + Duration::from_secs(1));
+    presence_ago(&a, PresenceState::Idle, None, 40);
+    a.ask_tick_at(now + Duration::from_secs(30));
+    for id in &ids {
+        reply(&mut a, id, "Answered by a helper.");
+    }
+    a.ask_tick_at(now + Duration::from_secs(31));
+    assert!(ctl.borrow().reqs.is_empty(), "the launcher never ran");
+    for id in &ids {
+        let t = thread(&a, id);
+        assert_eq!(t.messages.len(), 2);
+        let ans = t.answer.unwrap();
+        assert_eq!((ans.status, ans.by.as_deref()), (AnswerStatus::Answered, Some("attached")));
+    }
+}
+
+#[test]
+fn a_claim_that_never_gets_a_reply_hands_over_at_the_ceiling() {
+    let (mut a, ctl) = setup();
+    presence(&a, PresenceState::Idle, None);
+    let one = ask(&mut a, "First?");
+    let now = Instant::now();
+    a.ask_tick_at(now);
+    claim(&mut a, &one, false);
+    presence(&a, PresenceState::Working, Some(&one));
+    a.ask_tick_at(now + Duration::from_secs(1));
+    let two = ask(&mut a, "Second?");
+    a.ask_tick_at(now + Duration::from_secs(2));
+    presence(&a, PresenceState::Working, Some(&one));
+    a.ask_tick_at(now + Duration::from_secs(120));
+    assert!(ctl.borrow().reqs.is_empty(), "within timeoutSec the claim holds");
+    presence(&a, PresenceState::Working, Some(&one));
+    a.ask_tick_at(now + Duration::from_secs(121));
+    assert_eq!(ctl.borrow().reqs.len(), 1, "past the ceiling the launcher takes it");
+    assert_eq!(status(&a, &one).by.as_deref(), Some("launcher"));
+    presence(&a, PresenceState::Working, Some(&one));
+    a.ask_tick_at(now + Duration::from_secs(122));
+    answer(&ctl, 0, ok("One."));
+    a.ask_tick_at(now + Duration::from_secs(123));
+    assert_eq!(ctl.borrow().reqs.len(), 2, "the queue behind a busy agent hands over too");
+    assert_eq!(status(&a, &two).by.as_deref(), Some("launcher"));
+}
+
+#[test]
+fn releasing_a_claim_hands_the_question_to_the_launcher() {
+    let (mut a, ctl) = setup();
+    presence(&a, PresenceState::Idle, None);
+    let id = ask(&mut a, "Why?");
+    let now = Instant::now();
+    a.ask_tick_at(now);
+    claim(&mut a, &id, false);
+    a.ask_tick_at(now + Duration::from_secs(1));
+    assert!(ctl.borrow().reqs.is_empty());
+    claim(&mut a, &id, true);
+    a.ask_tick_at(now + Duration::from_secs(2));
+    assert_eq!(ctl.borrow().reqs.len(), 1);
 }
 
 #[test]
@@ -607,6 +802,148 @@ fn a_follow_up_sent_while_the_answer_runs_is_asked_after_it() {
     let t = thread(&a, &id);
     assert_eq!(t.messages.last().unwrap().body, "Also because.");
     assert_eq!(t.answer.unwrap().status, AnswerStatus::Answered);
+}
+
+#[test]
+fn an_agent_reply_to_an_at_claude_reply_on_a_comment_ends_the_wait() {
+    let (mut a, ctl) = setup();
+    presence(&a, PresenceState::Idle, None);
+    let c = a.mirror.threads[0].id.clone();
+    assert_ne!(thread(&a, &c).kind(), ThreadKind::Question);
+    let mut tx = Tx::default();
+    a.card_action(&c, CardAction::Reply("@Claude I'm not getting this one.".into()), &mut tx);
+    let now = Instant::now();
+    a.ask_tick_at(now);
+    presence(&a, PresenceState::Working, Some(&c));
+    a.ask_tick_at(now + Duration::from_secs(1));
+    assert_eq!(status(&a, &c).status, AnswerStatus::Answering);
+    let tid = c.clone();
+    a.mutate(|s| ops::reply(s, &tid, "Fair, that one was badly worded.", Some("Skippy")));
+    presence(&a, PresenceState::Idle, None);
+    a.ask_tick_at(now + Duration::from_secs(2));
+    let ans = status(&a, &c);
+    assert_eq!((ans.status, ans.by.as_deref()), (AnswerStatus::Answered, Some("attached")));
+    assert!(!a.ask.is_tracking(&c));
+    presence(&a, PresenceState::Idle, None);
+    a.ask_tick_at(now + Duration::from_secs(60));
+    assert!(ctl.borrow().reqs.is_empty(), "the launcher never answers it again");
+    let next = ask(&mut a, "And the next one?");
+    a.ask_tick_at(now + Duration::from_secs(61));
+    assert!(ctl.borrow().reqs.is_empty(), "the next question goes to the agent first");
+    assert!(a.ask.is_tracking(&next));
+}
+
+#[test]
+fn a_question_asked_while_the_agent_answers_another_queues_for_the_agent() {
+    let (mut a, ctl) = setup();
+    presence(&a, PresenceState::Idle, None);
+    let one = ask(&mut a, "First?");
+    let now = Instant::now();
+    a.ask_tick_at(now);
+    presence(&a, PresenceState::Working, Some(&one));
+    a.ask_tick_at(now + Duration::from_secs(1));
+    assert_eq!(status(&a, &one).by.as_deref(), Some("attached"));
+    let two = ask(&mut a, "Second?");
+    a.ask_tick_at(now + Duration::from_secs(2));
+    presence(&a, PresenceState::Working, Some(&one));
+    a.ask_tick_at(now + Duration::from_secs(40));
+    assert!(ctl.borrow().reqs.is_empty(), "no launcher while the agent is on the first");
+    assert_eq!(status(&a, &two).status, AnswerStatus::Queued);
+    let tid = one.clone();
+    a.mutate(|s| ops::reply(s, &tid, "One.", Some("claude")));
+    a.ask_tick_at(now + Duration::from_secs(41));
+    assert!(ctl.borrow().reqs.is_empty(), "still working, the agent keeps the second");
+    presence(&a, PresenceState::Working, Some(&two));
+    a.ask_tick_at(now + Duration::from_secs(45));
+    let ans = status(&a, &two);
+    assert_eq!((ans.status, ans.by.as_deref()), (AnswerStatus::Answering, Some("attached")));
+    assert!(ctl.borrow().reqs.is_empty());
+}
+
+#[test]
+fn an_agent_answering_several_questions_in_parallel_keeps_them_all() {
+    let (mut a, ctl) = setup();
+    a.settings.ask.max_concurrent = 3;
+    presence(&a, PresenceState::Idle, None);
+    let one = ask(&mut a, "First?");
+    let now = Instant::now();
+    a.ask_tick_at(now);
+    presence(&a, PresenceState::Working, Some(&one));
+    let two = ask(&mut a, "Second?");
+    let three = ask(&mut a, "Third?");
+    a.ask_tick_at(now + Duration::from_secs(1));
+    for (i, id) in [&three, &one, &two].into_iter().enumerate() {
+        let tid = id.clone();
+        a.mutate(|s| ops::reply(s, &tid, "Answered by a helper.", Some("claude")));
+        presence(&a, PresenceState::Working, Some(&one));
+        a.ask_tick_at(now + Duration::from_secs(30 * (i as u64 + 1)));
+    }
+    presence(&a, PresenceState::Idle, None);
+    a.ask_tick_at(now + Duration::from_secs(200));
+    assert!(ctl.borrow().reqs.is_empty(), "the launcher never ran");
+    for id in [&one, &two, &three] {
+        let ans = status(&a, id);
+        assert_eq!((ans.status, ans.by.as_deref()), (AnswerStatus::Answered, Some("attached")));
+    }
+}
+
+#[test]
+fn a_question_behind_one_the_agent_has_not_taken_waits_its_turn() {
+    let (mut a, ctl) = setup();
+    presence(&a, PresenceState::Idle, None);
+    let one = ask(&mut a, "First?");
+    let now = Instant::now();
+    a.ask_tick_at(now);
+    let two = ask(&mut a, "Second?");
+    a.ask_tick_at(now + Duration::from_secs(2));
+    presence(&a, PresenceState::Idle, None);
+    let tid = one.clone();
+    a.mutate(|s| ops::reply(s, &tid, "One.", Some("claude")));
+    a.ask_tick_at(now + Duration::from_secs(19));
+    presence(&a, PresenceState::Idle, None);
+    a.ask_tick_at(now + Duration::from_secs(30));
+    assert!(
+        ctl.borrow().reqs.is_empty(),
+        "the second's handoffSec started when the first was answered, not when it was asked"
+    );
+    assert!(a.ask.is_tracking(&two));
+}
+
+#[test]
+fn an_agent_heard_during_a_launcher_run_still_gets_the_next_question() {
+    let (mut a, ctl) = setup();
+    a.settings.ask.max_concurrent = 2;
+    presence(&a, PresenceState::Idle, None);
+    a.settings.ask.prefer = AskPrefer::Launcher;
+    ask(&mut a, "Why?");
+    let now = Instant::now();
+    a.ask_tick_at(now);
+    assert_eq!(ctl.borrow().reqs.len(), 1);
+    a.settings.ask.prefer = AskPrefer::Attached;
+    a.shared
+        .update_presence(|p| p.seen_at = Some(iso_from_millis(crate::app::conversation::now_ms() + 1_000)));
+    let two = ask(&mut a, "And this?");
+    a.ask_tick_at(now + Duration::from_secs(1));
+    assert_eq!(ctl.borrow().reqs.len(), 1, "the launcher's own dot does not hide the agent");
+    assert!(a.ask.is_tracking(&two));
+}
+
+#[test]
+fn the_allow_prompt_says_the_launcher_is_the_fallback() {
+    let (mut a, _ctl) = setup();
+    a.settings.ask.allowed = false;
+    presence(&a, PresenceState::Idle, None);
+    ask(&mut a, "Why?");
+    let now = Instant::now();
+    a.ask_tick_at(now);
+    presence(&a, PresenceState::Idle, None);
+    a.ask_tick_at(now + Duration::from_secs(21));
+    let toast = a.conversation.toasts.iter().find(|t| t.key == "ask-allow").unwrap();
+    assert!(
+        toast.title.starts_with("No attached agent picked up the question") && toast.title.contains("fallback"),
+        "{}",
+        toast.title
+    );
 }
 
 #[test]

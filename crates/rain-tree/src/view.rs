@@ -5,6 +5,7 @@ use rain_core::{FileStatus, FileTag};
 use rune::{Color, El, GrowthSpec, Icon, Key, KeyEvent, ScrollSpec, Tx, col, el, icon, row, text};
 use rune_kit::{Checkbox, Kit, TextInput, TreeItem, TreeKey, TreeStyle, glyphs};
 
+use crate::file_icons::{FileIcons, REPO, REPO_OPEN};
 use crate::model::{FileEntry, NodeKind, TREE_KEY, TreeFilter, TreeState};
 
 pub static COMMENT: Icon = Icon {
@@ -13,10 +14,19 @@ pub static COMMENT: Icon = Icon {
     body: r#"<path d="M2.5 3.5H13.5V10.5H6.5L3.5 13V10.5H2.5V3.5Z" stroke="currentColor" stroke-linejoin="round"/>"#,
 };
 
+/// Keeps a row's icon place for the full-colour icon drawn over it.
+static SLOT: Icon = Icon {
+    name: "rain-icon-slot",
+    view: 16.0,
+    body: "",
+};
+
 const ROW_HEIGHT: f32 = 24.0;
+const ICON: f32 = 16.0;
 
 type Get<S> = fn(&S) -> &TreeState;
 type GetMut<S> = fn(&mut S) -> &mut TreeState;
+type GetIcons<S> = fn(&S) -> &FileIcons;
 type KeyFn<S> = Rc<dyn Fn(&mut S, &str, &mut Tx)>;
 type ViewedFn<S> = Rc<dyn Fn(&mut S, &str, bool, &mut Tx)>;
 type TagFn<S> = Rc<dyn Fn(&mut S, FileTag, &mut Tx)>;
@@ -36,6 +46,7 @@ pub struct TreeView<S> {
     on_viewed: Option<ViewedFn<S>>,
     on_mark_group_viewed: Option<TagFn<S>>,
     on_filter_change: Option<FilterFn<S>>,
+    icons: Option<GetIcons<S>>,
     header: bool,
     rows: bool,
     progress: bool,
@@ -179,6 +190,7 @@ impl<S: 'static> TreeView<S> {
             on_viewed: None,
             on_mark_group_viewed: None,
             on_filter_change: None,
+            icons: None,
             header: true,
             rows: true,
             progress: true,
@@ -248,6 +260,12 @@ impl<S: 'static> TreeView<S> {
         self
     }
 
+    /// Draws file and folder rows with the window's [`FileIcons`]; without them the place is blank.
+    pub fn file_icons(mut self, f: GetIcons<S>) -> Self {
+        self.icons = Some(f);
+        self
+    }
+
     /// The panel, filling the height its parent gives it.
     pub fn build(self, s: &S, k: &Kit) -> El {
         let hooks = Rc::new(Hooks {
@@ -283,7 +301,7 @@ impl<S: 'static> TreeView<S> {
             }
         }
         if self.rows {
-            panel = panel.child(rows(st, k, &hooks));
+            panel = panel.child(rows(st, k, &hooks, self.icons));
         }
         panel
     }
@@ -629,10 +647,8 @@ fn file_item(e: &FileEntry, highlight: &str, k: &Kit) -> (TreeItem, String) {
         said.push("viewed".into());
     }
     let dim = e.generated || e.viewed || matches!(e.tag, FileTag::Ignored | FileTag::Generated);
-    let (glyph, ink) = crate::file_icons::file_glyph(&e.name);
     let mut item = TreeItem::new(e.name.clone())
-        .icon(glyph)
-        .icon_color(ink)
+        .icon(&SLOT)
         .highlight(highlight)
         .changes(e.additions, e.deletions);
     if dim {
@@ -697,7 +713,7 @@ fn lead_tags(e: Option<&FileEntry>, k: &Kit) -> El {
     r
 }
 
-fn rows<S: 'static>(st: &TreeState, k: &Kit, hooks: &Rc<Hooks<S>>) -> El {
+fn rows<S: 'static>(st: &TreeState, k: &Kit, hooks: &Rc<Hooks<S>>, icons: Option<GetIcons<S>>) -> El {
     let style = TreeStyle {
         guides: false,
         row_height: ROW_HEIGHT,
@@ -719,16 +735,13 @@ fn rows<S: 'static>(st: &TreeState, k: &Kit, hooks: &Rc<Hooks<S>>) -> El {
             }
             NodeKind::Dir | NodeKind::Repo(_) => {
                 let (v, t) = st.folder_counts(&id);
-                let mut item = TreeItem::new(node.name.clone())
-                    .icon(if r.expanded == Some(true) {
-                        &crate::file_icons::FOLDER_OPEN
-                    } else {
-                        &crate::file_icons::FOLDER
-                    })
-                    .icon_color(crate::file_icons::folder_color());
-                if let NodeKind::Repo(ri) = node.kind {
-                    item = item.icon_color(repo_color(ri, &kit));
-                }
+                let mut item = TreeItem::new(node.name.clone());
+                item = match node.kind {
+                    NodeKind::Repo(ri) => item
+                        .icon(if r.expanded == Some(true) { &REPO_OPEN } else { &REPO })
+                        .icon_color(repo_color(ri, &kit)),
+                    _ => item.icon(&SLOT),
+                };
                 item = item.trailing(
                     text(format!("{v}/{t}"))
                         .key("count")
@@ -755,6 +768,19 @@ fn rows<S: 'static>(st: &TreeState, k: &Kit, hooks: &Rc<Hooks<S>>) -> El {
         let (toggle_id, press_id) = (id.clone(), id.clone());
         let file = matches!(node.kind, NodeKind::File(_));
         let openable = r.expanded.is_some();
+        let picture = icons.and_then(|f| {
+            let icons = f(s);
+            match node.kind {
+                NodeKind::File(fi) => Some(icons.file(&st.files[fi as usize].name, ICON)),
+                NodeKind::Dir => Some(icons.folder(r.expanded == Some(true), ICON)),
+                NodeKind::Repo(_) => None,
+            }
+        });
+        // Over the slot TreeItem keeps after the indent and the 16 point chevron, 4 points apart.
+        let icon_at = [
+            style.padding + r.depth as f32 * style.indent + 16.0 + 4.0,
+            (style.row_height - ICON) / 2.0,
+        ];
         let checkbox = checkbox
             .hide_label()
             .on_toggle_tx(move |s: &mut S, tx: &mut Tx| h1.toggle_node(s, &toggle_id, tx))
@@ -762,8 +788,11 @@ fn rows<S: 'static>(st: &TreeState, k: &Kit, hooks: &Rc<Hooks<S>>) -> El {
             .key("viewed")
             .focusable(false)
             .self_center();
+        let mut item = item.build(&kit, &r, &style);
+        if let Some(p) = picture {
+            item = item.child(p.absolute(icon_at[0], icon_at[1]));
+        }
         let item = item
-            .build(&kit, &r, &style)
             .key("item")
             .description(said)
             .grow(1.0)

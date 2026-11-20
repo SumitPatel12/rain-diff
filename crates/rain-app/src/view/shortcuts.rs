@@ -7,7 +7,7 @@ use rune::{El, Key, KeyEvent, ScrollSpec, Tx, col, el, row, text};
 use rune_kit::{Kit, SegmentedControl, TextInput};
 
 use super::icons;
-use super::ui::{Ghost, kbd, outline, primary, sr};
+use super::ui::{Activate, Ghost, kbd, outline, primary, sr};
 use crate::app::App;
 use crate::theme::{TYPE, radius};
 
@@ -37,7 +37,7 @@ fn chip(cmd: Command, i: usize, chord: Chord, k: &Kit) -> El {
                 .help(format!("Remove {label} from {}", cmd.label()))
                 .height(18.0)
                 .build(k)
-                .on_press(move |s: &mut App| s.remove_shortcut(cmd, chord)),
+                .on_activate(move |s: &mut App| s.remove_shortcut(cmd, chord)),
         )
 }
 
@@ -90,7 +90,7 @@ fn command_row(s: &App, cmd: Command, k: &Kit) -> El {
             .height(24.0)
             .on(recording)
             .build(k)
-            .on_press_tx(move |s: &mut App, tx: &mut Tx| {
+            .on_activate_tx(move |s: &mut App, tx: &mut Tx| {
                 tx.blur();
                 s.start_recording(cmd);
             }),
@@ -102,7 +102,7 @@ fn command_row(s: &App, cmd: Command, k: &Kit) -> El {
                 .help(format!("Reset {} to the {} keys", cmd.label(), sh.profile.label()))
                 .height(24.0)
                 .build(k)
-                .on_press(move |s: &mut App| s.reset_shortcut(cmd)),
+                .on_activate(move |s: &mut App| s.reset_shortcut(cmd)),
         );
     }
     line
@@ -133,8 +133,8 @@ fn conflict_bar(s: &App, k: &Kit) -> Option<El> {
                 .grow(1.0)
                 .shrink(),
             )
-            .child(outline("sc-conflict-cancel", "Cancel", None, 24.0, k).on_press(|s: &mut App| s.resolve_conflict(false)))
-            .child(outline("sc-conflict-replace", "Replace", None, 24.0, k).on_press(|s: &mut App| s.resolve_conflict(true))),
+            .child(outline("sc-conflict-cancel", "Cancel", None, 24.0, k).on_activate(|s: &mut App| s.resolve_conflict(false)))
+            .child(outline("sc-conflict-replace", "Replace", None, 24.0, k).on_activate(|s: &mut App| s.resolve_conflict(true))),
     )
 }
 
@@ -273,14 +273,14 @@ pub(super) fn shortcuts_overlay(s: &App, k: &Kit) -> El {
         .gap(8.0)
         .items_center()
         .fill(surf.card_head)
-        .child(outline("sc-reset-all", "Reset all", None, 26.0, k).on_press(|s: &mut App| s.reset_all_shortcuts()))
+        .child(outline("sc-reset-all", "Reset all", None, 26.0, k).on_activate(|s: &mut App| s.reset_all_shortcuts()))
         .child(el().grow(1.0).a11y_hidden())
-        .child(outline("sc-cancel", "Cancel", Some("Esc"), 26.0, k).on_press(|s: &mut App| {
+        .child(outline("sc-cancel", "Cancel", Some("Esc"), 26.0, k).on_activate(|s: &mut App| {
             s.shortcuts.recording = None;
             s.shortcuts.conflict = None;
             s.close_shortcuts();
         }))
-        .child(primary("sc-save", "Save", k).on_press(|s: &mut App| s.save_shortcuts()));
+        .child(primary("sc-save", "Save", k).on_activate(|s: &mut App| s.save_shortcuts()));
     panel = panel
         .child(
             col()

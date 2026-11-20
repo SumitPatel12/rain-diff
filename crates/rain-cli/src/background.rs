@@ -1,7 +1,7 @@
 //! `--background`: start a detached copy of this process and relay its one-line handshake, as
 //! difit's `cli/background.ts` does over IPC.
 
-use std::io::{BufRead, BufReader, Read};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
@@ -79,7 +79,7 @@ fn spawn_detached(cmd: &mut Command) -> std::io::Result<Child> {
 /// Starts this executable again with `args` minus `--background`, waits up to 10 s for its
 /// handshake on stdout, prints it and returns 0; prints the child's stderr and returns 1 when it
 /// exits or times out first.
-pub fn spawn(args: &[String]) -> i32 {
+pub fn spawn(args: &[String], hint: impl FnOnce(u16) -> Option<String>) -> i32 {
     let exe = match std::env::current_exe() {
         Ok(e) => e,
         Err(e) => {
@@ -90,10 +90,8 @@ pub fn spawn(args: &[String]) -> i32 {
     let child_args: Vec<&String> = args.iter().filter(|a| *a != "--background").collect();
     match start(&exe, &child_args, HANDSHAKE_TIMEOUT) {
         Ok(line) => {
-            println!("{line}");
-            if is_read_only(&line) {
-                eprintln!("{READ_ONLY_WARNING}");
-            }
+            let hint = parse_handshake(&line).and_then(|(port, ..)| hint(port));
+            relay(&line, hint.as_deref(), &mut std::io::stdout(), &mut std::io::stderr());
             0
         }
         Err(msg) => {
@@ -101,6 +99,23 @@ pub fn spawn(args: &[String]) -> i32 {
             1
         }
     }
+}
+
+/// The handshake `line` alone on `out`; the read-only warning, then `hint`, on `err`.
+pub fn relay(line: &str, hint: Option<&str>, out: &mut impl Write, err: &mut impl Write) {
+    let _ = writeln!(out, "{line}");
+    let _ = out.flush();
+    if is_read_only(line) {
+        let _ = writeln!(err, "{READ_ONLY_WARNING}");
+    }
+    if let Some(h) = hint {
+        let _ = writeln!(err, "{h}");
+    }
+}
+
+/// The next step for an agent whose window opened with no brief.
+pub fn brief_hint(session: &str) -> String {
+    format!("next: send a brief (intent, how, tour) with: rain brief set <file.md> --session {session}; see docs/agent.md §4")
 }
 
 /// Runs `exe args` as a background child and returns its handshake line.

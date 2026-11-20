@@ -1,10 +1,42 @@
 //! Small parts the redesign repeats: key caps, ghost and outlined buttons, chips, separators.
 
-use rune::{Cursor, El, Icon, el, row, text};
+use std::rc::Rc;
+
+use rune::{Cursor, El, Icon, Key, KeyEvent, Mods, Tx, el, row, text};
 use rune_kit::Kit;
 
 use super::icons;
+use crate::app::App;
 use crate::theme::{Roles, Surfaces, TYPE, radius, roles_of, surfaces_of};
+
+/// A button's press that Enter fires too while the button has focus. Rune gives Enter on a
+/// focused button to the default button and then the window's `on_key`, as AppKit does; only
+/// Space presses it.
+pub(crate) trait Activate {
+    fn on_activate(self, f: impl Fn(&mut App) + 'static) -> El;
+    fn on_activate_tx(self, f: impl Fn(&mut App, &mut Tx) + 'static) -> El;
+}
+
+impl Activate for El {
+    fn on_activate(self, f: impl Fn(&mut App) + 'static) -> El {
+        self.on_activate_tx(move |s: &mut App, _: &mut Tx| f(s))
+    }
+
+    fn on_activate_tx(self, f: impl Fn(&mut App, &mut Tx) + 'static) -> El {
+        let f = Rc::new(f);
+        let press = f.clone();
+        self.on_press_tx(move |s: &mut App, tx: &mut Tx| press(s, tx))
+            .on_key(move |s: &mut App, ev: &KeyEvent, tx: &mut Tx| {
+                if ev.key != Key::Enter || ev.mods != Mods::default() || s.holds_every_key() {
+                    return false;
+                }
+                if !tx.key_repeat() {
+                    f(s, tx);
+                }
+                true
+            })
+    }
+}
 
 /// The scheme's surfaces and roles for a kit from `theme::look`.
 pub(crate) fn sr(k: &Kit) -> (Surfaces, Roles) {

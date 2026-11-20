@@ -109,15 +109,9 @@ impl Clock {
         self.t >= self.duration - 1e-4
     }
 
-    /// Plays from here (from the start when at the end). Under reduced motion it lands on the
-    /// end state at once.
-    pub fn play(&mut self, reduced: bool) {
+    /// Plays from here (from the start when at the end).
+    pub fn play(&mut self) {
         self.stop = None;
-        if reduced {
-            self.t = self.duration;
-            self.run = Run::Paused;
-            return;
-        }
         if self.at_end() {
             self.t = 0.0;
         }
@@ -129,8 +123,8 @@ impl Clock {
         self.stop = None;
     }
 
-    pub fn toggle(&mut self, reduced: bool) {
-        if self.playing() { self.pause() } else { self.play(reduced) }
+    pub fn toggle(&mut self) {
+        if self.playing() { self.pause() } else { self.play() }
     }
 
     /// Jumps to `t`, playing on from there if it was playing.
@@ -141,9 +135,9 @@ impl Clock {
         }
     }
 
-    pub fn restart(&mut self, reduced: bool) {
+    pub fn restart(&mut self) {
         self.t = 0.0;
-        self.play(reduced);
+        self.play();
     }
 
     pub fn set_speed(&mut self, speed: f32) {
@@ -833,6 +827,17 @@ impl Rig {
     /// The step `t` is in: the last that starts at or before it.
     pub fn step_at(&self, t: f32) -> Option<usize> {
         self.steps.iter().rposition(|s| s.at <= t + 1e-3)
+    }
+
+    /// Just before the next step after `t` starts (or the end): what reduced motion shows, so a
+    /// step lands whole and holds while the clock runs through it.
+    pub fn held(&self, t: f32) -> f32 {
+        let eps = 1e-3;
+        self.steps
+            .iter()
+            .map(|s| s.at)
+            .find(|&at| at > t + eps)
+            .map_or(self.duration, |at| at - eps)
     }
 
     /// Step starts and the end, for [`Clock::step`].

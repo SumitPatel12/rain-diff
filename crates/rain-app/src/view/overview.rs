@@ -8,9 +8,9 @@ use rain_core::brief::{BriefDoc, Cite};
 use rain_core::command::Command;
 use rain_core::{Side, Thread, short_sha};
 use rune::{El, ScrollSpec, TextStyle, Tx, col, el, row, text};
-use rune_kit::{Button, ButtonVariant, ControlSize, Kit, Markdown, SegmentedControl};
+use rune_kit::{Button, ButtonVariant, ControlSize, Kit, Markdown, SegmentedControl, Spinner};
 
-use super::ui::{outline, sr};
+use super::ui::{Activate, outline, sr};
 use super::{icons, messages, muted, notes};
 use crate::app::{App, ArtifactDraft, ComposeMode, PeekTarget};
 use crate::theme::{TYPE, radius};
@@ -162,7 +162,7 @@ fn title_row(s: &App, doc: Option<&BriefDoc>, k: &Kit) -> El {
         let b = if steps == 0 {
             b.opacity(0.45).disabled(true)
         } else {
-            b.on_press_tx(|s: &mut App, tx: &mut Tx| s.start_tour(tx)).child(
+            b.on_activate_tx(|s: &mut App, tx: &mut Tx| s.start_tour(tx)).child(
                 row()
                     .key("brief-tour-count")
                     .min_w(18.0)
@@ -283,7 +283,7 @@ fn map_card(s: &App, k: &Kit) -> Option<El> {
     let body = row().pt(4.0).child(
         outline("open-map-card", "Open map", None, 24.0, k)
             .help(crate::keys::tip("Open the Map", Command::Map))
-            .on_press(|s: &mut App| s.toggle_map()),
+            .on_activate(|s: &mut App| s.toggle_map()),
     );
     let sub = if n == 1 { "· 1 node".to_owned() } else { format!("· {n} nodes") };
     Some(card("overview-map", "Map", &sub, body, k))
@@ -592,11 +592,11 @@ fn mode_buttons(k: &Kit, id: String) -> El {
                 22.0,
                 k,
             )
-            .on_press(move |s: &mut App| s.comment_on_section(&id, None, ComposeMode::Comment)),
+            .on_activate(move |s: &mut App| s.comment_on_section(&id, None, ComposeMode::Comment)),
         )
         .child(
             outline("sec-ask", "Ask", Command::Ask.chord().map(|c| c.display()).as_deref(), 22.0, k)
-                .on_press(move |s: &mut App| s.comment_on_section(&ask, None, ComposeMode::Question)),
+                .on_activate(move |s: &mut App| s.comment_on_section(&ask, None, ComposeMode::Question)),
         )
 }
 
@@ -1024,24 +1024,97 @@ fn fallback_copy(s: &App) -> String {
     } else {
         format!("Until then, the agent's story notes stand in below, and {from_diff}.")
     };
-    format!("**No brief yet.** Ask the agent to run `rain brief set` (see docs/agent.md).\n\n{until}")
+    format!("A brief explains the change: intent, how it works, a tour. {until}")
+}
+
+/// The no-brief card's title-line slot: the ask while an agent is attached, a spinner once
+/// asked, and a muted status with no agent. Each swap crossfades in a fixed-height slot.
+fn ask_for_brief(s: &App, k: &Kit) -> El {
+    let attached = s.agent_attached();
+    let slot = row().key("brief-ask-slot").h(26.0).items_center();
+    if s.brief.asked && attached {
+        return slot.child(
+            row()
+                .key("brief-asked")
+                .gap(6.0)
+                .items_center()
+                .child(Spinner::new().size(12.0).color(k.c.text_muted).build(k))
+                .child(muted("Waiting for the agent…", k)),
+        );
+    }
+    if !attached {
+        return slot.child(
+            row()
+                .key("brief-no-agent")
+                .label("No agent attached")
+                .help("The agent writes one with `rain brief set` (see docs/agent.md §4).")
+                .gap(6.0)
+                .items_center()
+                .child(el().w(6.0).h(6.0).radius(3.0).fill(k.c.text_muted).a11y_hidden())
+                .child(muted("No agent attached", k)),
+        );
+    }
+    let (_, r) = sr(k);
+    let button = k
+        .interactive_with(
+            row()
+                .key("ask-brief")
+                .role("button")
+                .label("Ask the agent to write one")
+                .h(26.0)
+                .px(10.0)
+                .gap(6.0)
+                .center()
+                .radius(radius::SMALL)
+                .fill(r.accent.alpha(0.12))
+                .border(1.0, r.accent.alpha(0.35))
+                .cursor(rune::Cursor::Pointer)
+                .focusable(true)
+                .on_activate(|s: &mut App| s.ask_for_brief())
+                .child(icons::draw(&icons::SPARK, 12.0, r.accent))
+                .child(
+                    text("Ask the agent to write one")
+                        .font(k.ty.small_medium)
+                        .color(r.accent)
+                        .a11y_hidden(),
+                ),
+            k.c.hover,
+            k.c.pressed,
+        )
+        .press_scale(0.97);
+    slot.child(button)
 }
 
 /// No brief yet: the story notes with Comment / Ask per note, and how to get a brief.
 fn fallback(s: &App, k: &Kit) -> El {
     let (surf, _) = sr(k);
-    let mut c = col().key("brief-fallback").w_full().gap(16.0).child(
-        col()
-            .key("overview-empty")
-            .w_full()
-            .px(20.0)
-            .py(16.0)
-            .gap(8.0)
-            .radius(radius::CARD)
-            .fill(surf.panel)
-            .border(1.0, surf.card_border)
-            .child(Markdown::new(fallback_copy(s)).selectable(true).build(k)),
-    );
+    let head = row()
+        .key("brief-empty-head")
+        .w_full()
+        .gap(8.0)
+        .items_center()
+        .flex_wrap()
+        .child(h3("No brief yet", k).key("brief-empty-title").grow(1.0))
+        .child(ask_for_brief(s, k));
+    let mut card = col()
+        .key("overview-empty")
+        .w_full()
+        .px(20.0)
+        .py(16.0)
+        .gap(8.0)
+        .radius(radius::CARD)
+        .fill(surf.panel)
+        .border(1.0, surf.card_border)
+        .child(head)
+        .child(Markdown::new(fallback_copy(s)).selectable(true).build(k));
+    if !s.agent_attached() {
+        card = card.child(
+            muted("Open this review from Claude Code with the rain skill to get one.", k)
+                .wrap()
+                .key("brief-no-agent-hint"),
+        );
+    }
+    let mut c = col().key("brief-fallback").w_full().gap(16.0).child(card);
     if let Some(story) = notes::story_card(s, k) {
         c = c.child(story);
     }

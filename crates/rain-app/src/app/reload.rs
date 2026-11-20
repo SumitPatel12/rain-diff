@@ -323,7 +323,7 @@ impl App {
         }
         let mut changed = false;
         if let Some(c) = self.reloader.pending_place.take() {
-            self.restore_place(&c, tx);
+            self.keep_map(|s| s.restore_place(&c, tx));
             changed = true;
         }
         let found = self.reloader.found.lock().ok().and_then(|mut f| f.take());

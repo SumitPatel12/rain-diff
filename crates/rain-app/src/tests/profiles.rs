@@ -255,6 +255,10 @@ fn arrows_still_drive_the_palette_picker_and_tree() {
         assert_ne!(rt.state.picker.sel, first, "{p:?}: Down moves the picker's row");
         assert!(rt.state.active().cursor().is_none(), "{p:?}");
         press(&mut rt, Key::Escape, Mods::default());
+        if p.vim_motions() {
+            press(&mut rt, Key::Escape, Mods::default());
+        }
+        assert!(!rt.state.layout.is_open(Overlay::Picker), "{p:?}");
 
         rt.update(|s, _| s.board.folders = true);
         settle(&mut rt);

@@ -6,7 +6,7 @@ use rune::{Cursor, El, col, el, row, text};
 use rune_kit::{Kit, Markdown};
 
 use super::icons;
-use super::ui::{Ghost, sr};
+use super::ui::{Activate, Ghost, sr};
 use crate::app::App;
 use crate::theme::{TYPE, radius};
 
@@ -113,14 +113,14 @@ pub(super) fn note_view(s: &App, n: &Note, k: &Kit) -> El {
                 "Open in its own window",
                 k,
             )
-            .on_press(move |s: &mut App| s.pop_out_note(&pop)),
+            .on_activate(move |s: &mut App| s.pop_out_note(&pop)),
         );
     }
     if n.anchor.is_some() {
         let fk = fold_key.clone();
         head = head.child(
             note_button(format!("note-fold-{}", n.id), &icons::FOLD, None, "Fold into the gutter", k)
-                .on_press(move |s: &mut App| s.toggle_fold(&fk)),
+                .on_activate(move |s: &mut App| s.toggle_fold(&fk)),
         );
     }
     let mut content = col().grow(1.0).shrink().min_w(0.0).gap(2.0).child(head);
@@ -173,7 +173,7 @@ pub(super) fn note_view(s: &App, n: &Note, k: &Kit) -> El {
                     k,
                 )
                 .min_w(96.0)
-                .on_press(move |s: &mut App| s.toggle_note_expanded(&more)),
+                .on_activate(move |s: &mut App| s.toggle_note_expanded(&more)),
             ),
         );
     } else {

@@ -651,17 +651,17 @@ fn line_numbers_select_lines_and_the_plus_comments_on_them() {
         }
     );
     hover(&mut rt, "df0.c4/code");
-    let plus = find(&rt, "df0.c4/gutter/mk/hover-add/plus");
+    let plus = find(&rt, "df0.c4/gutter/hover-add/plus");
     let line = find(&rt, "df0.c4/gutter/nn");
     assert_eq!(
         (plus.rect[2], plus.rect[3]),
         (20.0, line.rect[3]),
         "the + presses over the line's full height"
     );
-    press(&mut rt, "df0.c4/gutter/mk/hover-add/plus");
+    press(&mut rt, "df0.c4/gutter/hover-add/plus");
     assert_eq!(rt.state.comments, [range]);
     hover(&mut rt, "df0.c9/code");
-    press(&mut rt, "df0.c9/gutter/mk/hover-add/plus");
+    press(&mut rt, "df0.c9/gutter/hover-add/plus");
     assert_eq!(rt.state.comments[1], LineRange::line(0, LineRef::new(Side::New, 9)));
     rt.key(KeyEvent {
         key: Key::Escape,

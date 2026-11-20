@@ -118,6 +118,8 @@ impl App {
         if self.reader_tab() != tab {
             self.close_peek();
         }
+        // The Map takes the reader, so showing a tab or a file leaves it.
+        self.close_overlay(super::layout::Overlay::Map);
         self.brief.tab = Some(tab);
     }
 

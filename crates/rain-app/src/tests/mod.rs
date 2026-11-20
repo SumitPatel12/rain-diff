@@ -4,6 +4,7 @@ mod ask;
 mod board;
 mod brief;
 mod composer;
+mod conversation;
 mod extras;
 mod filter;
 mod folds;
@@ -13,6 +14,7 @@ mod map_diagrams;
 mod notes;
 mod overview;
 mod peek;
+mod picker;
 mod playground;
 mod profiles;
 mod remote;
@@ -150,6 +152,21 @@ pub(crate) fn settle(rt: &mut Runtime<App>) {
 pub(crate) fn press(rt: &mut Runtime<App>, key: Key, mods: Mods) {
     rt.key(KeyEvent { key, mods });
     settle(rt);
+}
+
+/// Tabs until the element keyed `key` has focus; false when it never does.
+pub(crate) fn tab_to(rt: &mut Runtime<App>, key: &str) -> bool {
+    for _ in 0..400 {
+        press(rt, Key::Tab, Mods::default());
+        if rt
+            .elements()
+            .iter()
+            .any(|e| e.focused && !e.exiting && e.key.as_deref() == Some(key))
+        {
+            return true;
+        }
+    }
+    false
 }
 
 pub(crate) fn typed(rt: &mut Runtime<App>, s: &str) {

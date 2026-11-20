@@ -160,13 +160,13 @@ fn the_clock_plays_only_while_playing_and_is_the_same_at_the_same_host_time() {
     let mut c = Clock::new(4.0);
     assert_eq!(c.tick(10.0), Tick::Idle);
     assert_eq!(c.t(), 0.0);
-    c.play(false);
+    c.play();
     assert_eq!(c.tick(100.0), Tick::Moved, "the first tick anchors, however old the host time");
     assert_eq!(c.t(), 0.0);
     assert_eq!(c.tick(101.5), Tick::Moved);
     assert!((c.t() - 1.5).abs() < 1e-5);
     let mut d = Clock::new(4.0);
-    d.play(false);
+    d.play();
     d.tick(100.0);
     for h in [100.2, 100.9, 101.1] {
         d.tick(h);
@@ -177,7 +177,7 @@ fn the_clock_plays_only_while_playing_and_is_the_same_at_the_same_host_time() {
     assert_eq!(c.tick(150.0), Tick::Idle);
     assert!((c.t() - 1.5).abs() < 1e-5, "paused, it holds");
     c.set_speed(2.0);
-    c.play(false);
+    c.play();
     c.tick(200.0);
     c.tick(201.0);
     assert!((c.t() - 3.5).abs() < 1e-5, "twice as fast");
@@ -198,10 +198,8 @@ fn steps_play_to_the_next_mark_and_jump_back() {
     assert_eq!(c.t(), 2.5, "reduced motion lands there at once");
     c.step(&marks, false, false);
     assert_eq!(c.t(), 1.0);
-    c.play(true);
-    assert_eq!(c.t(), 4.0, "reduced motion plays to the end state");
-    assert!(!c.playing());
-    c.play(false);
+    c.seek(4.0);
+    c.play();
     assert_eq!(c.t(), 0.0, "play at the end starts over");
 }
 
@@ -291,14 +289,29 @@ fn a_playing_frame_allocates_nothing_and_a_paused_one_does_nothing() {
 }
 
 #[test]
-fn reduced_motion_shows_the_end_state() {
+fn reduced_motion_plays_step_by_step_holding_each_step_whole() {
     let mut lab = lineage_lab();
     lab.reduced.set(true);
+    let rig = lab.rig().unwrap();
+    let (d, starts): (f32, Vec<f32>) = (rig.duration, rig.steps.iter().map(|s| s.at).collect());
+    assert_eq!(rig.held(starts[1]), starts[2] - 1e-3, "a step shows its end state");
+    assert_eq!(rig.held(d), d);
     lab.play();
-    assert!(!lab.playing());
-    assert!(lab.clock.at_end());
-    let last = lab.rig().unwrap().steps.len() - 1;
-    assert_eq!(lab.step().map(|(i, _)| i), Some(last));
+    lab.tick(0.0);
+    let mid = (starts[1] + starts[2]) / 2.0;
+    assert_eq!(lab.tick(mid), Tick::Stepped);
+    assert!(lab.playing(), "play runs the timeline, it does not jump to the end");
+    assert_eq!(lab.step().map(|(i, _)| i), Some(1));
+    let held = lab.scrub.fill.get();
+    let mut whole = lineage_lab();
+    whole.seek_frac((starts[2] - 1e-3) / d);
+    let rows = rig.data::<crate::styles::Flow>().unwrap();
+    let theirs = whole.rig().unwrap();
+    let theirs = theirs.data::<crate::styles::Flow>().unwrap();
+    for (a, b) in rows.rows.iter().zip(&theirs.rows) {
+        assert_eq!(a.alpha.live.get(), b.alpha.live.get(), "{}: the step's end state", a.id);
+    }
+    assert!(held[2] > 0.0 && held[2] < crate::SCRUB_W, "the scrubber shows the real time");
 }
 
 #[test]

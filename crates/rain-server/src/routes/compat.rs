@@ -1,5 +1,5 @@
 //! difit's comment routes: `comment-imports`, `comments`, `comments-json`, `comments-output`,
-//! `DELETE /api/comments/:id` (now resolves), plus `POST /api/comments/:id/state`.
+//! `DELETE /api/comments/:id` (now resolves), plus `POST /api/comments/:id/state` and `/claim`.
 
 use std::collections::HashMap;
 
@@ -25,6 +25,7 @@ pub(crate) fn route(ctx: &Ctx, r: &Req) -> Option<Reply> {
         (Method::Post, "/api/comment-imports") => comment_imports(ctx, repo, r.body, r.trusted),
         (Method::Post, "/api/comments") => post_comments(ctx, r.body, r.trusted),
         (Method::Post, p) if state_id(p).is_some() => post_state(ctx, &percent_decode(state_id(p).unwrap_or_default()), r.body),
+        (Method::Post, p) if claim_id(p).is_some() => post_claim(ctx, &percent_decode(claim_id(p).unwrap_or_default()), r.body),
         (Method::Delete, p) if p.starts_with("/api/comments/") => resolve(ctx, &percent_decode(&p["/api/comments/".len()..])),
         _ => return None,
     })
@@ -33,6 +34,10 @@ pub(crate) fn route(ctx: &Ctx, r: &Req) -> Option<Reply> {
 /// The `:id` of `/api/comments/:id/state`; `/api/comments/state` has none.
 fn state_id(path: &str) -> Option<&str> {
     path.strip_prefix("/api/comments/")?.strip_suffix("/state")
+}
+
+fn claim_id(path: &str) -> Option<&str> {
+    path.strip_prefix("/api/comments/")?.strip_suffix("/claim")
 }
 
 /// Thread id → its answer (`None` while one is pending), for the threads that have one.
@@ -312,5 +317,38 @@ fn post_state(ctx: &Ctx, id: &str, body: &str) -> Reply {
     value(
         200,
         &json!({ "success": true, "threadId": id, "version": version, "changed": changed }),
+    )
+}
+
+/// `POST /api/comments/:id/claim` `{release?}`: the attached agent takes a pending question, so
+/// the launcher holds off it, or gives it back.
+fn post_claim(ctx: &Ctx, id: &str, body: &str) -> Reply {
+    let o = match serde_json::from_str::<Value>(if body.trim().is_empty() { "{}" } else { body }) {
+        Ok(Value::Object(o)) => o,
+        _ => return error(400, "Invalid claim data"),
+    };
+    let release = o.get("release").and_then(Value::as_bool).unwrap_or(false);
+    let mut s = ctx.shared.lock();
+    let Some(changed) = rain_comments::ops::claim(&mut s, id, release) else {
+        return error(404, &format!("Thread not found: {id}"));
+    };
+    let claimed = s.threads.iter().find(|t| t.id == id).is_some_and(rain_comments::ops::claimed);
+    let saved = if changed { ctx.save(&s) } else { None };
+    drop(s);
+    ctx.write(saved);
+    if changed {
+        let status = if claimed { "answering" } else { "queued" };
+        push(
+            ctx,
+            EventKind::Answer,
+            Some("claude".into()),
+            Some(id.to_owned()),
+            json!({ "status": status, "by": "attached" }),
+        );
+        ctx.shared.notify();
+    }
+    value(
+        200,
+        &json!({ "success": true, "threadId": id, "claimed": claimed, "changed": changed }),
     )
 }

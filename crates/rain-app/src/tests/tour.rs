@@ -140,6 +140,15 @@ fn the_tour_never_starts_by_itself() {
 }
 
 #[test]
+fn enter_with_no_button_focused_still_reaches_the_tour() {
+    let mut rt = runtime(with_brief(app(story(), true)));
+    press(&mut rt, key("T"), shift());
+    assert!(rt.elements().iter().all(|e| !e.focused), "nothing has focus");
+    press(&mut rt, Key::Enter, Mods::default());
+    assert_eq!(rt.state.tour.stage, TourStage::Step, "Enter begins the tour");
+}
+
+#[test]
 fn the_start_card_says_how_long_and_my_pass_first_is_on() {
     let mut rt = runtime(with_brief(app(story(), true)));
     press(&mut rt, key("T"), shift());

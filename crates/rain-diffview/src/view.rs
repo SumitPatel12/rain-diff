@@ -998,30 +998,31 @@ impl<S: 'static> View<S> {
         })
     }
 
-    /// The marks column: the app's mark, else the hover's `+` and `?`, mounted only on the
-    /// hovered and cursor lines (`show`), so assistive tech meets one pair, on the line in hand.
-    /// An empty cell stays hidden from it.
-    fn marks_cell(&self, f: usize, at: Option<LineRef>, mark: Option<El>, show: bool) -> El {
+    /// The marks column: the app's mark. An empty cell stays hidden from assistive tech.
+    fn marks_cell(&self, mark: Option<El>) -> El {
+        let cell = row().key("mk").w(MARKS).h(self.look.m.line).center();
+        match mark {
+            Some(m) => cell.child(m),
+            None => cell.a11y_hidden(),
+        }
+    }
+
+    /// The hover's `+` and `?` at the gutter's left edge, mounted only on the hovered and cursor
+    /// lines (`show`) without a mark, so assistive tech meets one pair, on the line in hand. The
+    /// pair is wider than the marks column, so the caller adds it after the line numbers: drawn
+    /// over them, the `?` takes its press instead of the number under it.
+    fn hover_adds(&self, f: usize, at: Option<LineRef>, marked: bool, show: bool) -> Option<El> {
         let l = &self.look;
-        let cell = row().key("mk").w(MARKS).h(l.m.line).center();
-        if let Some(m) = mark {
-            return cell.child(m);
+        let at = at.filter(|_| !marked && show && self.adds())?;
+        // Each button presses over the line's full height and half the pair's width.
+        let mut add = row().key("hover-add").absolute(1.0, 0.0).h(l.m.line).group_opacity(0.0, 1.0);
+        if let Some(cb) = self.d.on_comment.clone() {
+            add = add.child(self.hover_button(f, at, "plus", &PLUS, "Comment on this line  c", l.comment, cb));
         }
-        if let Some(at) = at
-            && show
-            && self.adds()
-        {
-            // Each button presses over the line's full height and half the pair's width.
-            let mut add = row().key("hover-add").absolute(1.0, 0.0).h(l.m.line).group_opacity(0.0, 1.0);
-            if let Some(cb) = self.d.on_comment.clone() {
-                add = add.child(self.hover_button(f, at, "plus", &PLUS, "Comment on this line  c", l.comment, cb));
-            }
-            if let Some(cb) = self.d.on_ask.clone() {
-                add = add.child(self.hover_button(f, at, "ask", &QUESTION, "Ask about this line  ?", l.ask, cb));
-            }
-            return cell.child(add);
+        if let Some(cb) = self.d.on_ask.clone() {
+            add = add.child(self.hover_button(f, at, "ask", &QUESTION, "Ask about this line  ?", l.ask, cb));
         }
-        cell.a11y_hidden()
+        Some(add)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1092,12 +1093,13 @@ impl<S: 'static> View<S> {
         // The marks, numbers and sign hold to the viewport's left edge while the code scrolls
         // sideways under them, on the line's own opaque fill.
         let show = marks.cursor || st.hovered_line(key).is_some();
+        let adds = self.hover_adds(f, c.anchor(), mark.is_some(), show);
         let mut gutter = row()
             .key("gutter")
             .self_stretch()
             .items_start()
             .fill(fill)
-            .child(self.marks_cell(f, c.anchor(), mark, show));
+            .child(self.marks_cell(mark));
         let numbers = match one {
             Some(side) => {
                 let n = if side == Side::Old { c.old } else { c.new };
@@ -1114,6 +1116,9 @@ impl<S: 'static> View<S> {
         gutter = gutter.child(self.sign(if calm { LineKind::Context } else { c.kind }, SIGN.0));
         if marks.range[0] || marks.range[1] {
             gutter = gutter.child(self.range_bar().absolute(MARKS + numbers * l.number_w(digits) - RANGE_BAR, 0.0));
+        }
+        if let Some(a) = adds {
+            gutter = gutter.child(a);
         }
         if !st.wraps() {
             gutter = gutter.sticky_left(0.0);
@@ -1173,13 +1178,14 @@ impl<S: 'static> View<S> {
             let label = cell.label();
             let at = n.map(|n| LineRef::new(side, n));
             let show = marks.cursor || st.hovered_line(key) == Some(Some(side));
+            let adds = self.hover_adds(f, at, mark.is_some(), show);
             h = h
                 .fill(fill)
                 .hover(l.hover)
                 .hover_group()
                 .role("listitem")
                 .label(label)
-                .child(self.marks_cell(f, at, mark, show))
+                .child(self.marks_cell(mark))
                 .child(self.number(st, i, f, n, side, selected, marks.cursor, digits).key("n"))
                 .child(self.sign(if calm { LineKind::Context } else { kind }, SIGN.1))
                 .child(
@@ -1198,6 +1204,9 @@ impl<S: 'static> View<S> {
                 );
             if marks.range[side as usize] {
                 h = h.child(self.range_bar().absolute(MARKS + l.number_w(digits) - RANGE_BAR, 0.0));
+            }
+            if let Some(a) = adds {
+                h = h.child(a);
             }
             if marks.cursor && (side == Side::New || kind == LineKind::Removed) {
                 h = h.child(self.cursor_bar());
@@ -1659,7 +1668,7 @@ impl<S: 'static> View<S> {
                 }
             });
         let repo = st.repo_id(f);
-        // `server · src/Api/` muted, then the name strong.
+        // `server · src/Api/` muted, then the name strong; a long folder path loses its middle.
         let split_path = |p: &str| -> (String, String) {
             let (dir, name) = p.rsplit_once('/').map_or(("", p), |(d, n)| (d, n));
             let mut lead = String::new();
@@ -1684,7 +1693,7 @@ impl<S: 'static> View<S> {
                     text(lead)
                         .font(l.label)
                         .color(l.muted)
-                        .truncate_head()
+                        .truncate_middle()
                         .min_w(0.0)
                         .shrink()
                         .key("dir"),
@@ -1740,7 +1749,8 @@ impl<S: 'static> View<S> {
             inner = inner.child(text("Generated").font(l.small_sans).color(l.faint).key("generated"));
         }
         inner = match &self.d.header {
-            Some(h) => inner.child(h(s, f).key("actions").grow(1.0).min_w(0.0)),
+            // Never narrower than its buttons: a long path gives way instead.
+            Some(h) => inner.child(h(s, f).key("actions").grow(1.0)),
             None => inner.child(row().key("space").grow(1.0).a11y_hidden()),
         };
         let mut label = st.display_path(f);

@@ -247,6 +247,7 @@ pub enum EventArg {
     Brief,
     Notes,
     Overview,
+    BriefMissing,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -351,6 +352,16 @@ pub enum CommentCmd {
         /// Repo id `--file` is relative to (instead of a `<repo>/` prefix).
         #[arg(long)]
         repo: Option<String>,
+        #[command(flatten)]
+        conn: Conn,
+    },
+    /// Claim a question for the attached agent, so the launcher holds off it until you reply
+    /// (or `ask.timeoutSec` passes); `--release` gives it back.
+    Claim {
+        #[arg(long, value_name = "THREAD_ID")]
+        thread: String,
+        #[arg(long)]
+        release: bool,
         #[command(flatten)]
         conn: Conn,
     },
@@ -792,6 +803,23 @@ mod tests {
         assert_eq!(wire(ReasonArg::FalsePositive), "false-positive");
         assert_eq!(wire(StateArg::Resolved), "resolved");
         assert!(fails(&["comment", "set-state", "k3", "gone", "--port", "1"]));
+    }
+
+    #[test]
+    fn claim_takes_a_thread_and_an_optional_release() {
+        let cli = parse(&["comment", "claim", "--thread", "k3", "--port", "1"]);
+        assert!(matches!(
+            cli.command,
+            Some(Sub::Comment { cmd: CommentCmd::Claim { ref thread, release: false, .. } }) if thread == "k3"
+        ));
+        let cli = parse(&["comment", "claim", "--thread", "k3", "--release", "--port", "1"]);
+        assert!(matches!(
+            cli.command,
+            Some(Sub::Comment {
+                cmd: CommentCmd::Claim { release: true, .. }
+            })
+        ));
+        assert!(fails(&["comment", "claim", "--port", "1"]));
     }
 
     fn comment_add(args: &[&str]) -> CommentAdd {

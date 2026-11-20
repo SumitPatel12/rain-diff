@@ -7,7 +7,7 @@ use rune_kit::syntax::Paint;
 use rune_kit::{Kit, Placement, popover};
 
 use super::icons;
-use super::ui::{Ghost, outline, sr};
+use super::ui::{Activate, Ghost, outline, sr};
 use crate::app::{App, PeekContent};
 use crate::theme::{Look, TYPE, radius};
 
@@ -168,7 +168,7 @@ fn place(c: &PeekContent, k: &Kit) -> El {
 }
 
 /// The card's head: where the lines are, and close.
-fn head(c: &PeekContent, k: &Kit) -> El {
+fn head(s: &App, c: &PeekContent, k: &Kit) -> El {
     row()
         .key("peek-head")
         .w_full()
@@ -177,7 +177,7 @@ fn head(c: &PeekContent, k: &Kit) -> El {
         .pr(6.0)
         .gap(8.0)
         .items_center()
-        .child(icons::draw(&icons::FILE, 14.0, k.c.text_muted))
+        .child(s.file_icons.file(c.key.rsplit('/').next().unwrap_or_default(), 14.0))
         .child(place(c, k).grow(1.0))
         .child(
             Ghost::new("peek-close")
@@ -185,7 +185,7 @@ fn head(c: &PeekContent, k: &Kit) -> El {
                 .help("Close  Esc")
                 .height(24.0)
                 .build(k)
-                .on_press(|s: &mut App| {
+                .on_activate(|s: &mut App| {
                     s.close_peek();
                 }),
         )
@@ -225,7 +225,7 @@ fn foot(k: &Kit) -> El {
         .child(
             outline("peek-popout", "Pop out", None, 24.0, k)
                 .child(icons::draw(&icons::POPOUT, 14.0, k.c.text_muted))
-                .on_press(|s: &mut App| s.pop_out_peek()),
+                .on_activate(|s: &mut App| s.pop_out_peek()),
         )
         .child(el().grow(1.0).a11y_hidden())
         .child(text("Space on a chip peeks · Enter jumps").font(TYPE.small).color(k.c.text_faint))
@@ -248,7 +248,7 @@ pub(super) fn layer(s: &App, look: &Look) -> Option<El> {
         .clip_rounded(radius::CARD)
         .on_press(|_: &mut App| {})
         .on_hover_change(|s: &mut App, inside, tx: &mut Tx| s.peek_card_hover(inside, tx))
-        .child(head(&c, k))
+        .child(head(s, &c, k))
         .child(el().w_full().h(1.0).fill(k.c.border_weak))
         .child(
             col()

@@ -532,7 +532,7 @@ fn a_huge_cite_range_is_checked_without_walking_every_line() {
 }
 
 #[test]
-fn imports_snapshot_against_the_loaded_diff_or_become_file_level() {
+fn imports_snapshot_against_the_loaded_diff_or_stay_on_their_line() {
     let files = set(vec![added("src/a.rs", &["a", "b", "c"])]);
     let excerpt = |_: &str, p: &str, a: &Anchor| files.files.iter().find(|f| f.path == p).and_then(|f| ops::snapshot_at(f, a, p));
     let mut s = Session::default();
@@ -540,14 +540,11 @@ fn imports_snapshot_against_the_loaded_diff_or_become_file_level() {
                    {"type":"thread","filePath":"src/a.rs","position":{"side":"new","line":40},"body":"far away","author":"claude"},
                    {"type":"thread","filePath":"@brief","position":{"side":"new","line":1},"body":"why?","kind":"question","target":{"kind":"brief","section":"intent"}}]"#;
     let r = apply_with_excerpts(&mut s, from_difit_json(json).unwrap(), "", &excerpt);
-    assert_eq!(
-        r.warnings,
-        ["src/a.rs:new:40 is outside the loaded diff; stored as a file-level thread."]
-    );
+    assert!(r.warnings.is_empty(), "{:?}", r.warnings);
     let snap = s.threads[0].code_snapshot.as_ref().unwrap();
     assert_eq!((snap.content.as_str(), snap.before.as_slice()), ("b", &["a".to_owned()][..]));
     assert_eq!(s.threads[0].kind(), ThreadKind::Issue);
-    assert_eq!(s.threads[1].target_kind(), TargetKind::File);
+    assert_eq!(s.threads[1].target_kind(), TargetKind::Line);
     assert!(s.threads[1].code_snapshot.is_none());
     assert_eq!(s.threads[2].kind, Some(ThreadKind::Question));
     assert_eq!(s.threads[2].answer.as_ref().unwrap().status, AnswerStatus::Queued);
@@ -562,6 +559,35 @@ fn imports_snapshot_against_the_loaded_diff_or_become_file_level() {
         ops::waiting_on_user(&s.threads[2], "sumit"),
         "an answered question waits on the user"
     );
+}
+
+#[test]
+fn an_import_outside_the_diff_stays_a_line_thread_through_reload_and_readback() {
+    let files = set(vec![added("src/a.rs", &["a", "b", "c"])]);
+    let excerpt = |_: &str, p: &str, a: &Anchor| files.files.iter().find(|f| f.path == p).and_then(|f| ops::snapshot_at(f, a, p));
+    let mut s = Session::default();
+    let json = r#"{"type":"thread","filePath":"src/a.rs","position":{"side":"new","line":{"start":40,"end":42}},"body":"far away","author":"claude"}"#;
+    let r = apply_with_excerpts(&mut s, from_difit_json(json).unwrap(), "", &excerpt);
+    assert!(r.warnings.is_empty(), "{:?}", r.warnings);
+    let t = &s.threads[0];
+    assert_eq!(
+        (t.target.clone(), t.anchor),
+        (
+            None,
+            Anchor::Range {
+                side: Side::New,
+                start: 40,
+                end: 42
+            }
+        )
+    );
+
+    assert_eq!(ops::mark_outdated(&mut s, &files), 0, "a reload leaves it where it was");
+    assert_eq!(s.threads[0].placement(), AnchorState::Placed);
+
+    let back: serde_json::Value = serde_json::from_str(&rain_comments::comments_json_string(&s, None)).unwrap();
+    assert_eq!(back["threads"][0]["position"]["line"], serde_json::json!({"start": 40, "end": 42}));
+    assert!(rain_comments::comments_output(&s, None).contains("40"));
 }
 
 #[test]

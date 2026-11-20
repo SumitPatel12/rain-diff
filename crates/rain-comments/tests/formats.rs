@@ -536,6 +536,31 @@ fn deleting_the_answer_reopens_the_question_for_the_next_reply() {
 }
 
 #[test]
+fn an_agent_reply_answers_an_at_claude_question_on_a_comment_thread() {
+    use rain_core::{Answer, AnswerStatus};
+    let mut s = Session::default();
+    let c = r#"{"type":"thread","filePath":"a.cs","position":{"side":"new","line":1},"body":"DROPPED: moot.","author":"Skippy"}"#;
+    apply(&mut s, from_difit_json(c).unwrap(), "");
+    let id = s.threads[0].id.clone();
+    ops::reply(&mut s, &id, "Skippy again", Some("Skippy"));
+    assert!(s.threads[0].answer.is_none(), "an agent reply nobody asked for is no answer");
+    ops::reply(&mut s, &id, "@Claude I'm not getting this one.", None);
+    s.threads[0].answer = Some(Answer {
+        status: AnswerStatus::Answering,
+        by: Some("launcher".into()),
+        ..Answer::default()
+    });
+    let reply = r#"{"type":"reply","threadId":"THREAD","body":"Fair, badly worded.","author":"Skippy"}"#.replace("THREAD", &id);
+    apply(&mut s, from_difit_json(&reply).unwrap(), "");
+    let t = &s.threads[0];
+    let a = t.answer.as_ref().unwrap();
+    assert_eq!(t.kind(), rain_core::ThreadKind::Comment, "the thread stays a comment");
+    assert_eq!(a.status, AnswerStatus::Answered);
+    assert_eq!(a.by.as_deref(), Some("attached"), "the agent answered, not the launcher");
+    assert_eq!(a.message_id.as_deref(), t.messages.last().map(|m| m.id.as_str()));
+}
+
+#[test]
 fn a_moved_thread_still_dedupes_and_takes_replies_at_its_original_line() {
     let mut s = Session::default();
     let add = r#"{"type":"thread","filePath":"a.cs","position":{"side":"new","line":12},"body":"check this","author":"claude"}"#;

@@ -13,7 +13,7 @@ use std::time::Instant;
 use rune::{Color, El, Live, Shape, Tx, canvas, col, el, row, text};
 use rune_kit::Kit;
 
-use super::ui::{outline, primary};
+use super::ui::{Activate, outline, primary};
 use crate::app::rest::{DRAIN, FLOOD_IN, Weather, flood_level};
 use crate::app::{App, Phase};
 use crate::theme::{Look, TYPE, brand, radius};
@@ -778,11 +778,11 @@ fn card(s: &App, k: &Kit, look: &Look, light: Option<(f32, Color, Color)>) -> El
             .pt(12.0)
             .gap(8.0)
             .items_center()
-            .child(primary("break-taken", "I took a break", k).on_press_tx(|s: &mut App, _: &mut Tx| s.rest_taken()))
+            .child(primary("break-taken", "I took a break", k).on_activate_tx(|s: &mut App, _: &mut Tx| s.rest_taken()))
             .child(el().grow(1.0).a11y_hidden())
             .child(
                 outline("break-snooze", format!("Snooze {}", mins(snooze)), Some("Esc"), 28.0, k)
-                    .on_press_tx(|s: &mut App, _: &mut Tx| s.rest_snooze()),
+                    .on_activate_tx(|s: &mut App, _: &mut Tx| s.rest_snooze()),
             ),
     )
 }

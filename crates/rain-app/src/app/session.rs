@@ -33,6 +33,9 @@ impl App {
         let notes_before = self.mirror.notes.len();
         self.mirror = fresh;
         self.seen_version = version;
+        if self.mirror.brief.is_some() {
+            self.brief.asked = false;
+        }
         self.recompute_viewed();
         let overview_changed = overview_version != self.seen_overview_version;
         if overview_changed {

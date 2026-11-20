@@ -716,3 +716,108 @@ fn a_saved_place_wins_over_the_lists_first_file() {
     assert_ne!(saved, fresh.state.list_order()[0]);
     assert_eq!(rt.state.current(), Some(saved));
 }
+
+/// Long file names a few folders deep, as in a 100+ file .NET change, with the list `width` wide.
+fn long_names(width: f32) -> Runtime<App> {
+    let dir = temp_dir();
+    std::fs::create_dir_all(&dir).unwrap();
+    let patch: String = [
+        "src/Api/Features/Settings/AdditionalServices/AdditionalServicesController.cs",
+        "src/Api/Features/Settings/Branches/BranchesController.cs",
+        "src/Api/Features/Settings/CrewBaseRates/CrewBaseRatesController.cs",
+        "src/Api/Features/Tags/TagsController.cs",
+        "src/Api/Features/Settings/Tags/LeadSourcesController.cs",
+    ]
+    .iter()
+    .map(|p| {
+        format!(
+            "diff --git a/{p} b/{p}\nnew file mode 100644\nindex 0000000..1111111\n--- /dev/null\n+++ b/{p}\n@@ -0,0 +1,3 @@\n+a\n+b\n+c\n"
+        )
+    })
+    .collect();
+    let path = dir.join("long.patch");
+    std::fs::write(&path, patch).unwrap();
+    let mut a = app_with(Launch {
+        session: "t".into(),
+        fixture: Some(path),
+        ..Launch::default()
+    });
+    a.sidebar = crate::app::layout::list_pane(width, true);
+    unfold_all(&mut a);
+    sized_runtime(a, (1366.0, 768.0))
+}
+
+#[test]
+fn a_folder_hint_too_narrow_to_read_is_dropped_and_the_name_and_counts_keep_their_room() {
+    let (mut dropped, mut shown) = (0, 0);
+    for w in [284.0, 300.0, 320.0, 340.0, 358.0] {
+        let rt = long_names(w);
+        let els = rt.elements();
+        for (i, _) in els
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| !e.exiting && e.key.as_deref() == Some("row"))
+        {
+            let texts: Vec<_> = els.iter().filter(|e| e.parent == Some(i) && e.role == "text").collect();
+            let name = texts[0];
+            let plus = els
+                .iter()
+                .find(|e| e.text.as_deref().is_some_and(|t| t.starts_with('+')) && e.parent.is_some_and(|p| els[p].parent == Some(i)))
+                .unwrap();
+            match texts.iter().find(|e| e.text.as_deref().is_some_and(|t| t.contains(" · "))) {
+                Some(hint) => {
+                    shown += 1;
+                    assert!(hint.rect[2] >= 30.0, "at {w}: a stub of {:?} {}pt wide", hint.text, hint.rect[2]);
+                    let whole = rune::text::advance(name.text.as_deref().unwrap(), crate::theme::TYPE.ui);
+                    assert!(name.rect[2] >= whole - 1.0, "at {w}: {:?} is cut for its folder", name.text);
+                    let gap = plus.rect[0] - (hint.rect[0] + hint.rect[2]);
+                    assert!(gap >= 5.5, "at {w}: the counts keep their gap: {gap}");
+                }
+                None => {
+                    dropped += 1;
+                    assert!(plus.rect[0] - (name.rect[0] + name.rect[2]) >= 5.5);
+                }
+            }
+        }
+    }
+    assert!(dropped > 0 && shown > 0, "dropped {dropped}, shown {shown}");
+}
+
+#[test]
+fn files_with_comments_wear_a_tinted_count_that_moves_nothing() {
+    let mut a = app(story(), true);
+    seed_threads(&mut a);
+    unfold_all(&mut a);
+    let rt = sized_runtime(a, (1600.0, 1000.0));
+    let els = rt.elements();
+    let live = |key: &str| {
+        els.iter()
+            .enumerate()
+            .filter(|(_, e)| !e.exiting && e.key.as_deref() == Some(key))
+            .collect::<Vec<_>>()
+    };
+    let rows = live("row");
+    let pills = live("threads");
+    assert!(!pills.is_empty() && pills.len() < rows.len(), "some files have comments, some not");
+    for (i, p) in &pills {
+        assert_ne!(p.fill, rune::Color::TRANSPARENT, "the count sits on a tinted pill");
+        let row = &els[p.parent.unwrap()];
+        assert!(
+            p.rect[1] >= row.rect[1] && p.rect[1] + p.rect[3] <= row.rect[1] + row.rect[3],
+            "inside its row"
+        );
+        let ink = els
+            .iter()
+            .find(|e| e.parent == Some(*i) && e.role == "text")
+            .and_then(|e| e.text_color)
+            .unwrap();
+        let dir = els
+            .iter()
+            .filter(|e| e.parent == p.parent && e.role == "text")
+            .filter_map(|e| e.text_color)
+            .collect::<Vec<_>>();
+        assert!(!dir.contains(&ink), "the count's ink differs from the row's other text");
+    }
+    let h = rows[0].1.rect[3];
+    assert!(rows.iter().all(|(_, r)| (r.rect[3] - h).abs() < 0.5), "every row keeps one height");
+}

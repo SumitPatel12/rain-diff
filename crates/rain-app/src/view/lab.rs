@@ -9,7 +9,7 @@ use rune::{Cursor, Drag, El, Tx, col, el, row, text};
 use rune_kit::{Kit, SegmentedControl};
 
 use super::icons;
-use super::ui::{Ghost, vsep};
+use super::ui::{Activate, Ghost, vsep};
 use crate::app::App;
 use crate::theme::{Roles, Surfaces, TYPE, space};
 
@@ -122,21 +122,21 @@ fn controls(lab: &Lab, slot: Slot, k: &Kit, surf: &Surfaces, r: &Roles) -> El {
                 .help(if playing { "Pause  Space" } else { "Play  Space" })
                 .on(playing)
                 .build(k)
-                .on_press(move |s: &mut App| slot.with(s, Lab::toggle)),
+                .on_activate(move |s: &mut App| slot.with(s, Lab::toggle)),
         )
         .child(
             Ghost::new(slot.key("back"))
                 .icon(&icons::CHEV_L)
                 .help("Step back  ←")
                 .build(k)
-                .on_press(move |s: &mut App| slot.with(s, |l| l.step_by(false))),
+                .on_activate(move |s: &mut App| slot.with(s, |l| l.step_by(false))),
         )
         .child(
             Ghost::new(slot.key("forward"))
                 .icon(&icons::CHEV_R)
                 .help("Step forward  →")
                 .build(k)
-                .on_press(move |s: &mut App| slot.with(s, |l| l.step_by(true))),
+                .on_activate(move |s: &mut App| slot.with(s, |l| l.step_by(true))),
         )
         .child(scrubber(lab, slot, k, surf, r))
         .child(
@@ -152,7 +152,7 @@ fn controls(lab: &Lab, slot: Slot, k: &Kit, surf: &Surfaces, r: &Roles) -> El {
                 .icon(&icons::RELOAD)
                 .help("Restart  Home")
                 .build(k)
-                .on_press(move |s: &mut App| slot.with(s, Lab::restart)),
+                .on_activate(move |s: &mut App| slot.with(s, Lab::restart)),
         )
         .child(vsep(k));
     let speeds: Vec<String> = SPEEDS.iter().map(|v| format!("{v}×")).collect();

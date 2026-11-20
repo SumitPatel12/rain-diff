@@ -7,7 +7,7 @@ use rune::{Cursor, El, Tx, col, el, row, text};
 use rune_kit::{Kit, Placement, popover};
 
 use super::icons;
-use super::ui::{Ghost, outline, sr};
+use super::ui::{Activate, Ghost, outline, sr};
 use crate::app::App;
 use crate::theme::{TYPE, radius};
 
@@ -33,7 +33,7 @@ pub(super) fn chips_button(s: &App, k: &Kit) -> El {
             "Filter toggles".into()
         })
         .expanded(s.menus.chips)
-        .on_press(|s: &mut App| {
+        .on_activate(|s: &mut App| {
             let open = !s.menus.chips;
             s.menus.close();
             s.menus.chips = open;
@@ -140,7 +140,7 @@ pub(super) fn filter_bar(s: &App, k: &Kit) -> Option<El> {
             .child(
                 outline("filter-clear", "Clear", None, 24.0, k)
                     .help(format!("{} · Esc", crate::keys::tip("Clear the filter", Command::ClearFilter)))
-                    .on_press(|s: &mut App| {
+                    .on_activate(|s: &mut App| {
                         s.clear_filter();
                     }),
             )

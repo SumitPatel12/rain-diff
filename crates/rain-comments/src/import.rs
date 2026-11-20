@@ -3,7 +3,7 @@
 
 use std::collections::HashMap;
 
-use rain_core::{Anchor, Answer, CodeSnapshot, CommentImport, ImportBody, Message, Session, Target, TargetKind, Thread, ThreadKind};
+use rain_core::{Anchor, Answer, CodeSnapshot, CommentImport, ImportBody, Message, Session, TargetKind, Thread, ThreadKind};
 use serde_json::Value;
 
 use crate::clock::{new_id, now_iso};
@@ -191,9 +191,8 @@ pub fn apply(s: &mut Session, imports: Vec<CommentImport>, repo: &str) -> Import
 }
 
 /// [`apply`] against the loaded diff: a line thread without a snapshot takes one now from
-/// `excerpt`, so it is anchored to the code it was written against; a thread whose lines the
-/// diff does not show becomes a file-level thread, with a warning, rather than a silent line
-/// thread.
+/// `excerpt`, so it is anchored to the code it was written against. A line outside the diff
+/// stays a line thread without one, and shows on its line once the context around it opens.
 pub fn apply_with_excerpts(s: &mut Session, imports: Vec<CommentImport>, repo: &str, excerpt: Excerpt<'_>) -> ImportResult {
     apply_inner(s, imports, repo, Some(excerpt))
 }
@@ -241,7 +240,7 @@ fn apply_inner(s: &mut Session, imports: Vec<CommentImport>, repo: &str, excerpt
                 continue;
             }
             let id = b.id.clone().unwrap_or_else(new_id);
-            let mut target = b.target.clone().or_else(|| target_from_path(&b.file_path));
+            let target = b.target.clone().or_else(|| target_from_path(&b.file_path));
             let mut snapshot = b.code_snapshot.clone();
             if let Some(t) = &target
                 && snapshot.is_none()
@@ -253,17 +252,6 @@ fn apply_inner(s: &mut Session, imports: Vec<CommentImport>, repo: &str, excerpt
                 && target.as_ref().is_none_or(|t| t.kind == TargetKind::Line)
             {
                 snapshot = get(&repo, &b.file_path, &anchor);
-                if snapshot.is_none() {
-                    warnings.push(format!(
-                        "{}:{} is outside the loaded diff; stored as a file-level thread.",
-                        b.file_path,
-                        difit_position_key(&anchor)
-                    ));
-                    target = Some(Target {
-                        kind: TargetKind::File,
-                        ..Target::default()
-                    });
-                }
             }
             let asks = b.kind == Some(ThreadKind::Question) && b.author.as_deref().is_none_or(|a| a.trim().is_empty());
             s.threads.push(Thread {

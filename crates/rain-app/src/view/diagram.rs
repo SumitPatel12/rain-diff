@@ -12,7 +12,7 @@ use super::icons;
 use super::lab::{self, Slot};
 use super::muted;
 use super::overview::{artifact_composer, dot, thread_card};
-use super::ui::{Ghost, outline, sr};
+use super::ui::{Activate, Ghost, outline, sr};
 use crate::app::{App, ComposeMode, MapTab, Overlay};
 use crate::theme::{TYPE, radius, space};
 
@@ -314,7 +314,7 @@ fn side_pane(s: &App, node: &str, k: &Kit) -> El {
             .help("Close  Esc")
             .height(24.0)
             .build(k)
-            .on_press(|s: &mut App| {
+            .on_activate(|s: &mut App| {
                 s.close_map_pane();
             }),
     );
@@ -414,7 +414,7 @@ fn side_pane(s: &App, node: &str, k: &Kit) -> El {
                 26.0,
                 k,
             )
-            .on_press(move |s: &mut App| s.comment_on_node(&id, ComposeMode::Comment)),
+            .on_activate(move |s: &mut App| s.comment_on_node(&id, ComposeMode::Comment)),
         )
         .child(
             outline(
@@ -424,7 +424,7 @@ fn side_pane(s: &App, node: &str, k: &Kit) -> El {
                 26.0,
                 k,
             )
-            .on_press(move |s: &mut App| s.comment_on_node(&ask, ComposeMode::Question)),
+            .on_activate(move |s: &mut App| s.comment_on_node(&ask, ComposeMode::Question)),
         )
         .child(
             el().pin(Some(0.0), Some(0.0), Some(0.0), None)

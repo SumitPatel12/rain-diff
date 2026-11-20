@@ -8,7 +8,7 @@ use rune_kit::Kit;
 
 use super::icons;
 use super::lab::Slot;
-use super::ui::Ghost;
+use super::ui::{Activate, Ghost};
 use crate::app::App;
 use crate::theme::{Look, TYPE, radius, space};
 
@@ -22,7 +22,7 @@ pub(super) fn page(s: &App, look: &Look, cx: &mut Cx<App>) -> El {
         .icon(&icons::CLOSE)
         .help("Close  Esc")
         .build(k)
-        .on_press(|s: &mut App| {
+        .on_activate(|s: &mut App| {
             s.close_playground();
         });
     let head = row()
@@ -222,7 +222,7 @@ fn note(s: &App, look: &Look) -> El {
                         })
                         .on(lab.raw)
                         .build(k)
-                        .on_press(|s: &mut App| s.playground.lab.raw = !s.playground.lab.raw),
+                        .on_activate(|s: &mut App| s.playground.lab.raw = !s.playground.lab.raw),
                 ),
         );
     if lab.raw {

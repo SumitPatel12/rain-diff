@@ -8,7 +8,7 @@ use rune::{Cursor, Drag, El, Key, KeyEvent, Tx, col, el, row, text};
 use rune_kit::{Kit, TextInput};
 
 use super::icons;
-use super::ui::{Ghost, sr};
+use super::ui::{Activate, Ghost, sr};
 use crate::app::App;
 use crate::theme::{TYPE, radius};
 
@@ -41,7 +41,7 @@ pub(super) fn card(s: &App, k: &Kit) -> Option<El> {
             if open { "Fold" } else { "Open the checklist" },
             Command::ToggleVerify.chord().map(|c| c.display()).unwrap_or_default()
         ))
-        .on_press(|s: &mut App| s.press_verify_head())
+        .on_activate(|s: &mut App| s.press_verify_head())
         .on_double_press(|s: &mut App| s.reset_verify_position())
         .on_drag(|s: &mut App, d: &mut Drag, tx: &mut Tx| s.verify_drag(d, tx))
         .child(icons::draw(&icons::CHECK, 14.0, r.accent))
@@ -136,7 +136,7 @@ pub(super) fn card(s: &App, k: &Kit) -> Option<El> {
                 .help("Reset position")
                 .height(26.0)
                 .build(k)
-                .on_press(|s: &mut App| s.reset_verify_position()),
+                .on_activate(|s: &mut App| s.reset_verify_position()),
         );
     }
     Some(
@@ -209,7 +209,7 @@ fn item_row(s: &App, k: &Kit, i: usize, item: &rain_core::verify::VerifyItem) ->
                 .height(24.0)
                 .build(k)
                 .mt(2.0)
-                .on_press(move |s: &mut App| s.start_verify_edit(of3.clone(), &words2)),
+                .on_activate(move |s: &mut App| s.start_verify_edit(of3.clone(), &words2)),
         )
         .child(
             Ghost::new(format!("verify-remove-{i}"))
@@ -218,7 +218,7 @@ fn item_row(s: &App, k: &Kit, i: usize, item: &rain_core::verify::VerifyItem) ->
                 .height(24.0)
                 .build(k)
                 .mt(2.0)
-                .on_press(move |s: &mut App| s.remove_verify_item(&of2)),
+                .on_activate(move |s: &mut App| s.remove_verify_item(&of2)),
         )
 }
 

@@ -955,6 +955,47 @@ impl DiffState {
         self.rebuild();
     }
 
+    /// The unchanged range of `file` holding line `at` (its gap index) and the line's offset in it;
+    /// `None` when a hunk holds the line.
+    fn gap_of(&self, file: usize, at: LineRef) -> Option<(usize, u32)> {
+        let f = self.files.get(file)?;
+        let h = f.hunks.partition_point(|hk| model::end(hk, at.side) <= at.line);
+        if f.hunks.get(h).is_some_and(|hk| model::first(hk, at.side) <= at.line) {
+            return None;
+        }
+        let g = self.idx.get(file)?.gaps.get(h)?;
+        let off = at.line.checked_sub(if at.side == Side::Old { g.old } else { g.new })?;
+        g.len.is_none_or(|len| off < len).then_some((h, off))
+    }
+
+    /// Whether `file` shows line `at`, in a hunk or an unchanged range that is open; a collapsed
+    /// file counts as showing its lines.
+    pub fn shows_line(&self, file: usize, at: LineRef) -> bool {
+        if at.line == 0 || file >= self.files.len() {
+            return false;
+        }
+        if self.line_index(file, at.side, at.line).is_some() {
+            return true;
+        }
+        let Some((gap, off)) = self.gap_of(file, at) else { return false };
+        let Some(len) = self.idx[file].gaps[gap].len else { return false };
+        let (top, bottom) = self.ui[file].revealed[gap];
+        off < top || off >= len - bottom.min(len)
+    }
+
+    /// Opens the unchanged range holding `file`'s line `at`, now or once its texts arrive; whether
+    /// the line sits in one.
+    pub fn reveal_line(&mut self, file: usize, at: LineRef) -> bool {
+        let Some((gap, _)) = self.gap_of(file, at).filter(|_| at.line > 0) else {
+            return false;
+        };
+        if self.ui[file].collapsed {
+            self.set_collapsed(file, false);
+        }
+        self.request_expand(file, gap, Expand::All);
+        true
+    }
+
     pub fn annotations(&self) -> &[Annotation] {
         &self.annotations
     }

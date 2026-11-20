@@ -7,7 +7,7 @@ use rune_kit::{Button, ButtonVariant, ControlSize, Kit, SegmentedControl, TextAr
 
 use super::icons;
 use super::messages::{self, Tone};
-use super::ui::{outline, sr};
+use super::ui::{Activate, outline, sr};
 use crate::app::{App, VERDICTS, verdict_label};
 use crate::theme::{TYPE, radius};
 
@@ -94,7 +94,7 @@ pub(super) fn finish(s: &App, k: &Kit) -> Option<El> {
             .child(text(w.text.clone()).font(TYPE.ui).color(k.c.text_base).wrap().grow(1.0).shrink());
         if w.go_to_must {
             line = line.child(
-                outline("finish-go-must", "Go to first", None, 24.0, k).on_press_tx(|s: &mut App, tx: &mut Tx| s.goto_first_must(tx)),
+                outline("finish-go-must", "Go to first", None, 24.0, k).on_activate_tx(|s: &mut App, tx: &mut Tx| s.goto_first_must(tx)),
             );
         }
         list = list.child(line).child(el().w_full().h(1.0).fill(surf.hairline).a11y_hidden());
@@ -131,7 +131,7 @@ pub(super) fn finish(s: &App, k: &Kit) -> Option<El> {
     submit = if ready {
         k.interactive_with(submit.cursor(Cursor::Pointer), k.c.contrast_hover, k.c.contrast_pressed)
             .press_scale(0.97)
-            .on_press_tx(|s: &mut App, tx: &mut Tx| {
+            .on_activate_tx(|s: &mut App, tx: &mut Tx| {
                 s.submit_review(tx);
             })
     } else {

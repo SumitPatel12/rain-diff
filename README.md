@@ -126,7 +126,7 @@ The window is the list on the left and the reader on the right.
 | `crates/rain-diffview` | virtual diff view (vendored from rune-kit, MIT; see `VENDORED.md`) |
 | `crates/rain-syntax` | syntect + two-face highlighting |
 | `crates/rain-comments` | session store, import/export formats, thread UI |
-| `crates/rain-tree` | file tree, viewed checkboxes, tag filter |
+| `crates/rain-tree` | file tree, viewed checkboxes, tag filter, file icons (Material Icon Theme, MIT) |
 | `crates/rain-diagram` | the Map: architecture / data-flow / data-model diagrams |
 | `crates/rain-triage` | deterministic triage: groups with reasons, reading order, facts |
 | `crates/rain-overview` | overview validation, coverage, tags, chapters, Brief check and tour steps |
@@ -161,3 +161,11 @@ Rain is licensed under the GNU Affero General Public License, version 3 only (`A
 and stays under the MIT license, Copyright (c) 2026 Anomaly; see
 [crates/rain-diffview/LICENSE-rune](crates/rain-diffview/LICENSE-rune) and
 [crates/rain-diffview/VENDORED.md](crates/rain-diffview/VENDORED.md).
+
+The file and folder icons in `crates/rain-tree/assets/file-icons` come from the
+[Material Icon Theme](https://github.com/material-extensions/vscode-material-icon-theme) (commit `3929c548`), and
+`crates/rain-tree/src/material.rs` ports its file name and extension rules for them. They stay under the MIT
+license, Copyright (c) 2025 Material Extensions; see
+[crates/rain-tree/assets/file-icons/LICENSE](crates/rain-tree/assets/file-icons/LICENSE). The default file and
+folder icons are drawn from the theme's generator paths, and the Angular file icons are its recoloured clones of
+`angular.svg`, as the theme builds them.

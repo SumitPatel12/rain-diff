@@ -203,7 +203,7 @@ impl Lab {
 
     fn publish_with(&self, rig: &Rig) {
         let t = self.clock.t();
-        rig.publish(t);
+        rig.publish(if self.reduced.get() { rig.held(t) } else { t });
         let p = (t / rig.duration).clamp(0.0, 1.0);
         self.scrub.fill.set([0.0, 0.0, SCRUB_W * p, 4.0]);
         self.scrub.thumb.set([SCRUB_W * p, 0.0]);
@@ -259,13 +259,13 @@ impl Lab {
 
     pub fn toggle(&mut self) {
         self.sync();
-        self.clock.toggle(self.reduced.get());
+        self.clock.toggle();
         self.publish();
     }
 
     pub fn play(&mut self) {
         self.sync();
-        self.clock.play(self.reduced.get());
+        self.clock.play();
         self.publish();
     }
 
@@ -275,7 +275,7 @@ impl Lab {
 
     pub fn restart(&mut self) {
         self.sync();
-        self.clock.restart(self.reduced.get());
+        self.clock.restart();
         self.publish();
     }
 

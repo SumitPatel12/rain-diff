@@ -3,19 +3,29 @@
 
 use rain_comments::ops;
 use rain_triage::Group;
-use rune::{TextEdit, Tx};
+use rune::{Key, KeyEvent, TextEdit, Tx};
 
 use super::board::Pick;
 use super::layout::Overlay;
 use super::{App, ME};
+use crate::settings::PICKER_MIN;
+use crate::theme::space;
 
 /// Rows the picker lists at most.
 pub const PICKER_ROWS: usize = 60;
+/// The panel's distance below the toolbar.
+pub const PICKER_TOP: f32 = 34.0;
+/// Room the panel leaves at the window's sides and bottom.
+const PICKER_MARGIN: f32 = 20.0;
 
 #[derive(Default)]
 pub struct PickerState {
     pub edit: TextEdit,
     pub sel: usize,
+    /// The panel's size when a resize drag began.
+    pub drag_from: Option<(f32, f32)>,
+    /// Normal mode's first `g` of `gg`.
+    pub pending_g: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -86,6 +96,7 @@ impl App {
         self.picker.edit.set_caret(query.len());
         self.picker.edit.focused = true;
         self.picker.sel = 0;
+        self.picker.pending_g = false;
         self.open_overlay(Overlay::Picker);
     }
 
@@ -181,13 +192,87 @@ impl App {
         scored.into_iter().take(PICKER_ROWS).map(|(_, _, e)| e).collect()
     }
 
-    pub fn picker_move(&mut self, down: bool) {
-        let n = self.picker_rows().len();
-        self.picker.sel = if down {
-            (self.picker.sel + 1).min(n.saturating_sub(1))
+    pub fn picker_move(&mut self, down: bool, tx: &mut Tx) {
+        let i = if down {
+            self.picker.sel + 1
         } else {
             self.picker.sel.saturating_sub(1)
         };
+        self.picker_select(i, tx);
+    }
+
+    /// Selects row `i` (clamped to the last) and scrolls the list just enough to show it.
+    pub fn picker_select(&mut self, i: usize, tx: &mut Tx) {
+        self.picker.sel = i.min(self.picker_rows().len().saturating_sub(1));
+        tx.scroll_into_view_in("picker-list", format!("pick-{}", self.picker.sel));
+    }
+
+    /// Vim's normal mode in the picker: `Esc` took the keys from the query box.
+    pub fn picker_normal(&self) -> bool {
+        self.layout.is_open(Overlay::Picker) && !self.picker.edit.focused && self.keymap_profile().vim_motions()
+    }
+
+    /// A key in normal mode: `j k ↑ ↓` move, `gg G` jump to the ends, `Enter` goes, `i` or
+    /// `/` type again, `Esc` closes. The rest do nothing.
+    pub fn picker_normal_key(&mut self, ev: &KeyEvent, tx: &mut Tx) -> bool {
+        let g = std::mem::take(&mut self.picker.pending_g);
+        match &ev.key {
+            Key::Down => self.picker_move(true, tx),
+            Key::Up => self.picker_move(false, tx),
+            Key::Enter => self.picker_go(ev.mods.ctrl || ev.mods.cmd, tx),
+            Key::Escape => self.close_picker(),
+            Key::Text(t) if !(ev.mods.ctrl || ev.mods.cmd || ev.mods.alt) => match t.as_str() {
+                "j" => self.picker_move(true, tx),
+                "k" => self.picker_move(false, tx),
+                "i" | "/" => self.picker.edit.focused = true,
+                "G" => self.picker_select(usize::MAX, tx),
+                "g" if g => self.picker_select(0, tx),
+                "g" => self.picker.pending_g = true,
+                _ => {}
+            },
+            _ => {}
+        }
+        true
+    }
+
+    /// The panel's size: the saved one, inside the window.
+    pub fn picker_size(&self) -> (f32, f32) {
+        self.fit_picker(self.settings.picker_size)
+    }
+
+    fn fit_picker(&self, (w, h): (f32, f32)) -> (f32, f32) {
+        let room_w = if self.window_width > 0.0 {
+            self.window_width - 2.0 * PICKER_MARGIN
+        } else {
+            f32::MAX
+        };
+        let room_h = if self.window_height > 0.0 {
+            self.window_height - space::TOP_BAR - space::STATUS - PICKER_TOP - PICKER_MARGIN
+        } else {
+            f32::MAX
+        };
+        (w.min(room_w).max(PICKER_MIN.0), h.min(room_h).max(PICKER_MIN.1))
+    }
+
+    /// Resizes the panel from a drag on its right edge (`dx`; it stays centred, so the left edge
+    /// mirrors it) or its bottom (`dy`); saved once the drag ends.
+    pub fn drag_picker(&mut self, phase: rune::Phase, dx: f32, dy: f32, cancelled: bool) {
+        let at = self.picker_size();
+        match phase {
+            rune::Phase::Down => self.picker.drag_from = Some(at),
+            rune::Phase::Move | rune::Phase::Up => {
+                let from = self.picker.drag_from.unwrap_or(at);
+                self.settings.picker_size = if cancelled {
+                    from
+                } else {
+                    self.fit_picker((from.0 + 2.0 * dx, from.1 + dy))
+                };
+                if phase == rune::Phase::Up {
+                    self.picker.drag_from = None;
+                    self.save_settings();
+                }
+            }
+        }
     }
 
     /// `Enter` goes to the selected entry; zoom is restored first unless `keep_zoom` (Ctrl+Enter).

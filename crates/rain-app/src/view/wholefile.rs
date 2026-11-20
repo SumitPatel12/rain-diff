@@ -5,7 +5,7 @@ use rune::{El, Tx};
 use rune_kit::Kit;
 
 use super::icons;
-use super::ui::Ghost;
+use super::ui::{Activate, Ghost};
 use crate::app::App;
 
 /// For full-list file `g`, on its header row; `None` hides it (no git repo to read from, or
@@ -35,6 +35,6 @@ pub(super) fn header_button(s: &App, g: usize, k: &Kit) -> Option<El> {
     Some(if disabled {
         b.opacity(0.45)
     } else {
-        b.on_press_tx(move |s: &mut App, tx: &mut Tx| s.toggle_whole(g, tx))
+        b.on_activate_tx(move |s: &mut App, tx: &mut Tx| s.toggle_whole(g, tx))
     })
 }

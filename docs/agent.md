@@ -1,5 +1,21 @@
 # Driving a running Rain (for agents)
 
+## Quickstart for agents
+
+A diff alone is half a review: send a **Brief** (and an **Overview** for a bigger change) so the
+user gets the intent, the how and a tour. In order:
+
+```powershell
+& $r open HEAD origin/main --merge-base --session <s> --background   # 1 open; while there is no brief, stderr says `next: send a brief …`
+& $r brief set 'C:\tmp\brief.md' --session <s>                     # 2 intent, how it works, a tour (§4)
+& $r brief check --session <s>                                     # 3 fix what it reports and set again, until it exits 0
+& $r overview validate 'C:\tmp\overview.json'                      # 4 until it exits 0, then `overview set` it (§10)
+& $r watch --for agent --kinds reply,ask,submitted,brief-missing --session <s> --timeout 60   # 5 stay attached (§6)
+```
+
+A `brief-missing` event means you have been attached about 2 minutes and no brief is set: do
+steps 2–3 now. Rain sends it once per window and never after a brief is set.
+
 Everything here works against an **open window**: each call changes the session, saves it and
 updates the window live. The CLI is a thin client of the HTTP routes; use whichever is easier.
 Examples are PowerShell; `$r` is the Rain binary
@@ -14,7 +30,7 @@ Examples are PowerShell; `$r` is the Rain binary
 & $r brief check --session review-ACME-1                    #   fix phantom paths / uncited files, set again
 & $r comment add '@C:\tmp\findings.json' --session review-ACME-1   # 4 findings; ids from `comment get --format json`
 & $r watch --for agent --kinds reply,ask,state,disposition --session review-ACME-1 --timeout 60   # 5 wait for the user
-#   6 an `ask` event = the user asked a question: answer it with `comment reply --thread <id>`
+#   6 an `ask` event = the user asked a question: `comment claim --thread <id>` at once, then answer it with `comment reply --thread <id>`
 #   7 fix the code, commit, then:
 & $r comment set-state k3x9f2 addressed --sha d4e5f6a --session review-ACME-1
 & $r reload --session review-ACME-1                         # 8 the window reloads in place; threads re-anchor
@@ -35,7 +51,7 @@ Repeat 5–8 until `review get` shows a round with the verdict you need.
 | `--repo <dir>` | a repository to show; repeat for one window over several repos (default: the current folder) |
 | `--session <id>` | session name; threads, viewed state and the reading place persist in `%LOCALAPPDATA%\Rain\sessions\<id>.json`. Default `<repo folder>-<branch or target>`, then `-uncommitted`/`-working`/`-staged` for those targets, then `-<8 hex>` when the base, `--merge-base`, `--include-untracked` or extra `--repo`s differ from a plain `rain open <target>`, so a different diff never reuses a window. Pass `--session` to choose the name yourself (it is used as given) |
 | `--last` | reopen the most recently saved session as it was opened |
-| `--background` | start detached, print the handshake and exit |
+| `--background` | start detached, print the handshake and exit; while the window has no brief, one `next: send a brief …` line follows on stderr (stdout is the handshake alone) |
 | `--port <n>` | preferred port (the next free one is used when taken) |
 | `--comment <JSON or @file>` | comment imports to load at start (repeatable) |
 | `--overview <file>` | overview document to load at start |
@@ -346,7 +362,7 @@ Map threads follow the node id, then its label (`moved(label)`); note threads fo
 ```
 - Typed deltas from the window's event ring (500 kept). `--kinds` (comma-separated; default every
   kind): `thread`, `reply`, `disposition`, `state`, `viewed`, `ask`, `answer`, `submitted`,
-  `reload`, `presence`, `brief`, `notes`, `overview`.
+  `reload`, `presence`, `brief`, `notes`, `overview`, `brief-missing`.
 - `--since <seq>`: the `seq` of the last reply you read; default the newest now, so the next event
   returns. `--timeout S`: default 25, the server caps it at 60.
 - `--for agent`: you are the **attached agent**. The wait keeps your presence alive (`idle`, the
@@ -381,16 +397,47 @@ an answer **now**, inline, as a reply to that thread.
 
 Contract for the attached agent:
 1. Hold `rain watch --for agent --kinds ask,…` while you work; that marks you attached.
-2. On an `ask`: optionally `rain presence working --on <threadId>` (the card then reads
-   `Claude is answering… 12 s`), read what you need (`comment get --format json`, the files), then
-   `rain comment reply --thread <threadId> --body '…'` — ≤ 150 words, cite `path:line`, say when
-   the answer is not in the code you read. Do not edit files to answer a question.
-3. `rain presence idle` when done. Your reply sets `answer.status = answered` and moves the thread
-   to the user's "Waiting on you".
+2. On an `ask`, **claim it at once**, before reading any code:
+   `rain comment claim --thread <threadId>` (and `rain presence working --on <threadId>` for the
+   one your main thread answers; the card then reads `Claude is answering… 12 s`). A claimed
+   question is yours: the launcher stays off it until you reply, however long you go without a
+   heartbeat, up to `ask.timeoutSec` (120 s). `--release` gives it back to the launcher at once.
+3. Your main thread answers one question at a time. If it is free, answer: read what you need
+   (`comment get --format json`, the files), then `rain comment reply --thread <threadId> --body '…'`
+   — ≤ 150 words, cite `path:line`, say when the answer is not in the code you read. Do not edit
+   files to answer a question.
+4. If the main thread is busy with another question, or several asks arrive in one batch, spawn
+   one helper agent per extra question with a self-contained brief: the question, `threadId`, file
+   and excerpt, the session name, the review's intent, and a summary of anything already
+   discussed. Each helper claims its thread (claims need no watch), reads the code and replies
+   with `comment reply --thread <id>`.
+5. Restart your watch straight away after taking an `ask`, so you never stop listening.
+   `rain presence idle` once every answer is posted. Your reply sets `answer.status = answered`
+   and releases the claim (on a comment thread an `@claude` reply asked on too) and moves the
+   thread to the user's "Waiting on you".
+6. An `ask` with no thread and `data.request: "brief"` is the Overview's *Ask the agent to write
+   one*: write the Brief (§4) and `rain brief set` it; no reply. The window offers it only while
+   an agent is attached, and the launcher never takes it.
+6. A `brief-missing` event (no thread, `data.request: "brief"`) comes once, about 2 minutes after
+   you first attach while no brief is set: write the Brief and `rain brief set` it, as for 5.
 
-The launcher answers when no agent does: if no agent is attached, or the attached one is `working`
-on something else or `blocked`, or it has not picked the question up within `ask.handoffSec`
-(default 20 s), Rain runs `ask.command` from `settings.json` (default
+`rain comment claim --thread <id> [--release]` is `POST /api/comments/:id/claim` `{"release"?}` →
+`{"success","threadId","claimed","changed"}`; it marks a pending answer `answering` by `attached`
+(`claimed: false` when nothing is pending, for example the question is already answered).
+
+The attached agent counts as attached while it was heard from (a post or a `for=agent` wait)
+within `ask.handoffSec`, and never less than 15 s. An `ask` delivered while you are attached is
+yours for `ask.handoffSec` (default 20 s) even if your heartbeat goes quiet meanwhile; claim it
+within that time. Questions queue for you: one asked while you hold another waits without a
+countdown, and each gets its own `ask.handoffSec` once it is next. If you answer, or claim, a
+question the launcher is already running, the run stops, its late answer is never posted, and
+the answer reads `by: attached`.
+
+The launcher, `claude -p`, is only the fallback. It answers when no agent does: if no agent is
+attached, or the attached one is `working` on something that is not a question, `blocked` or
+`offline`, or it has not claimed the question within `ask.handoffSec`, or it holds a question
+(claimed, or queued behind one) for longer than `ask.timeoutSec` with no reply. Rain then runs
+`ask.command` from `settings.json` (default
 `claude -p --output-format text --allowedTools Read,Grep,Glob --add-dir {repos}`) with the prompt on
 stdin: a fixed preamble, the session title and shas, the Brief's intent and the `how` sections
 touching the file, the anchored excerpt (withheld for `ask.redact` paths), the thread so far and
@@ -404,7 +451,7 @@ it; the default `claude -p` sends the prompt to the user's Claude account, so th
 until the user allows it once (the toast's `Allow`, or `Ask: allow` in the palette; stored as
 `ask.allowed`). A `claude` command also gets `--disallowedTools "Read(//**/<glob>)"` for each
 `ask.redact` glob, so it cannot open those files itself; a glob matches at any depth for both
-(`config/prod.json` also withholds `server/config/prod.json`). A second answer to the same question appends as another reply. `watch --for agent --kinds ask`
+(`config/prod.json` also withholds `server/config/prod.json`). `watch --for agent --kinds ask`
 still delivers asks a launcher took; skip a thread whose `answer.by` is `launcher` and whose status
 is not `failed`.
 

@@ -226,6 +226,83 @@ fn an_open_card_shows_its_actions_and_folds_into_the_gutter() {
 }
 
 #[test]
+fn enter_on_a_focused_fold_badge_unfolds_its_thread() {
+    let mut a = app(story(), true);
+    seed_threads(&mut a);
+    let id = a.mirror.threads[0].id.clone();
+    let mut rt = runtime(a);
+    rt.update({
+        let id = id.clone();
+        move |s, tx| s.goto_thread(&id, tx)
+    });
+    rt.update(|s, _| s.focused_thread = None);
+    settle(&mut rt);
+    rt.update({
+        let id = id.clone();
+        move |s, tx| s.card_action(&id, rain_comments::CardAction::Toggle, tx)
+    });
+    settle(&mut rt);
+    assert!(rt.state.is_folded(&id));
+    assert!(tab_to(&mut rt, "gm"), "Tab reaches the badge");
+    press(&mut rt, Key::Enter, Mods::default());
+    assert!(!rt.state.is_folded(&id), "Enter unfolds it");
+    assert!(live(&rt, &format!("thread-{id}")));
+}
+
+#[test]
+fn a_card_outside_the_diff_folds_into_a_badge_in_its_strip() {
+    let mut a = app(story(), true);
+    let (repo, path) = {
+        let f = &a.diff.files()[0];
+        (
+            a.repos.get(f.repo as usize).map(|r| r.id.clone()).unwrap_or_default(),
+            f.path.clone(),
+        )
+    };
+    let ids: Vec<String> = [9_000, 9_001]
+        .into_iter()
+        .map(|line| {
+            let anchor = rain_core::Anchor::Line { side: Side::New, line };
+            a.mutate(|s| rain_comments::ops::add_thread(s, &repo, &path, anchor, "Off the hunks", Some("Skippy"), None))
+        })
+        .collect();
+    a.rebuild_annotations();
+    assert!(
+        ids.iter().all(|id| a.unplaced.values().flatten().any(|x| x == id)),
+        "both sit in the outside-the-diff strip"
+    );
+    let mut rt = runtime(a);
+    rt.update(|s, _| s.focused_thread = None);
+    settle(&mut rt);
+    assert!(!live(&rt, "strip-badges"), "no badges while every card is open");
+    let fold = |rt: &mut Runtime<App>, id: &str| {
+        let id = id.to_owned();
+        rt.update(move |s, tx| s.card_action(&id, rain_comments::CardAction::Toggle, tx));
+        settle(rt);
+    };
+    fold(&mut rt, &ids[0]);
+    assert!(rt.state.is_folded(&ids[0]));
+    assert!(!live(&rt, &format!("thread-{}", ids[0])), "its card leaves the strip");
+    assert!(live(&rt, &format!("thread-{}", ids[1])), "the other card stays");
+    assert!(live(&rt, &format!("strip-fold-{}", ids[0])), "a badge marks it in the strip");
+    fold(&mut rt, &ids[1]);
+    assert!(
+        ids.iter()
+            .all(|id| !live(&rt, &format!("thread-{id}")) && live(&rt, &format!("strip-fold-{id}"))),
+        "all folded: just the head and one badge each"
+    );
+    assert!(live(&rt, "strip-summary"));
+    click(&mut rt, &format!("strip-fold-{}", ids[0]));
+    assert!(!rt.state.is_folded(&ids[0]), "pressing the badge unfolds it");
+    assert!(live(&rt, &format!("thread-{}", ids[0])));
+    assert!(!live(&rt, &format!("strip-fold-{}", ids[0])));
+    assert!(live(&rt, &format!("strip-fold-{}", ids[1])), "the other stays folded");
+    assert!(tab_to(&mut rt, "gm"), "Tab reaches the strip's badge");
+    press(&mut rt, Key::Enter, Mods::default());
+    assert!(!rt.state.is_folded(&ids[1]), "Enter unfolds it too");
+}
+
+#[test]
 fn your_own_question_card_offers_no_dispositions() {
     let mut rt = on_a_line();
     typed(&mut rt, "?");

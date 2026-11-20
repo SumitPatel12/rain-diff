@@ -18,11 +18,11 @@ fn palette_key(s: &mut App, ev: &KeyEvent, tx: &mut Tx) -> bool {
     let n = palette::filtered(s, &s.palette.edit.text).len();
     match ev.key {
         Key::Down => {
-            s.palette.sel = (s.palette.sel + 1).min(n.saturating_sub(1));
+            palette_select(s, (s.palette.sel + 1).min(n.saturating_sub(1)), tx);
             true
         }
         Key::Up => {
-            s.palette.sel = s.palette.sel.saturating_sub(1);
+            palette_select(s, s.palette.sel.saturating_sub(1), tx);
             true
         }
         Key::Enter => {
@@ -35,6 +35,14 @@ fn palette_key(s: &mut App, ev: &KeyEvent, tx: &mut Tx) -> bool {
         }
         _ => false,
     }
+}
+
+/// Selects row `i` and scrolls the rows just enough to show it; the first row brings its group's
+/// title along.
+fn palette_select(s: &mut App, i: usize, tx: &mut Tx) {
+    s.palette.sel = i;
+    let row = if i == 0 { "pal-group-0".to_owned() } else { format!("pal-{i}") };
+    tx.scroll_into_view_in("palette-rows", row);
 }
 
 /// `Command` as the group's title, `Commands`.
@@ -132,7 +140,7 @@ pub(super) fn palette_overlay(s: &App, k: &Kit) -> El {
                     .width(None)
                     .plain()
                     .on_edit(|s: &mut App| &mut s.palette.edit)
-                    .on_change(|s: &mut App, _: &mut Tx| s.palette.sel = 0)
+                    .on_change(|s: &mut App, tx: &mut Tx| palette_select(s, 0, tx))
                     .on_key(palette_key)
                     .build(k),
             ),

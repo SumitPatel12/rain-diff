@@ -209,9 +209,15 @@ pub fn open_or_reuse(o: OpenArgs, rune: &RuneArgs, args: &[String]) -> i32 {
         }
     }
     if o.background && !background::is_child() {
-        return background::spawn(args);
+        let session = build_launch(&o).session;
+        return background::spawn(args, |port| brief_hint(port, &session));
     }
     open(o, rune)
+}
+
+/// [`background::brief_hint`] when the window on `port` holds no brief.
+fn brief_hint(port: u16, session: &str) -> Option<String> {
+    (crate::client::has_brief(port) == Some(false)).then(|| background::brief_hint(session))
 }
 
 /// Prints the running window's handshake with `"reused":true` after handing it the start-up
@@ -234,10 +240,9 @@ fn reuse(o: &OpenArgs, session: &str, lock: &rain_server::Lock) -> i32 {
             return code;
         }
     }
-    println!(
-        "{}",
-        background::with_extras(&background::reused_line(lock.port, lock.pid), lock.token.as_deref(), false)
-    );
+    let line = background::with_extras(&background::reused_line(lock.port, lock.pid), lock.token.as_deref(), false);
+    let hint = if o.background { brief_hint(lock.port, session) } else { None };
+    background::relay(&line, hint.as_deref(), &mut std::io::stdout(), &mut std::io::stderr());
     0
 }
 
@@ -352,6 +357,35 @@ fn open_window(o: &OpenArgs, rune: &RuneArgs) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// What `rain open --background` writes for `line` from a window that has, or has no, brief.
+    fn opened(has: bool) -> (String, String) {
+        let shared = Arc::new(Shared::default());
+        if has {
+            shared.lock().brief = Some(rain_core::brief::BriefDoc::default());
+        }
+        let server = rain_server::start(shared, Some(0)).unwrap();
+        let line = background::handshake_line(server.port, &server.url, 1234);
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+        background::relay(&line, brief_hint(server.port, "s1").as_deref(), &mut out, &mut err);
+        assert_eq!(
+            String::from_utf8(out).unwrap(),
+            format!("{line}\n"),
+            "stdout is the handshake alone"
+        );
+        (line, String::from_utf8(err).unwrap())
+    }
+
+    #[test]
+    fn open_hints_at_the_brief_on_stderr_only_when_there_is_none() {
+        let (_, err) = opened(false);
+        assert_eq!(
+            err,
+            "next: send a brief (intent, how, tour) with: rain brief set <file.md> --session s1; see docs/agent.md §4\n"
+        );
+        let (_, err) = opened(true);
+        assert_eq!(err, "", "no hint once a brief is set");
+    }
 
     #[test]
     fn bases_follow_difit() {

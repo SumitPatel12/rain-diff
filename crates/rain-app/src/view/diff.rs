@@ -9,7 +9,7 @@ use rune::{Cursor, El, Tx, col, el, row, text};
 use rune_kit::{Kit, Placement, popover};
 
 use super::icons;
-use super::ui::{Ghost, group_tag, sr};
+use super::ui::{Activate, Ghost, group_tag, sr};
 use super::{composer, notes, ruler, wholefile};
 use crate::app::{App, ME};
 use crate::theme::{TYPE, radius};
@@ -122,7 +122,7 @@ fn header_lead(s: &App, local: usize, k: &Kit) -> Option<El> {
         .height(22.0)
         .build(k)
         .label("Copy path")
-        .on_press_tx(move |s: &mut App, tx: &mut Tx| {
+        .on_activate_tx(move |s: &mut App, tx: &mut Tx| {
             tx.copy(path.clone());
             s.status = format!("Copied {path}");
         });
@@ -156,7 +156,7 @@ fn header_actions(s: &App, local: usize, k: &Kit) -> El {
                 .on(s.menus.file == Some(g))
                 .build(k)
                 .expanded(s.menus.file == Some(g))
-                .on_press(move |s: &mut App| {
+                .on_activate(move |s: &mut App| {
                     let open = s.menus.file != Some(g);
                     s.menus.close();
                     s.menus.file = open.then_some(g);
@@ -284,7 +284,8 @@ pub(super) fn strip_counts(s: &App, g: usize) -> (usize, usize, usize, usize) {
 fn reanchor_strip(s: &App, g: usize, k: &Kit) -> Option<El> {
     let (surf, _) = sr(k);
     let (moved, addressed, orphaned, outdated) = strip_counts(s, g);
-    let ids = s.unplaced.get(&g).filter(|v| !v.is_empty());
+    let shown = s.strip_threads(g);
+    let ids = (!shown.is_empty()).then_some(shown);
     if moved + addressed + orphaned + outdated == 0 && ids.is_none() {
         return None;
     }
@@ -302,7 +303,7 @@ fn reanchor_strip(s: &App, g: usize, k: &Kit) -> Option<El> {
     if orphaned > 0 {
         parts.push(format!("{orphaned} orphaned"));
     }
-    let off_diff = ids.map_or(0, Vec::len).saturating_sub(orphaned + outdated);
+    let off_diff = ids.as_ref().map_or(0, Vec::len).saturating_sub(orphaned + outdated);
     if off_diff > 0 {
         parts.push(format!("{off_diff} outside the diff"));
     }
@@ -318,7 +319,7 @@ fn reanchor_strip(s: &App, g: usize, k: &Kit) -> Option<El> {
                 .label(if folded { "Show" } else { "Hide" })
                 .height(22.0)
                 .build(k)
-                .on_press(move |s: &mut App| {
+                .on_activate(move |s: &mut App| {
                     if !s.composer_ui.folded_strips.remove(&g) {
                         s.composer_ui.folded_strips.insert(g);
                     }
@@ -338,8 +339,21 @@ fn reanchor_strip(s: &App, g: usize, k: &Kit) -> Option<El> {
         .fill(surf.card_head)
         .child(head)
         .child(hairline_bottom(surf.hairline));
-    if let Some(ids) = ids.filter(|_| !folded) {
-        for t in ids.iter().filter_map(|id| ops::thread(&s.mirror, id)) {
+    if let Some(threads) = ids.filter(|_| !folded) {
+        let badges: Vec<El> = threads
+            .iter()
+            .filter(|t| s.is_folded(&t.id))
+            .map(|t| {
+                let id = t.id.clone();
+                let badge = badge_face(t, k).on_activate_tx(move |s: &mut App, tx: &mut Tx| s.show_off_diff(&id, tx));
+                row().key(format!("strip-fold-{}", t.id)).h(20.0).child(badge)
+            })
+            .collect();
+        if !badges.is_empty() {
+            // Out to the strip's left edge, where the diff's marks column sits.
+            strip = strip.child(row().key("strip-badges").ml(-38.0).flex_wrap().children(badges));
+        }
+        for t in threads.into_iter().filter(|t| !s.is_folded(&t.id)) {
             strip = strip.child(card(s, t, k));
         }
     }
@@ -403,8 +417,8 @@ fn short_lines(t: &Thread) -> String {
     }
 }
 
-/// A thread's card as every surface draws it: the diff, the strip, the Brief and the Map. In
-/// the diff it is always open (folding sends it to the gutter); elsewhere it collapses to a line.
+/// A thread's card as every surface draws it: the diff, the strip, the Brief and the Map. On
+/// a file's lines it is always open (folding leaves a badge); elsewhere it collapses to a line.
 pub(super) fn card(s: &App, t: &Thread, k: &Kit) -> El {
     let location = match s.file_of_thread(t) {
         Some(i) => anchor_label(&s.keys[i], &t.anchor),
@@ -438,35 +452,7 @@ fn gutter_mark(s: &App, here: &[&Annotation], k: &Kit) -> Option<El> {
     let (surf, r) = sr(k);
     for a in here {
         if let Some(t) = ops::thread(&s.mirror, &a.id).filter(|_| s.is_folded(&a.id)) {
-            let (fg, bg, ring) = if ops::waiting_on_user(t, ME) {
-                (k.c.warning.fg, k.c.warning.bg, k.c.warning.border)
-            } else if t.kind() == ThreadKind::Issue || t.blocking() {
-                (k.c.danger.fg, k.c.danger.bg, k.c.danger.border)
-            } else {
-                (k.c.info.fg, k.c.info.bg, k.c.info.border)
-            };
-            let who = t
-                .messages
-                .first()
-                .and_then(|m| m.author.clone())
-                .filter(|a| !a.trim().is_empty())
-                .unwrap_or_else(|| "you".into());
-            let n = t.messages.len();
-            let first = t
-                .messages
-                .first()
-                .map(|m| rain_comments::label::first_sentence(&m.body, 140))
-                .unwrap_or_default();
-            let said = format!(
-                "Folded {} · {who} · {n} message{} — Enter or click to unfold\n{first}",
-                t.kind().label(),
-                if n == 1 { "" } else { "s" }
-            );
-            let id = a.id.clone();
-            let face = mark_box(bg, Some(ring), false)
-                .child(icons::draw(&icons::CHAT, 12.0, fg))
-                .child(text(n.to_string()).font(TYPE.mark).color(fg).a11y_hidden());
-            return Some(mark_hit(face, said).on_press(move |s: &mut App| s.unfold(&id)));
+            return Some(thread_badge(t, k));
         }
     }
     for a in here {
@@ -474,7 +460,7 @@ fn gutter_mark(s: &App, here: &[&Annotation], k: &Kit) -> Option<El> {
             let id = a.id.clone();
             let said = "Folded note — click to unfold".to_owned();
             let face = mark_box(r.note_bg, Some(r.note_border), false).child(icons::draw(&icons::SPARK, 12.0, r.note));
-            return Some(mark_hit(face, said).on_press(move |s: &mut App| s.unfold(&id)));
+            return Some(mark_hit(face, said).on_activate(move |s: &mut App| s.unfold(&id)));
         }
     }
     for a in here {
@@ -491,6 +477,44 @@ fn gutter_mark(s: &App, here: &[&Annotation], k: &Kit) -> Option<El> {
         }
     }
     None
+}
+
+/// A folded thread's badge in the gutter. A press unfolds it.
+fn thread_badge(t: &Thread, k: &Kit) -> El {
+    let id = t.id.clone();
+    badge_face(t, k).on_activate(move |s: &mut App| s.unfold(&id))
+}
+
+/// A folded thread's badge, in the gutter or the outside-the-diff strip, without its press.
+fn badge_face(t: &Thread, k: &Kit) -> El {
+    let (fg, bg, ring) = if ops::waiting_on_user(t, ME) {
+        (k.c.warning.fg, k.c.warning.bg, k.c.warning.border)
+    } else if t.kind() == ThreadKind::Issue || t.blocking() {
+        (k.c.danger.fg, k.c.danger.bg, k.c.danger.border)
+    } else {
+        (k.c.info.fg, k.c.info.bg, k.c.info.border)
+    };
+    let who = t
+        .messages
+        .first()
+        .and_then(|m| m.author.clone())
+        .filter(|a| !a.trim().is_empty())
+        .unwrap_or_else(|| "you".into());
+    let n = t.messages.len();
+    let first = t
+        .messages
+        .first()
+        .map(|m| rain_comments::label::first_sentence(&m.body, 140))
+        .unwrap_or_default();
+    let said = format!(
+        "Folded {} · {who} · {n} message{} — Enter or click to unfold\n{first}",
+        t.kind().label(),
+        if n == 1 { "" } else { "s" }
+    );
+    let face = mark_box(bg, Some(ring), false)
+        .child(icons::draw(&icons::CHAT, 12.0, fg))
+        .child(text(n.to_string()).font(TYPE.mark).color(fg).a11y_hidden());
+    mark_hit(face, said)
 }
 
 /// A pressable gutter mark: `face` as drawn, pressed anywhere in the marks cell's height.

@@ -115,6 +115,9 @@ pub struct Settings {
     pub list_open: bool,
     /// Bit `i` set: list section `i` is collapsed.
     pub sidebar_sections: u16,
+    /// The `Ctrl+P` picker's panel, as last dragged.
+    #[serde(deserialize_with = "or_default")]
+    pub picker_size: (f32, f32),
     /// Open-in-editor command with `{path}` and `{line}`; `None` runs [`DEFAULT_EDITOR`].
     #[serde(skip_serializing_if = "Option::is_none")]
     pub editor: Option<String>,
@@ -129,6 +132,9 @@ pub struct Settings {
     #[serde(skip)]
     pub migrated: bool,
 }
+
+/// The picker panel's smallest size.
+pub const PICKER_MIN: (f32, f32) = (560.0, 300.0);
 
 pub const DEFAULT_EDITOR: &str = r#"code --goto "{path}:{line}""#;
 
@@ -146,6 +152,7 @@ impl Default for Settings {
             code_size: CodeSize::M,
             list_open: true,
             sidebar_sections: 0,
+            picker_size: (940.0, 520.0),
             editor: None,
             ask: AskSettings::default(),
             break_reminder: BreakSettings::default(),
@@ -312,6 +319,10 @@ impl Settings {
         a.timeout_sec = a.timeout_sec.clamp(1, DAY_SECS);
         a.handoff_sec = a.handoff_sec.min(DAY_SECS);
         a.max_concurrent = a.max_concurrent.clamp(1, 64);
+        let (w, h) = self.picker_size;
+        if !(w.is_finite() && h.is_finite() && w >= PICKER_MIN.0 && h >= PICKER_MIN.1) {
+            self.picker_size = Settings::default().picker_size;
+        }
     }
 
     /// Writes every key, atomically.
