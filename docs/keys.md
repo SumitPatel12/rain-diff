@@ -158,6 +158,27 @@ screen writes them for you:
 - An entry Rain can't use is ignored and named in the status line: an unknown command, a key it
   can't read, a key two overrides both claim, or a universal key given to another command.
 
+### Two keys in turn
+
+A key can be two keys pressed one after the other, written with a space between them:
+`"reload": ["g r"]`, `"toggle-density": ["Ctrl+Q Ctrl+D"]`. They work as in Vim:
+
+- A key that starts no two-key shortcut acts at once, as it always did.
+- A first key that does nothing by itself waits for the second, for as long as it takes.
+- A first key that also does something by itself (`c` when `c a` is bound, or one of Vim's own
+  motions such as `g` or `w`) waits `timeoutMs` (1000 when not set, Vim's `timeoutlen`) and then
+  acts alone. The status line names such a key when the settings load.
+- A second key that completes nothing lets the first act alone at once, and is then read as a
+  key of its own. So with `g d` bound, `gg` still goes to the first line.
+- Escape drops a waiting first key. So does moving into a text field.
+- A universal key can't be either key of the two.
+
+```json
+"keymap": { "timeoutMs": 400, "overrides": { "reload": ["R", "g r"] } }
+```
+
+The shortcuts screen shows and removes two-key shortcuts, and records single keys.
+
 In the shortcuts screen, press the keyboard button on a command's row and then the keys. A key
 another command has asks first: **Replace** moves it, **Cancel** leaves both alone. The × on a
 key removes it, the reset button puts the command back to the profile's keys, **Reset all** does

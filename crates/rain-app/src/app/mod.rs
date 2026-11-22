@@ -10,6 +10,7 @@ pub(crate) mod composer;
 pub(crate) mod conversation;
 mod diagram;
 mod editor;
+pub(crate) mod edits;
 mod filter;
 mod find;
 mod folds;
@@ -132,6 +133,8 @@ pub struct App {
     pub repos: Vec<RepoInfo>,
     pub resolved: Vec<Option<Resolved>>,
     pub diff: DiffState,
+    /// Blocks that moved within the diff, by full-list file index.
+    pub moves: Arc<rain_core::moves::Moves>,
     pub keys: Vec<String>,
     pub hashes: Vec<String>,
     by_key: BTreeMap<String, usize>,
@@ -151,7 +154,6 @@ pub struct App {
     viewed_files: Vec<bool>,
     pub seen_version: u64,
     pub seen_overview_version: u64,
-    /// The chapter `J`/`K` last moved to.
     pub chapter: usize,
     pub filter: FilterState,
     /// The session version the filter subset was last checked against.
@@ -193,6 +195,7 @@ pub struct App {
     pub playground: PlaygroundState,
     /// Bumped whenever the active keymap is replaced, so cached hints rebuild.
     pub keymap_gen: u64,
+    pub(crate) key_wait: crate::keys::KeyWait,
     pub diff_width: f32,
     pub window_width: f32,
     pub window_height: f32,
@@ -214,29 +217,41 @@ pub struct App {
 
 impl App {
     pub fn new(launch: Launch, shared: Arc<Shared>, session_dir: Option<PathBuf>, settings_path: Option<PathBuf>) -> App {
+        let headless = rune::is_headless();
         let (settings, settings_path, settings_error) = match settings_path.as_deref().map(Settings::try_load) {
             Some(Ok(s)) => (s, settings_path, None),
             // A broken hand edit is reported and left alone rather than replaced by the defaults.
             Some(Err(e)) => (Settings::default(), None, Some(format!("settings ignored: {e}"))),
             None => (Settings::default(), None, None),
         };
+        // Scenes run after construction: suppress even the initial migration and autosave.
+        let settings_path = settings_path.filter(|_| !headless);
         if let Some(e) = &settings_error {
             eprintln!("Rain: {e}");
         }
         let id = load::session_id(&launch);
         let session_path = session_dir.map(|d| rain_comments::SessionFile::path_in(&d, &id));
         let mut session_error = None;
+        let mut session_notice = launch.session_notice.clone();
+        let mut from_backup = false;
         if let Some(path) = &session_path {
             let mut s = shared.lock();
             if s.id.is_empty() && s.threads.is_empty() && s.viewed.is_empty() {
                 let loaded = if launch.clean {
                     Session::default()
                 } else {
-                    load_session(path).unwrap_or_else(|e| {
-                        eprintln!("Rain: {e}");
-                        session_error = Some(e);
-                        Session::default()
-                    })
+                    match load_session(path, !headless && !launch.read_only) {
+                        Ok((loaded, notice)) => {
+                            from_backup = notice.is_some();
+                            session_notice = notice.or(session_notice);
+                            loaded
+                        }
+                        Err(e) => {
+                            eprintln!("Rain: {e}");
+                            session_error = Some(e);
+                            Session::default()
+                        }
+                    }
                 };
                 let version = s.version.max(loaded.version);
                 let comments_version = s.comments_version.max(loaded.comments_version);
@@ -250,12 +265,20 @@ impl App {
         }
         let autosave = session_path
             .clone()
-            .filter(|_| !launch.read_only && session_error.is_none())
+            .filter(|_| !headless && !launch.read_only && session_error.is_none())
             .map(|p| rain_comments::autosave(shared.clone(), p, std::time::Duration::from_millis(400)));
+        // The backup is in memory only until a save puts it back under the session's name.
+        if let Some(saver) = autosave.as_ref().filter(|_| from_backup) {
+            saver.touch();
+        }
         let status = if launch.read_only {
-            "Another Rain window has this session open: changes here won't be saved".to_owned()
+            let why = launch.read_only_reason.as_deref();
+            format!(
+                "{}: changes here won't be saved",
+                why.unwrap_or("Another Rain window has this session open")
+            )
         } else {
-            session_error.or(settings_error).unwrap_or_default()
+            session_error.or(session_notice).or(settings_error).unwrap_or_default()
         };
         let goto = launch.goto.clone();
         let (keymap, ignored) = settings.keymap.build();
@@ -287,6 +310,7 @@ impl App {
             shortcuts: ShortcutsState::default(),
             playground: PlaygroundState::default(),
             keymap_gen: 0,
+            key_wait: crate::keys::KeyWait::default(),
             launch,
             shared,
             session_path,
@@ -299,6 +323,7 @@ impl App {
             resolved: Vec::new(),
             diff: DiffState::default(),
             keys: Vec::new(),
+            moves: Arc::default(),
             hashes: Vec::new(),
             by_key: BTreeMap::new(),
             tree: TreeState::build(&[] as &[rain_core::FileDiff], &[], &BTreeMap::new(), |_| false, &BTreeMap::new()),
@@ -346,8 +371,6 @@ impl App {
             launcher: Box::new(|argv: &[String]| editor::spawn_detached(argv)),
         }
     }
-
-    // ----- loading -----
 
     /// Starts the loader thread; results arrive through [`App::poll`].
     pub fn start_loading(&mut self, wake: Arc<dyn Fn() + Send + Sync>) {
@@ -410,6 +433,7 @@ impl App {
         }
         self.repos = d.repos;
         self.resolved = d.resolved;
+        self.reloader.edit_marks = d.edit_marks;
         self.keys = d.keys;
         self.hashes = d.hashes;
         self.by_key = self.keys.iter().enumerate().map(|(i, k)| (k.clone(), i)).collect();
@@ -418,6 +442,8 @@ impl App {
         self.overview_issues = d.overview_issues;
         self.timings.load_ms = d.timings.total_ms;
         let mut diff = DiffState::new(d.files);
+        self.moves = Arc::new(d.moves);
+        diff.set_moves(self.moves.clone(), (0..self.keys.len() as u32).collect());
         diff.set_repo_ids(self.repos.iter().map(|r| r.id.clone()).collect());
         diff.set_collapsed_where(true, folds::large);
         self.diff = diff;
@@ -531,6 +557,7 @@ impl App {
                         self.hl_palette = None;
                     }
                     texts @ Msg::Texts { .. } => self.install_texts(texts),
+                    Msg::Batch(texts) => self.install_texts_many(texts),
                     Msg::Lens {
                         round,
                         installs,
@@ -550,11 +577,16 @@ impl App {
             let palette = self.seen_scheme.get().syntax();
             if self.warm && self.hl_palette != Some(palette) {
                 self.hl_palette = Some(palette);
-                self.diff.set_highlighter(rain_syntax::highlighter(palette));
+                let wake = self.wake.clone();
+                self.diff.set_lexer(crate::theme::lexer(palette), wake.clone());
                 for v in self.subsets_mut() {
-                    v.diff.set_highlighter(rain_syntax::highlighter(palette));
+                    v.diff.set_lexer(crate::theme::lexer(palette), wake.clone());
                 }
                 changed = true;
+            }
+            changed |= self.diff.poll_colours();
+            for v in self.subsets_mut() {
+                changed |= v.diff.poll_colours();
             }
             if let Some(g) = self.pending_goto.take() {
                 let tab = std::mem::take(&mut self.brief.restore_tab).then(|| self.brief.tab.replace(ReaderTab::Changes));
@@ -574,6 +606,7 @@ impl App {
             changed |= self.ask_poll(tx);
             self.brief_nudge_poll(tx);
         }
+        changed |= self.held_key_poll(tx);
         changed |= self.rest_poll(tx);
         changed |= self.playground_poll(tx);
         changed |= self.map_lab_poll(tx);
@@ -624,8 +657,6 @@ impl App {
             Err(e) => self.status = format!("settings not saved: {}: {e}", p.display()),
         }
     }
-
-    // ----- files and keys -----
 
     /// The subset of files on screen: file-at-a-time's one file, else the filter's, else none
     /// (every file).
@@ -703,22 +734,31 @@ impl App {
     }
 
     pub(crate) fn install_texts(&mut self, msg: Msg) {
-        let Msg::Texts { key, old, new } = msg else { return };
-        let Some(g) = self.index_of(&key) else { return };
-        if old.is_none() && new.is_none() {
-            self.status = format!("Could not read {key}");
-            self.set_whole_everywhere(g, false);
-            return;
+        self.install_texts_many(vec![msg]);
+    }
+
+    /// Gives every file of `msgs` that still waits for them its texts, laying each diff out once.
+    pub(crate) fn install_texts_many(&mut self, msgs: Vec<Msg>) {
+        let mut texts = Vec::with_capacity(msgs.len());
+        for msg in msgs {
+            let Msg::Texts { key, old, new } = msg else { continue };
+            let Some(g) = self.index_of(&key) else { continue };
+            if old.is_none() && new.is_none() {
+                self.status = format!("Could not read {key}");
+                self.set_whole_everywhere(g, false);
+                continue;
+            }
+            let wanted = self.diff.needs_texts(g)
+                || self
+                    .subsets_mut()
+                    .any(|v| v.files.iter().position(|&x| x == g).is_some_and(|l| v.diff.needs_texts(l)));
+            if !wanted {
+                continue;
+            }
+            texts.push((g, old, new));
+            self.status.clear();
         }
-        let wanted = self.diff.needs_texts(g)
-            || self
-                .subsets_mut()
-                .any(|v| v.files.iter().position(|&x| x == g).is_some_and(|l| v.diff.needs_texts(l)));
-        if !wanted {
-            return;
-        }
-        self.set_texts_everywhere(g, old, new);
-        self.status.clear();
+        self.set_texts_everywhere(texts);
     }
 
     /// The file the reader is on: the cursor's, else the one at the top of the diff.
@@ -749,8 +789,6 @@ impl App {
         file_of_thread(self, t)
     }
 
-    // ----- split -----
-
     /// `s`: split ↔ unified (Auto counts as split).
     pub fn toggle_split(&mut self) {
         let next = match self.settings.layout {
@@ -762,12 +800,13 @@ impl App {
 
     pub fn set_layout(&mut self, layout: ViewLayout) {
         self.settings.layout = layout;
-        self.save_settings();
         self.apply_split();
         self.status = match self.layout_reason() {
             Some(why) => format!("Split, showing unified: {why}"),
             None => format!("{} view", layout.label()),
         };
+        // Last, so a failed save is what the status line says.
+        self.save_settings();
     }
 
     pub fn effective_mode(&self) -> DiffMode {
@@ -810,8 +849,6 @@ impl App {
         }
     }
 
-    // ----- palette -----
-
     pub fn open_palette(&mut self) {
         self.palette.open = true;
         self.palette.edit = TextEdit::default();
@@ -825,8 +862,6 @@ impl App {
         self.palette.open = false;
         self.palette.edit.focused = false;
     }
-
-    // ----- misc commands -----
 
     pub fn toggle_theme(&mut self) {
         let dark = self.seen_scheme.get().is_dark();
@@ -940,6 +975,7 @@ impl App {
             Command::Back => self.jump_history(true, tx),
             Command::Forward => self.jump_history(false, tx),
             Command::NextWaiting => self.next_waiting(tx),
+            Command::OtherSideOfMove => self.other_side_of_move(tx),
             Command::ViewedAndNext => self.viewed_and_next(tx),
             Command::ToggleViewed => self.toggle_viewed_current(tx),
             Command::MarkAllViewed => self.mark_all_viewed(),
@@ -962,6 +998,7 @@ impl App {
             Command::Picker => self.open_picker(tx),
             Command::Palette => self.open_palette(),
             Command::Find => self.open_find(),
+            Command::ToggleFindFuzzy => self.toggle_find_fuzzy(),
             Command::Comment => {
                 if !self.artifact_key(ComposeMode::Comment) {
                     self.active_mut().take_visual_selection();
@@ -1021,13 +1058,14 @@ impl App {
     }
 }
 
-/// The saved session at `path`; a corrupt one is moved aside first. `Err` means the file is
-/// still there unread, so nothing may autosave over it.
-fn load_session(path: &std::path::Path) -> Result<Session, String> {
+/// The saved session at `path`; a writer may move a corrupt one aside and open the save before
+/// it, with a notice saying so. `Err` means the file is still there unread, so nothing may
+/// autosave over it.
+fn load_session(path: &std::path::Path, recover: bool) -> Result<(Session, Option<String>), String> {
     let mut tries = 0;
     let err = loop {
         match rain_comments::SessionFile::load(path) {
-            Ok(s) => return Ok(s),
+            Ok(s) => return Ok((s, None)),
             // Sharing violations from antivirus or another saver pass.
             Err(e) if tries < 5 && matches!(e.raw_os_error(), Some(5 | 32)) => {
                 tries += 1;
@@ -1036,20 +1074,16 @@ fn load_session(path: &std::path::Path) -> Result<Session, String> {
             Err(e) => break e,
         }
     };
-    if err.kind() != std::io::ErrorKind::InvalidData {
+    if !recover || err.kind() != std::io::ErrorKind::InvalidData {
         return Err(format!("{} could not be read ({err}); changes are not saved", path.display()));
     }
-    let mut kept = path.with_extension("json.corrupt");
-    if kept.exists() {
-        let ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.as_millis());
-        kept = path.with_extension(format!("json.{ms}.corrupt"));
-    }
-    match std::fs::rename(path, &kept) {
-        Ok(()) => {
+    match rain_comments::SessionFile::set_aside(path) {
+        Ok(kept) => {
             eprintln!("Rain: {} is unreadable ({err}); kept as {}", path.display(), kept.display());
-            Ok(Session::default())
+            Ok(match rain_comments::SessionFile::load_backup(path) {
+                Some(s) => (s, Some(rain_comments::SessionFile::backup_notice(path, Some(&kept)))),
+                None => (Session::default(), None),
+            })
         }
         Err(e) => Err(format!(
             "{} is unreadable ({err}) and could not be moved aside ({e}); changes are not saved",

@@ -10,7 +10,6 @@ use super::vim::{FileLines, norm};
 use super::{DiffState, LineRange, LineRef};
 use crate::motion::{self, Lines};
 
-/// A cursor key for [`DiffState::caret`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Caret {
     Left,
@@ -143,7 +142,8 @@ impl DiffState {
         if self.selection.is_some() {
             return self.selected_text();
         }
-        self.cursor_line().map(|(_, _, t)| t.to_owned())
+        let (r, side, _) = self.cursor_line()?;
+        self.row_full(r, side).map(str::to_owned)
     }
 
     /// Visual mode becomes the line or span selection the composer reads, as `c` does in it.

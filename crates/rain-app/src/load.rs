@@ -13,8 +13,6 @@ use rain_git::{DiffOpts, Resolved};
 use rain_overview::Loaded;
 use rain_triage::Triage;
 
-/// Files over this many diff lines start collapsed: Rune keys every row of a row change, so a
-/// 500k-line snapshot costs seconds of first frame until it is opened.
 pub const LARGE_FILE_LINES: usize = 20_000;
 
 pub struct Data {
@@ -25,6 +23,8 @@ pub struct Data {
     pub keys: Vec<String>,
     pub hashes: Vec<String>,
     pub resolved: Vec<Option<Resolved>>,
+    /// Per repo, the mark of a working-tree or index diff, taken before the diff was read.
+    pub edit_marks: Vec<Option<u64>>,
     pub overview: Option<Loaded>,
     /// Validation issues or load errors of the overview, for the banner.
     pub overview_issues: Vec<String>,
@@ -32,6 +32,8 @@ pub struct Data {
     pub tags: BTreeMap<String, FileTag>,
     /// Groups, reasons and facts; `triage.items` is in the same order as `keys`.
     pub triage: Triage,
+    /// Blocks that moved within the diff, by the files' order here.
+    pub moves: rain_core::moves::Moves,
     pub timings: Timings,
 }
 
@@ -52,6 +54,8 @@ pub enum Msg {
         old: Option<Arc<str>>,
         new: Option<Arc<str>>,
     },
+    /// Several [`Msg::Texts`] to install together, so the rows are laid out once for them all.
+    Batch(Vec<Msg>),
     /// Git's answer for the since-round lens, for the install it was asked under.
     Lens {
         round: u32,
@@ -187,6 +191,7 @@ fn load_fixture(path: &Path, overview: Option<&Loaded>) -> Result<Fixture, Strin
 struct GitRepo {
     info: RepoInfo,
     resolved: Resolved,
+    edit_mark: Option<u64>,
     files: Vec<FileDiff>,
     similarity: Vec<Option<u8>>,
     formatting_only: Vec<String>,
@@ -204,6 +209,8 @@ fn load_repo(i: usize, rl: &RepoLaunch, launch: &Launch, overview: Option<&Loade
         context: launch.context.unwrap_or(defaults.context),
         ..defaults
     };
+    // Before the diff, so an edit made while it is read still differs from the mark.
+    let edit_mark = rain_git::edit_mark(dir, &resolved, rl.include_untracked).ok().flatten();
     // Without `-w`, a second `-w --numstat` run finds the whitespace-only files; it runs beside the
     // diff because on a 1M-line change each git run costs about a second.
     let (patch, changed_under_w) = std::thread::scope(|s| {
@@ -241,6 +248,7 @@ fn load_repo(i: usize, rl: &RepoLaunch, launch: &Launch, overview: Option<&Loade
             repository_id: rain_git::repository_id(&rl.dir),
         },
         resolved,
+        edit_mark,
         files,
         similarity,
         formatting_only,
@@ -254,6 +262,7 @@ pub fn load(launch: &Launch, shared: &Shared, progress: &dyn Fn(String)) -> Resu
     let overview_ms = ms(t0);
     let t1 = Instant::now();
     let mut resolved = Vec::new();
+    let mut edit_marks = Vec::new();
     let mut formatting: Vec<Vec<String>> = Vec::new();
     let mut similarity: Vec<Option<u8>> = Vec::new();
     let (repos, files) = if let Some(path) = &launch.fixture {
@@ -276,6 +285,7 @@ pub fn load(launch: &Launch, shared: &Shared, progress: &dyn Fn(String)) -> Resu
             let r = load_repo(i, rl, launch, overview.as_ref())?;
             repos.push(r.info);
             resolved.push(Some(r.resolved));
+            edit_marks.push(r.edit_mark);
             formatting.push(r.formatting_only);
             similarity.extend(r.similarity);
             files.extend(r.files);
@@ -331,11 +341,20 @@ pub fn load(launch: &Launch, shared: &Shared, progress: &dyn Fn(String)) -> Resu
         .map(|(k, _)| k.clone())
         .collect();
     let rated = overview.as_ref().map(|l| rain_overview::rated(&l.document));
+    let moves = rain_core::moves::detect(&files);
+    let moved_keys: BTreeSet<String> = keys
+        .iter()
+        .zip(&files)
+        .enumerate()
+        .filter(|(i, (_, f))| moves.only_moves(*i, f))
+        .map(|(_, (k, _))| k.clone())
+        .collect();
     let triage = rain_triage::classify(&rain_triage::Input {
         files: &files,
         keys: &keys,
         similarity: &similarity,
         formatting_only: Some(&formatting_keys),
+        moved_only: Some(&moved_keys),
         rated: rated.as_ref(),
         ignored: Some(&ignored),
         round: 1,
@@ -350,6 +369,14 @@ pub fn load(launch: &Launch, shared: &Shared, progress: &dyn Fn(String)) -> Resu
 
     let order: Vec<&str> = triage.items.iter().map(|i| i.key.as_str()).collect();
     let pos: BTreeMap<&str, usize> = order.iter().enumerate().map(|(i, k)| (*k, i)).collect();
+    let rank = |i: usize| pos.get(keys[i].as_str()).copied().unwrap_or(order.len() + i);
+    let mut by_rank: Vec<usize> = (0..keys.len()).collect();
+    by_rank.sort_by_key(|&i| rank(i));
+    let mut placed = vec![0u32; keys.len()];
+    for (new, &old) in by_rank.iter().enumerate() {
+        placed[old] = new as u32;
+    }
+    let moves = moves.reordered(&placed);
     let mut paired: Vec<(usize, String, FileDiff)> = keys
         .into_iter()
         .zip(files)
@@ -445,10 +472,12 @@ pub fn load(launch: &Launch, shared: &Shared, progress: &dyn Fn(String)) -> Resu
         keys,
         hashes,
         resolved,
+        edit_marks,
         overview,
         overview_issues,
         tags,
         triage,
+        moves,
         timings: Timings {
             diff_ms,
             overview_ms,

@@ -29,7 +29,6 @@ pub struct RulerState {
 }
 
 impl RulerState {
-    /// The strip's width in points.
     pub const WIDTH: f32 = RULER_W;
 
     /// The diff viewport's scroll handler: moves the thumb every frame it scrolls, with no view run.

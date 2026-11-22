@@ -6,12 +6,41 @@
 //! light are Rune's neutral kit; the two Gruvbox darks repaint the kit from morhetz/gruvbox's
 //! `gruvbox.vim`. Every scheme defines every role, so a view never reaches for a hex.
 
+use std::sync::Arc;
+
 use rain_diagram::DiagramStyle;
 use rune::Color;
 use rune::tok::TextStyle;
 use rune_kit::{Kit, Radius, StateColors};
 
-/// A colour scheme the window can draw in.
+/// rain-syntax in a palette as the diff view's lexer.
+struct SyntaxLexer(rain_syntax::Palette);
+
+impl rain_diffview::Lexer for SyntaxLexer {
+    fn lex(&self, lang: Option<&str>, code: &str, from: &rain_diffview::Carry) -> (Vec<rune_kit::syntax::Highlight>, rain_diffview::Carry) {
+        let fresh = rain_syntax::Carry::default();
+        let from = from.as_deref().and_then(|c| c.downcast_ref()).unwrap_or(&fresh);
+        let (hl, end) = rain_syntax::highlight_from(rain_syntax::Mode::Fast, self.0, lang, code, from);
+        (hl, (!end.is_fresh()).then(|| Arc::new(end) as _))
+    }
+
+    fn same(&self, a: &rain_diffview::Carry, b: &rain_diffview::Carry) -> bool {
+        let state = |c: &rain_diffview::Carry| c.as_deref().and_then(|c| c.downcast_ref::<rain_syntax::Carry>()).cloned();
+        match (a, b) {
+            (Some(a), Some(b)) if Arc::ptr_eq(a, b) => true,
+            _ => state(a) == state(b),
+        }
+    }
+
+    fn slow(&self, lang: Option<&str>) -> bool {
+        rain_syntax::slow(rain_syntax::Mode::Fast, lang)
+    }
+}
+
+pub fn lexer(palette: rain_syntax::Palette) -> Arc<dyn rain_diffview::Lexer> {
+    Arc::new(SyntaxLexer(palette))
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Scheme {
     Dark,
@@ -34,7 +63,6 @@ impl Scheme {
         self != Scheme::Light
     }
 
-    /// The code colours that go with the scheme.
     pub fn syntax(self) -> rain_syntax::Palette {
         match self {
             Scheme::Dark => rain_syntax::Palette::GithubDark,
@@ -54,7 +82,6 @@ impl Scheme {
         }
     }
 
-    /// The Map's colours.
     pub fn diagram(self) -> DiagramStyle {
         match self {
             Scheme::Dark => DiagramStyle::dark(),
@@ -119,6 +146,10 @@ pub struct Roles {
     pub selection: Color,
     pub find_hit: Color,
     pub find_current: Color,
+    /// A moved block's label: its text and arrow, its pill and the pill's ring.
+    pub moved: Color,
+    pub moved_bg: Color,
+    pub moved_border: Color,
     /// What the tour lays over the reader outside its spotlight.
     pub spotlight_dim: Color,
     pub shadow: Color,
@@ -158,7 +189,6 @@ pub const TYPE: Type = Type {
     body: TextStyle::new(14.0, 400.0).lh(22.0),
 };
 
-/// Radii by use.
 pub mod radius {
     /// Word highlights.
     pub const WORD: f32 = 2.0;
@@ -240,7 +270,6 @@ pub mod brand {
     }
 }
 
-/// The redesign's roles (`round1b/src/kit.css`), Everforest-derived.
 mod d1 {
     pub const GROUND: &str = "#13171a";
     pub const PANEL: &str = "#21282c";
@@ -371,6 +400,9 @@ fn roles(scheme: Scheme, k: &Kit, s: &Surfaces) -> Roles {
             selection: hex(d1::SELECTION),
             find_hit: hex(d1::FIND_HIT),
             find_current: hex(d1::FIND_CURRENT),
+            moved: hex(d1::STATES[3].0),
+            moved_bg: hex(d1::STATES[3].1),
+            moved_border: hex(d1::STATES[3].2),
             spotlight_dim: hex("#0a0c0d").alpha(0.55),
             shadow: Color::BLACK.alpha(0.45),
         };
@@ -399,6 +431,9 @@ fn roles(scheme: Scheme, k: &Kit, s: &Surfaces) -> Roles {
         selection: k.selection(),
         find_hit: tint(bg, c.warning.icon, if dark { 0.35 } else { 0.3 }),
         find_current: tint(bg, c.warning.icon, if dark { 0.6 } else { 0.5 }),
+        moved: c.info.fg,
+        moved_bg: tint(bg, c.info.icon, if dark { 0.12 } else { 0.1 }),
+        moved_border: tint(bg, c.info.icon, if dark { 0.42 } else { 0.38 }),
         spotlight_dim: if dark { Color::BLACK.alpha(0.5) } else { Color::WHITE.alpha(0.55) },
         shadow: Color::BLACK.alpha(if dark { 0.45 } else { 0.18 }),
     }
@@ -581,7 +616,6 @@ pub fn scheme_of(k: &Kit) -> Scheme {
         .unwrap_or(if k.dark { Scheme::Dark } else { Scheme::Light })
 }
 
-/// The roles of the scheme a kit from [`look`] was built for.
 pub fn roles_of(k: &Kit) -> Roles {
     static ROLES: std::sync::OnceLock<[Roles; 5]> = std::sync::OnceLock::new();
     let all = ROLES.get_or_init(|| Scheme::ALL.map(|s| look(s).r));
@@ -589,7 +623,6 @@ pub fn roles_of(k: &Kit) -> Roles {
     all[i]
 }
 
-/// The surfaces of the scheme a kit from [`look`] was built for.
 pub fn surfaces_of(k: &Kit) -> Surfaces {
     static SURFACES: std::sync::OnceLock<[Surfaces; 5]> = std::sync::OnceLock::new();
     let all = SURFACES.get_or_init(|| Scheme::ALL.map(|s| look(s).s));

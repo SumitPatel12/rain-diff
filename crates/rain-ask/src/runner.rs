@@ -75,7 +75,6 @@ fn fill(word: &str, subs: &Subs, repo: &str) -> String {
 
 pub type Wake = Arc<dyn Fn() + Send + Sync>;
 
-/// One run of the answering command.
 #[derive(Clone, Default)]
 pub struct Request {
     pub argv: Vec<String>,
@@ -133,7 +132,6 @@ pub struct Handle {
 }
 
 impl Handle {
-    /// Blocks until the run ends.
     pub fn wait(mut self) -> Outcome {
         if let Some(o) = self.done.take() {
             return o;
@@ -352,6 +350,12 @@ impl Tree {
             j.terminate();
         }
         #[cfg(unix)]
+        self.kill_group();
+        let _ = child.kill();
+    }
+
+    #[cfg(unix)]
+    fn kill_group(&self) {
         if self.group > 0 {
             unsafe extern "C" {
                 fn kill(pid: i32, sig: i32) -> i32;
@@ -362,7 +366,15 @@ impl Tree {
                 kill(-self.group, SIGKILL);
             }
         }
-        let _ = child.kill();
+    }
+}
+
+#[cfg(unix)]
+impl Drop for Tree {
+    fn drop(&mut self) {
+        // Like the Windows kill-on-close job, close inherited pipes even when the launcher
+        // exited successfully; otherwise descendants outlive the answer and its readers.
+        self.kill_group();
     }
 }
 

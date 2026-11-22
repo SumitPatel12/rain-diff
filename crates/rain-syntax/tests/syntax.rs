@@ -1,8 +1,8 @@
 use std::time::Instant;
 
 use rain_syntax::{
-    Engine, MAX_BYTES, Mode, Palette, Token, engine, find_syntax, highlight, highlight_with, highlighter, highlighter_with, samples,
-    tokens, warm,
+    Carry, Engine, MAX_BYTES, Mode, Palette, Token, engine, find_syntax, highlight, highlight_from, highlight_with, highlighter,
+    highlighter_with, samples, tokens, warm,
 };
 use rune_kit::syntax::{Highlight, Paint, builtin};
 
@@ -236,6 +236,154 @@ fn palettes_are_distinct_and_keyed_apart() {
     assert_ne!(dark, light);
     let rich = highlighter_with(Mode::Rich, Palette::GithubDark).highlight(Some("cs"), code);
     assert_ne!(dark, rich, "fast and rich keep separate cache entries");
+}
+
+const CHUNK: usize = 128;
+
+/// `code` highlighted [`CHUNK`] lines at a time as the diff view does, each chunk from the state
+/// the one before ended in (`carry`) or from a fresh one.
+fn chunked(mode: Mode, lang: &str, code: &str, carry: bool) -> Vec<Highlight> {
+    let lines: Vec<&str> = code.split_inclusive('\n').collect();
+    let mut out = Vec::new();
+    let mut from = Carry::default();
+    let mut off = 0;
+    for chunk in lines.chunks(CHUNK) {
+        let text = chunk.concat();
+        let (hl, end) = highlight_from(mode, Palette::GithubDark, Some(lang), &text, &from);
+        assert_tidy(&text, &hl);
+        out.extend(hl.into_iter().map(|(r, p)| (r.start + off..r.end + off, p)));
+        off += text.len();
+        from = if carry { end } else { Carry::default() };
+    }
+    out
+}
+
+fn per_byte(code: &str, hl: &[Highlight]) -> Vec<Option<Paint>> {
+    let mut out = vec![None; code.len()];
+    for (r, p) in hl {
+        out[r.clone()].fill(Some(*p));
+    }
+    out
+}
+
+/// 150 lines: `open` on line 121, `inside` on 122 to 135 (so over the chunk's end at 128), `close`
+/// on 136, with `before` and `after` around them.
+fn crossing(before: &str, open: &str, inside: &str, close: &str, after: &str) -> String {
+    (1..=150)
+        .map(|n| match n {
+            ..=120 => before,
+            121 => open,
+            122..=135 => inside,
+            136 => close,
+            _ => after,
+        })
+        .map(|l| format!("{l}\n"))
+        .collect()
+}
+
+/// Chunked with the state carried colours `code` as one pass over it does, line 130 as `inside`,
+/// and chunked from a fresh state does not.
+fn assert_carried(mode: Mode, lang: &str, code: &str, inside: Option<Token>) {
+    let whole = per_byte(code, &highlight_with(mode, Palette::GithubDark, Some(lang), code));
+    let line = |n: usize| code.split_inclusive('\n').take(n - 1).map(str::len).sum::<usize>();
+    for n in [122, 128, 129, 130, 135] {
+        let want = inside.map(|t| Paint::Color(Palette::GithubDark.color(t)));
+        assert_eq!(whole[line(n)], want, "{mode:?} {lang}: line {n} in one pass");
+    }
+    let carried = per_byte(code, &chunked(mode, lang, code, true));
+    for n in 1..=150 {
+        let r = line(n)..line(n + 1);
+        assert_eq!(carried[r.clone()], whole[r], "{mode:?} {lang}: line {n}");
+    }
+    let fresh = per_byte(code, &chunked(mode, lang, code, false));
+    assert_ne!(fresh, whole, "{mode:?} {lang}: the sample does not cross a chunk");
+}
+
+#[test]
+fn a_block_comment_over_a_chunk_end_stays_a_comment() {
+    let c = Some(Token::Comment);
+    let text = "still the comment, with 'quotes' and \"more\"";
+    for (mode, lang, before, open, close, after) in [
+        (Mode::Fast, "ts", "const a = 1;", "/* start", "end */", "const b = 2;"),
+        (Mode::Rich, "ts", "const a = 1;", "/* start", "end */", "const b = 2;"),
+        (Mode::Fast, "cs", "var a = 1;", "/* start", "end */", "var b = 2;"),
+        (Mode::Rich, "cs", "var a = 1;", "/* start", "end */", "var b = 2;"),
+        (
+            Mode::Fast,
+            "scss",
+            ".a { color: red; }",
+            "/* start",
+            "end */",
+            ".b { color: blue; }",
+        ),
+        (Mode::Fast, "sql", "SELECT 1;", "/* start", "end */", "SELECT 2;"),
+        (Mode::Fast, "html", "<p>one</p>", "<!-- start", "end -->", "<p>two</p>"),
+        (Mode::Fast, "ps1", "$a = 1", "<# start", "end #>", "$b = 2"),
+    ] {
+        assert_carried(mode, lang, &crossing(before, open, text, close, after), c);
+    }
+}
+
+#[test]
+fn a_multi_line_string_over_a_chunk_end_stays_a_string() {
+    let s = Some(Token::String);
+    let text = "still the string /* no comment */ and more";
+    for (mode, lang, before, open, close, after) in [
+        (Mode::Fast, "ps1", "$a = 1", "$s = @'", "'@", "$b = 2"),
+        (Mode::Rich, "cs", "var a = 1;", "var s = @\"start", "end\";", "var b = 2;"),
+        (Mode::Fast, "rs", "let a = 1;", "let s = \"start", "end\";", "let b = 2;"),
+        (Mode::Fast, "py", "a = 1", "s = \"\"\"start", "end\"\"\"", "b = 2"),
+        (Mode::Fast, "sql", "SELECT 1;", "SELECT 'start", "end';", "SELECT 2;"),
+        (Mode::Fast, "go", "a := 1", "s := `start", "end`", "b := 2"),
+    ] {
+        assert_carried(mode, lang, &crossing(before, open, text, close, after), s);
+    }
+}
+
+#[test]
+fn a_template_literal_over_a_chunk_end_stays_a_string() {
+    let s = Some(Token::String);
+    for (mode, lang) in [(Mode::Fast, "ts"), (Mode::Fast, "tsx"), (Mode::Fast, "js"), (Mode::Rich, "ts")] {
+        for text in [
+            "still the template, it's \"quoted\"",
+            "still the ${name} template, it's ${a + b} long",
+        ] {
+            let code = crossing("const a = 1;", "const s = `start", text, "end`;", "const b = 2;");
+            assert_carried(mode, lang, &code, s);
+        }
+    }
+    let fence = crossing("Some *words* here.", "```", "# not a heading", "```", "# A heading");
+    assert_carried(Mode::Fast, "md", &fence, None);
+}
+
+#[test]
+fn only_an_open_comment_or_string_is_carried() {
+    let p = Palette::GithubDark;
+    let end = |mode, lang, code| highlight_from(mode, p, Some(lang), code, &Carry::default()).1;
+    for code in [
+        "const a = 1; // note\n",
+        "const a = 'x';\n",
+        "/* closed */\n",
+        "const a = `closed`;\n",
+    ] {
+        assert!(end(Mode::Fast, "ts", code).is_fresh(), "{code:?}");
+    }
+    let open = end(Mode::Fast, "ts", "/* open\n");
+    assert!(!open.is_fresh());
+    assert_eq!(open, end(Mode::Fast, "ts", "const a = 1;\n/* again\n"));
+    assert_ne!(open, end(Mode::Fast, "ts", "const s = `open\n"));
+    let (hl, still) = highlight_from(Mode::Fast, p, Some("ts"), "more\n", &open);
+    assert_eq!(hl, [(0..5, Paint::Color(p.color(Token::Comment)))]);
+    assert_eq!(still, open);
+    let (hl, closed) = highlight_from(Mode::Fast, p, Some("ts"), "*/ let a;\n", &open);
+    assert_eq!(hl[0], (0..2, Paint::Color(p.color(Token::Comment))));
+    assert!(closed.is_fresh());
+    let ps = end(Mode::Fast, "ps1", "<# open\n");
+    assert_eq!(ps, end(Mode::Fast, "ps1", "<# open\n"));
+    assert_ne!(ps, end(Mode::Fast, "ps1", "$a = 1\n"));
+    let long = format!("/* open\n{}", "x\n".repeat(MAX_BYTES));
+    assert!(end(Mode::Fast, "ts", &long).is_fresh(), "past the cap the end state is unknown");
+    assert!(end(Mode::Fast, "ps1", &long.replace("/*", "<#")).is_fresh());
 }
 
 #[test]

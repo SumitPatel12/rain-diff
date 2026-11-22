@@ -211,6 +211,31 @@ fn pick<T: Copy + PartialEq + 'static>(label: &str, value: T, now: T, set: fn(&m
 /// `⋯`: the palette and Go to, the views, the layout, Appearance (theme, density), keys and
 /// reload, each with its key.
 fn more_menu(s: &App, k: &Kit, layer: &mut Vec<El>) -> El {
+    let mut menu = Menu::new("more").placement(Placement::BottomEnd).min_width(260.0);
+    // A closed menu draws only its trigger.
+    if s.menus.more {
+        menu = more_items(s, menu);
+    }
+    let trigger = Ghost::new("more-menu")
+        .icon(&icons::MORE)
+        .help("Views and settings")
+        .on(s.menus.more)
+        .build(k)
+        .expanded(s.menus.more)
+        .on_activate(|s: &mut App| {
+            let open = !s.menus.more;
+            s.menus.close();
+            s.menus.more = open;
+        });
+    menu.trigger(trigger)
+        .open(s.menus.more)
+        .on_close(|s: &mut App| {
+            s.menus.close();
+        })
+        .build(k, layer)
+}
+
+fn more_items(s: &App, menu: Menu) -> Menu {
     let open = s.menus.more_sub;
     let mut appearance: Vec<MenuEntry> = vec![MenuEntry::Label("Theme".into())];
     appearance.extend(Theme::PICKS.map(|(t, l)| pick(l, t, s.settings.theme, App::set_theme)));
@@ -220,9 +245,7 @@ fn more_menu(s: &App, k: &Kit, layer: &mut Vec<El>) -> El {
         [("Compact", Density::Compact), ("Comfortable", Density::Comfortable)]
             .map(|(l, d)| pick(l, d, s.settings.density, App::set_density)),
     );
-    let mut menu = Menu::new("more")
-        .placement(Placement::BottomEnd)
-        .min_width(260.0)
+    let mut menu = menu
         .item(command_item("Command palette", &icons::KBD, Command::Palette))
         .item(command_item("Go to file or anything", &icons::SEARCH, Command::Picker))
         .separator()
@@ -230,8 +253,7 @@ fn more_menu(s: &App, k: &Kit, layer: &mut Vec<El>) -> El {
     if s.has_map() {
         menu = menu.item(command_item("Map", &icons::MAP, Command::Map));
     }
-    menu = menu
-        .item(command_item("Tour", &icons::TOUR, Command::Tour))
+    menu.item(command_item("Tour", &icons::TOUR, Command::Tour))
         .item(command_item("Conversation", &icons::CHAT, Command::Conversation))
         .item(command_item("Diagram playground", &icons::DIAGRAM, Command::DiagramPlayground))
         .item(command_item("Find in diff", &icons::SEARCH, Command::Find))
@@ -256,24 +278,7 @@ fn more_menu(s: &App, k: &Kit, layer: &mut Vec<El>) -> El {
                     s.menus.close();
                     s.rest_preview();
                 }),
-        );
-    let trigger = Ghost::new("more-menu")
-        .icon(&icons::MORE)
-        .help("Views and settings")
-        .on(s.menus.more)
-        .build(k)
-        .expanded(s.menus.more)
-        .on_activate(|s: &mut App| {
-            let open = !s.menus.more;
-            s.menus.close();
-            s.menus.more = open;
-        });
-    menu.trigger(trigger)
-        .open(s.menus.more)
-        .on_close(|s: &mut App| {
-            s.menus.close();
-        })
-        .build(k, layer)
+        )
 }
 
 /// The review's title, then its repos and refs (left out below 1 500 points; the tooltip keeps

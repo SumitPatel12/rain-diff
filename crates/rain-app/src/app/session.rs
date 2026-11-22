@@ -10,28 +10,17 @@ use super::{App, ME};
 impl App {
     /// Picks up session changes made elsewhere (HTTP imports, overview updates).
     pub(crate) fn sync_session(&mut self) -> bool {
-        let fresh = {
-            let mut s = self.shared.lock();
+        let notes_before = self.mirror.notes.len();
+        let copied = {
+            let s = self.shared.lock();
             if s.version == self.seen_version {
                 return false;
             }
-            // The overview is the biggest member and changes only with its version: while that
-            // stands, the mirror's copy is moved over instead of cloning the session's.
-            if s.overview_version == self.mirror.overview_version && s.overview.is_some() == self.mirror.overview.is_some() {
-                let overview = s.overview.take();
-                let mut fresh = s.clone();
-                s.overview = overview;
-                fresh.overview = self.mirror.overview.take();
-                fresh
-            } else {
-                s.clone()
-            }
+            self.mirror.copy_from(&s)
         };
-        let (version, overview_version) = (fresh.version, fresh.overview_version);
-        let threads_changed = fresh.threads != self.mirror.threads || fresh.drafts != self.mirror.drafts;
-        let notes_changed = super::notes::notes_changed(&self.mirror, &fresh);
-        let notes_before = self.mirror.notes.len();
-        self.mirror = fresh;
+        let (version, overview_version) = (self.mirror.version, self.mirror.overview_version);
+        let threads_changed = copied.threads || copied.drafts;
+        let notes_changed = copied.notes;
         self.seen_version = version;
         if self.mirror.brief.is_some() {
             self.brief.asked = false;
@@ -152,7 +141,6 @@ impl App {
             .collect();
     }
 
-    /// Marks a file viewed or not in the tree and the session.
     pub fn set_viewed(&mut self, file: usize, on: bool) {
         let key = self.keys[file].clone();
         self.tree.set_viewed(&key, on);
@@ -179,11 +167,15 @@ impl App {
 
     /// A viewed file folds to its header in the diff; unmarking opens it again.
     pub(crate) fn fold_viewed(&mut self, file: usize, on: bool) {
-        if let Some(l) = self.local(file) {
-            self.active_mut().set_collapsed(l, on);
-        }
+        self.fold_viewed_many(&[file], on);
+    }
+
+    /// [`App::fold_viewed`] for several files, laying each diff out once.
+    pub(crate) fn fold_viewed_many(&mut self, files: &[usize], on: bool) {
+        let local: Vec<usize> = files.iter().filter_map(|&g| self.local(g)).collect();
+        self.active_mut().set_collapsed_many(local, on);
         if self.subset().is_some() {
-            self.diff.set_collapsed(file, on);
+            self.diff.set_collapsed_many(files.iter().copied(), on);
         }
     }
 

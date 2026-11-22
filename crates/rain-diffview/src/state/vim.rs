@@ -17,24 +17,56 @@ pub(crate) const SCROLLOFF: f32 = 3.0;
 const SIDE_MARGIN: f32 = 4.0;
 const MAX_COUNT: u32 = 99_999;
 
-/// A key for [`DiffState::vim`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum VimKey {
     /// A typed character; letters typed with Shift arrive upper case.
     Char(char),
-    /// Ctrl+D.
     HalfDown,
-    /// Ctrl+U.
     HalfUp,
     Escape,
 }
 
-/// What [`DiffState::vim`] did with a key.
+impl VimKey {
+    /// Whether normal mode acts on this key by itself, with nothing waiting.
+    pub fn acts_alone(self) -> bool {
+        match self {
+            VimKey::HalfDown | VimKey::HalfUp => true,
+            VimKey::Escape => false,
+            VimKey::Char(c) => matches!(
+                c,
+                '0'..='9'
+                    | 'g'
+                    | 'G'
+                    | 'f'
+                    | 't'
+                    | 'y'
+                    | 'v'
+                    | 'V'
+                    | 'j'
+                    | 'k'
+                    | 'h'
+                    | 'l'
+                    | 'w'
+                    | 'b'
+                    | 'e'
+                    | 'W'
+                    | 'B'
+                    | '^'
+                    | '$'
+                    | ';'
+                    | ','
+            ),
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Vim {
     /// Not a Vim key here: the app's keymap takes it.
     Pass,
     Done,
+    /// The key only waits for the next: nothing on screen changed, so no view need run.
+    Wait,
     /// Copy this: `y` in visual mode, `yy`.
     Yank(String),
     /// `c` or `?` in visual mode: the selection is now the diff's span or line selection.
@@ -159,7 +191,6 @@ pub(super) fn norm(t: &str, col: usize) -> usize {
 }
 
 impl DiffState {
-    /// Visual mode's fixed end, while it is on.
     pub fn visual(&self) -> Option<Visual> {
         self.visual
     }
@@ -170,7 +201,6 @@ impl DiffState {
         Some(norm(t, self.col))
     }
 
-    /// The cursor's row, side and line text, when its line has a row.
     pub(super) fn cursor_line(&self) -> Option<(u32, Side, &str)> {
         let (_, at) = self.cursor?;
         let r = self.cursor_row()?;
@@ -282,6 +312,11 @@ impl DiffState {
         self.pending = Pending::default();
     }
 
+    /// Whether a key waits for its next one (`g`, `y`, `f`, `t`), which is then Vim's.
+    pub fn vim_waiting(&self) -> bool {
+        self.pending.op != Op::None
+    }
+
     /// Visual mode leaves; a linewise one takes its line selection with it.
     pub fn end_visual(&mut self) {
         if let Some(v) = self.visual.take()
@@ -350,7 +385,6 @@ impl DiffState {
         })
     }
 
-    /// The side row `r` of a visual span reads its text from.
     pub(crate) fn visual_side(&self, s: &VisualSpan, r: u32) -> Side {
         let row = self.rows[r as usize];
         if self.draw(row.file()) == Draw::Split {
@@ -370,7 +404,7 @@ impl DiffState {
             if !self.rows[r as usize].has_line() {
                 continue;
             }
-            let Some(t) = self.row_text(r, self.visual_side(&s, r)) else {
+            let Some(t) = self.row_full(r, self.visual_side(&s, r)) else {
                 continue;
             };
             if s.line {
@@ -433,7 +467,7 @@ impl DiffState {
         };
         let (mut at, mut out) = ((r, side), String::new());
         for k in 0..n.max(1) {
-            out.push_str(lines.text(at));
+            out.push_str(self.row_full(at.0, at.1).unwrap_or(""));
             out.push('\n');
             match lines.next(at) {
                 Some(next) if k + 1 < n => at = next,
@@ -544,12 +578,10 @@ impl DiffState {
         self.land(r, side, col, false, tx);
     }
 
-    /// A key that only waits for the next (or drops what waited): nothing on screen changes, so
-    /// the view doesn't run.
-    fn wait(&mut self, p: Pending, tx: &mut Tx) -> Vim {
+    /// A key that only waits for the next (or drops what waited).
+    fn wait(&mut self, p: Pending) -> Vim {
         self.pending = p;
-        tx.live_only();
-        Vim::Done
+        Vim::Wait
     }
 
     /// One normal- or visual-mode key, with whatever count or first key came before it.
@@ -562,11 +594,11 @@ impl DiffState {
                     self.find_char(c, forward, till, n, false, tx);
                     Vim::Done
                 }
-                _ => self.wait(Pending::default(), tx),
+                _ => self.wait(Pending::default()),
             };
         }
         let c = match key {
-            VimKey::Escape if p != Pending::default() => return self.wait(Pending::default(), tx),
+            VimKey::Escape if p != Pending::default() => return self.wait(Pending::default()),
             VimKey::Escape if self.visual.is_some() => {
                 self.end_visual();
                 return Vim::Done;
@@ -589,33 +621,33 @@ impl DiffState {
                     None => Vim::Done,
                 };
             }
-            (Op::G | Op::Y, _) => return self.wait(Pending::default(), tx),
+            (Op::G | Op::Y, _) => return self.wait(Pending::default()),
             _ => {}
         }
         if let Some(d) = c.to_digit(10)
             && (d > 0 || p.count > 0)
         {
             let count = (p.count * 10 + d).min(MAX_COUNT);
-            return self.wait(Pending { count, op: Op::None }, tx);
+            return self.wait(Pending { count, op: Op::None });
         }
         let in_visual = self.visual.is_some();
         let count = p.count;
         match c {
-            'g' => return self.wait(Pending { count, op: Op::G }, tx),
+            'g' => return self.wait(Pending { count, op: Op::G }),
             'G' => self.file_edge(true, p.count, tx),
             'f' | 't' => {
                 let op = Op::Find {
                     forward: true,
                     till: c == 't',
                 };
-                return self.wait(Pending { count, op }, tx);
+                return self.wait(Pending { count, op });
             }
             'y' if in_visual => {
                 let text = self.visual_text();
                 self.end_visual();
                 return text.map_or(Vim::Done, Vim::Yank);
             }
-            'y' => return self.wait(Pending { count, op: Op::Y }, tx),
+            'y' => return self.wait(Pending { count, op: Op::Y }),
             'c' | '?' if in_visual => {
                 self.visual_to_selection();
                 return if c == 'c' { Vim::Comment } else { Vim::Ask };
@@ -734,6 +766,17 @@ mod tests {
     }
 
     #[test]
+    fn acts_alone_names_exactly_the_keys_normal_mode_takes() {
+        for c in (0x21u8..0x7f).map(char::from) {
+            let mut st = added(TEXT);
+            let took = st.vim(VimKey::Char(c), &mut Tx::default()) != Vim::Pass;
+            assert_eq!(VimKey::Char(c).acts_alone(), took, "{c}");
+            assert_eq!(st.vim_waiting(), matches!(c, 'g' | 'y' | 'f' | 't'), "{c}");
+        }
+        assert!(VimKey::HalfDown.acts_alone() && VimKey::HalfUp.acts_alone() && !VimKey::Escape.acts_alone());
+    }
+
+    #[test]
     fn a_click_drops_any_selection_and_moves_the_cursor() {
         let mut st = added(TEXT);
         for k in ["vll", "Vj"] {
@@ -833,6 +876,43 @@ mod tests {
         }
         println!("200k-character lines, ms per key: {worst:?}");
         assert!(worst.iter().all(|&(_, ms)| ms < 2.0), "{worst:?}");
+    }
+
+    #[test]
+    fn the_cursor_stays_in_the_drawn_part_of_a_very_long_line_and_copy_takes_all_of_it() {
+        use crate::state::LINE_CAP;
+        let long = "var a=b.c(d,e)+f[g];".repeat(100_000);
+        let mut st = added(&format!("short\n{long}\nlast one\n"));
+        let last = LINE_CAP - 1;
+        let mut go = |k: &str| {
+            keys(&mut st, k);
+            at(&st)
+        };
+        assert_eq!(go("j$"), (2, last), "$ is the last drawn character");
+        assert_eq!(go("l"), (3, 0), "l goes on to the next line from there");
+        assert_eq!(go("h"), (2, last));
+        assert_eq!(go("w"), (3, 0), "w leaves the line at the cut");
+        assert_eq!(go("b"), (2, last - 1), "b comes back to the last drawn word");
+        assert_eq!(go("0"), (2, 0));
+        assert_eq!(go("w"), (2, 4));
+        assert_eq!(go("j$k"), (2, last), "k from a line's end lands on the cut, not past it");
+        assert_eq!(go("0"), (2, 0));
+        assert_eq!(go("99999l"), (3, 7), "a count walks the drawn part only");
+        assert_eq!(go("k0"), (2, 0));
+
+        assert_eq!(st.copy_text().map(|t| t.len()), Some(long.len()), "Ctrl+C takes the whole line");
+        assert_eq!(keys(&mut st, "yy"), Vim::Yank(format!("{long}\n")));
+        assert_eq!(keys(&mut st, "Vy"), Vim::Yank(format!("{long}\n")));
+        keys(&mut st, "ggvjj");
+        assert_eq!(
+            keys(&mut st, "y"),
+            Vim::Yank(format!("short\n{long}\nl")),
+            "a selection running through the line takes all of it"
+        );
+        keys(&mut st, "ggjv$");
+        assert_eq!(keys(&mut st, "y"), Vim::Yank(long[..LINE_CAP].to_owned()), "v$ takes what is drawn");
+        st.set_selection(Some(LineRange::line(0, LineRef::new(Side::New, 2))));
+        assert_eq!(st.selected_text().map(|t| t.len()), Some(long.len()));
     }
 
     #[test]

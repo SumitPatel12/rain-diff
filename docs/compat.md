@@ -32,7 +32,7 @@ the `comments-json` golden test). The full agent contract is [agent.md](agent.md
 | `POST /api/notes[?repo=&replace=1]` | a note or an array → `{success,changed,count,ids,notesVersion}`; upsert by `id` |
 | `DELETE /api/notes/:id` | `{success,id,notesVersion}`; 404 unknown, 409 for `overview:` ids |
 | `POST /api/goto` | `{path,line?,side?}` or `{threadId}` → the window scrolls there |
-| `POST /api/comment-imports` | reply by `{"type":"reply","threadId"}` (warning `No thread with id <id>.`, no fallback); `<repoId>/<path>` paths split on a known repo id when no `repo` is given |
+| `POST /api/comment-imports` | reply by `{"type":"reply","threadId"}` (warning `No thread with id <id>.`, no fallback); `<repoId>/<path>` paths split on a known repo id when no `repo` is given (with one repo open, a thread or diff line at the path as written wins) |
 | CLI | `note add\|list\|remove`, `comment reply`, `comment resolve --file --line`, `goto`, `health` |
 | `GET /api/events?since=&timeout=` (extras) | long poll: `{"version","changed","threads","notes"}` once `version` passes `since`, or at the timeout (default 25 s, max 60) |
 | CLI (extras) | `comment wait --port P [--since V] [--timeout S] [--format json\|text]` (exit 2 on timeout), `comment reply --file --lines A-B` |
@@ -83,8 +83,8 @@ Round 4 (additive for difit clients; difit's Node CLI still works unchanged):
 
 | Change | Shape |
 |---|---|
-| handshake | `{"port","url","pid"}` keep difit's order; Rain adds `"token":"<32 hex>"` after them, and `"readOnly":true` when another window holds the session (after `"reused"` on a reused line) |
-| read-only window | every route that changes the session answers **423** `{"error":"This window is read-only: another Rain window (pid N, port P) holds session <id>. Send changes to port P."}` instead of `success:true`; reads, `reload`, `close`, `presence`, `goto`, `highlight` still work |
+| handshake | `{"port","url","pid"}` keep difit's order; Rain adds `"token":"<32 hex>"` after them, and `"readOnly":true` when another window holds the session or its lock could not be taken (after `"reused"` on a reused line) |
+| read-only window | every route that changes the session answers **423** `{"error":"This window is read-only: another Rain window (pid N, port P) holds session <id>. Send changes to port P."}` (or `"…: its session lock <path> could not be taken (<cause>)."`) instead of `success:true`; reads, `reload`, `close`, `presence`, `goto`, `highlight` still work |
 | `X-Rain-Token` | the handshake's `token` (also in `sessions/<id>.lock`, never in `GET /api/lock` or `/api/health`). Optional on every route: without it, writes still apply, but a new author-less `question` or an `answer` made `queued` does not start the window's answerer (the thread waits for the user's Ask). Rain's CLI sends it; difit's never asks questions, so it is unaffected |
 | `POST /api/comments/state` | 404 (was a 500 from a panic) |
 | `GET /api/health` | answered even when 32 requests are in flight (other routes get 503 then), so a busy window's lock is never taken over |

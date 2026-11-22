@@ -122,6 +122,44 @@ fn test_builds_never_start_a_runner_by_themselves() {
 }
 
 #[test]
+fn a_read_only_window_does_not_resume_the_owners_questions() {
+    let (mut a, ctl) = setup();
+    a.launch.read_only = true;
+    let (queued, running) = (a.mirror.threads[0].id.clone(), a.mirror.threads[1].id.clone());
+    a.mutate(|s| {
+        s.threads[0].answer = Some(Answer::default());
+        s.threads[1].answer = Some(Answer {
+            status: AnswerStatus::Answering,
+            by: Some("launcher".into()),
+            ..Answer::default()
+        });
+        s.bump_comments();
+    });
+    let before = (status(&a, &queued), status(&a, &running));
+    assert_eq!(before.0.status, AnswerStatus::Queued);
+    a.ask_tick_at(Instant::now());
+    assert!(ctl.borrow().reqs.is_empty(), "the owner's queued question is not asked from here");
+    assert_eq!((status(&a, &queued), status(&a, &running)), before);
+    assert!(!a.ask.is_tracking(&queued) && !a.ask.is_tracking(&running));
+}
+
+#[test]
+fn a_question_asked_in_a_read_only_window_is_answered() {
+    let (mut a, ctl) = setup();
+    a.launch.read_only = true;
+    let now = Instant::now();
+    a.ask_tick_at(now);
+    let id = ask(&mut a, "Why?");
+    assert!(a.ask_tick_at(now + Duration::from_secs(1)));
+    assert_eq!(ctl.borrow().reqs.len(), 1);
+    answer(&ctl, 0, ok("Because."));
+    assert!(a.ask_tick_at(now + Duration::from_secs(2)));
+    let t = thread(&a, &id);
+    assert_eq!(t.answer.unwrap().status, AnswerStatus::Answered);
+    assert_eq!(t.messages.last().unwrap().body, "Because.");
+}
+
+#[test]
 fn with_no_agent_attached_the_launcher_answers_at_once() {
     let (mut a, ctl) = setup();
     let id = ask(&mut a, "Why is the voucher stored first?");

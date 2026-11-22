@@ -69,7 +69,6 @@ pub fn kind_glyph(k: ThreadKind) -> &'static str {
     }
 }
 
-/// A parsed prefix: `F3 issue (blocking): rest`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Label<'a> {
     /// The finding number (`F3`), when present.
@@ -77,7 +76,6 @@ pub struct Label<'a> {
     pub kind: Kind,
     /// `(blocking)` → true, `(non-blocking)` → false, absent → None.
     pub blocking: Option<bool>,
-    /// The body after the prefix.
     pub rest: &'a str,
 }
 

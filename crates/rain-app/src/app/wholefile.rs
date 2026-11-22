@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use rain_core::{FileDiff, FileStatus};
+use rain_diffview::FileTexts;
 use rain_git::Resolved;
 use rune::Tx;
 
@@ -24,8 +25,20 @@ fn not_wholeable(f: &FileDiff) -> Option<&'static str> {
 /// Git reads expand-all runs at once: each is a `git` process, so a few overlap well.
 const READERS: usize = 4;
 
+/// Files in expand-all's first batch; each later batch is twice the one before, so the first
+/// files open at once and the rows are laid out a handful of times however many files there are.
+const FIRST_BATCH: usize = 4;
+
 /// One file's whole texts to read: its repo folder and revisions, the file, its key.
 type Job = (PathBuf, Resolved, Arc<FileDiff>, String);
+
+/// What expand-all's readers share: where the texts go, how many are read, and the batch filling.
+struct Out {
+    sender: std::sync::mpsc::Sender<Msg>,
+    read: usize,
+    batch: Vec<Msg>,
+    size: usize,
+}
 
 impl App {
     /// `z`: shows the current file whole, or folds it back.
@@ -75,7 +88,7 @@ impl App {
         let Some(f) = self.diff.files().get(g).cloned() else { return };
         if self.is_whole(g) {
             self.set_whole_everywhere(g, false);
-            self.set_texts_everywhere(g, None, None);
+            self.set_texts_everywhere(vec![(g, None, None)]);
             self.status = format!("{}: changes only", f.path);
             self.keep_cursor(local, tx);
             return;
@@ -159,7 +172,12 @@ impl App {
                 self.status = format!("Whole file 0/{total}");
                 let _ = std::thread::Builder::new().name("rain-whole".into()).spawn(move || {
                     let queue = Mutex::new(jobs.into_iter());
-                    let out = Mutex::new((sender, 0usize));
+                    let out = Mutex::new(Out {
+                        sender,
+                        read: 0,
+                        batch: Vec::new(),
+                        size: FIRST_BATCH,
+                    });
                     std::thread::scope(|sc| {
                         for _ in 0..READERS.min(total) {
                             sc.spawn(|| {
@@ -169,30 +187,35 @@ impl App {
                                     };
                                     let msg = load::read_texts(&dir, &resolved, &f, key);
                                     let Ok(mut o) = out.lock() else { return };
-                                    o.1 += 1;
-                                    let _ = o.0.send(msg);
-                                    let _ = o.0.send(Msg::Progress(format!("Whole file {}/{total}", o.1)));
+                                    o.read += 1;
+                                    o.batch.push(msg);
+                                    if o.batch.len() >= o.size || o.read == total {
+                                        let batch = std::mem::take(&mut o.batch);
+                                        o.size *= 2;
+                                        let _ = o.sender.send(Msg::Batch(batch));
+                                    }
+                                    let _ = o.sender.send(Msg::Progress(format!("Whole file {}/{total}", o.read)));
                                     wake();
                                 }
                             });
                         }
                     });
                     if let Ok(o) = out.lock() {
-                        let _ = o.0.send(Msg::Progress(done));
+                        let _ = o.sender.send(Msg::Progress(done));
                     }
                     wake();
                 });
             }
             _ => {
-                for (dir, resolved, f, key) in jobs {
-                    self.install_texts(load::read_texts(&dir, &resolved, &f, key));
-                }
+                let texts = jobs
+                    .into_iter()
+                    .map(|(dir, resolved, f, key)| load::read_texts(&dir, &resolved, &f, key));
+                self.install_texts_many(texts.collect());
                 self.status = done;
             }
         }
     }
 
-    /// Why full-list file `g` can't be opened whole, if it can't.
     pub(crate) fn whole_blocker(&self, g: usize) -> Option<&'static str> {
         self.diff.files().get(g).and_then(|f| not_wholeable(f))
     }
@@ -225,15 +248,20 @@ impl App {
         }
     }
 
-    /// Gives full-list file `g` its texts in the main diff, and the subsets that show it the
-    /// main diff's copy, so the file is copied at most once.
-    pub(crate) fn set_texts_everywhere(&mut self, g: usize, old: Option<Arc<str>>, new: Option<Arc<str>>) {
-        self.diff.set_texts(g, old, new);
-        let Some(shared) = self.diff.files().get(g).cloned() else { return };
+    /// Gives full-list files their texts in the main diff, and the subsets that show them the
+    /// main diff's copies, so a file is copied at most once and each diff is laid out once.
+    pub(crate) fn set_texts_everywhere(&mut self, texts: Vec<FileTexts>) {
+        let files: Vec<usize> = texts.iter().map(|t| t.0).collect();
+        self.diff.set_texts_many(texts);
+        let shared: Vec<(usize, Arc<FileDiff>)> = files
+            .into_iter()
+            .filter_map(|g| Some((g, self.diff.files().get(g)?.clone())))
+            .collect();
         for v in self.subsets_mut() {
-            if let Some(l) = v.files.iter().position(|&x| x == g) {
-                v.diff.share_file(l, Arc::clone(&shared));
-            }
+            let here = shared
+                .iter()
+                .filter_map(|(g, f)| Some((v.files.iter().position(|x| x == g)?, Arc::clone(f))));
+            v.diff.share_files(here.collect::<Vec<_>>());
         }
     }
 

@@ -1,5 +1,5 @@
-//! The find bar across the top of the diff: the query, `2 of 6`, previous and next, the keys,
-//! and close.
+//! The find bar across the top of the diff: the query, `2 of 6`, previous and next, the Fuzzy
+//! switch, the keys, and close.
 
 use rune::{El, Key, KeyEvent, Tx, col, el, row, text};
 use rune_kit::{Kit, TextInput};
@@ -41,17 +41,21 @@ pub(super) fn find_bar(s: &App, k: &Kit) -> El {
                     .width(None)
                     .on_edit(|s: &mut App| &mut s.find.edit)
                     .on_change(|s: &mut App, _: &mut Tx| {
-                        if s.active().files().iter().map(|f| f.text.len()).sum::<usize>() < 8 << 20 {
+                        if s.find_is_live() {
                             s.run_find();
                         }
                     })
-                    .on_key(|s: &mut App, ev: &KeyEvent, tx: &mut Tx| match ev.key {
+                    .on_key(|s: &mut App, ev: &KeyEvent, tx: &mut Tx| match &ev.key {
                         Key::Enter => {
                             s.find_step(!ev.mods.shift, tx);
                             true
                         }
                         Key::Escape => {
                             s.close_find();
+                            true
+                        }
+                        Key::Text(t) if ev.mods.alt && !ev.mods.ctrl && !ev.mods.cmd && t.eq_ignore_ascii_case("f") => {
+                            s.toggle_find_fuzzy();
                             true
                         }
                         _ => false,
@@ -75,6 +79,16 @@ pub(super) fn find_bar(s: &App, k: &Kit) -> El {
                 .height(24.0)
                 .build(k)
                 .on_activate_tx(|s: &mut App, tx: &mut Tx| s.find_step(true, tx)),
+        )
+        .child(
+            Ghost::new("find-fuzzy")
+                .label("Fuzzy")
+                .help("Fuzzy match")
+                .hint("Alt+F")
+                .on(s.settings.find_fuzzy)
+                .height(24.0)
+                .build(k)
+                .on_activate(|s: &mut App| s.toggle_find_fuzzy()),
         )
         .child(el().grow(1.0).a11y_hidden())
         .child(text("Enter next · Shift+Enter previous").font(TYPE.small).color(k.c.text_faint))

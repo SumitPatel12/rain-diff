@@ -1,12 +1,42 @@
 //! The window's key handler: the universal cursor keys, then Vim's motions (in the Vim
-//! profile), then the active keymap's chords to [`App::run`].
+//! profile), then the active keymap's chords to [`App::run`]. The first key of a two-key
+//! shortcut is held for the second.
+
+use std::time::Instant;
 
 use rain_core::command::Command;
 use rain_core::keymap::{self, Chord, ChordKey};
-use rain_diffview::Caret;
+use rain_diffview::{Caret, VimKey};
 use rune::{Key, KeyEvent, Tx};
 
+use crate::app::vim::vim_key_of;
 use crate::app::{App, Phase};
+
+/// The first key of a two-key shortcut, with when it acts alone if it does.
+pub(crate) struct HeldKey {
+    ev: KeyEvent,
+    chord: Chord,
+    due: Option<Instant>,
+}
+
+#[derive(Default)]
+pub(crate) struct KeyWait {
+    pub(crate) held: Option<HeldKey>,
+    /// While a held key runs alone and the next is read after it: the event changed what the
+    /// view reads, so a key that only waits doesn't ask for no view.
+    pub(crate) loud: bool,
+}
+
+#[cfg(test)]
+impl KeyWait {
+    pub(crate) fn chord(&self) -> Option<Chord> {
+        self.held.as_ref().map(|h| h.chord)
+    }
+
+    pub(crate) fn timed(&self) -> bool {
+        self.held.as_ref().is_some_and(|h| h.due.is_some())
+    }
+}
 
 /// The chord a key event is, or `None` for keys no chord names (modifiers, the Windows key).
 pub fn chord_of(ev: &KeyEvent) -> Option<Chord> {
@@ -44,7 +74,6 @@ pub fn chord_of(ev: &KeyEvent) -> Option<Chord> {
     Some(Chord::new(key, m.ctrl || m.cmd, m.shift, m.alt))
 }
 
-/// The command the active keymap binds to this key.
 pub fn command_of(ev: &KeyEvent) -> Option<Command> {
     let c = chord_of(ev)?;
     keymap::with_active(|k| k.lookup(&c))
@@ -154,11 +183,118 @@ impl App {
             None => false,
         }
     }
+
+    /// Whether Vim's motions are what a key on the diff means now.
+    fn vim_keys(&self) -> bool {
+        self.vim_live() && self.keymap_profile().vim_motions()
+    }
+
+    /// A key on the reader with nothing held: the tour, the cursor keys, Vim, then its command.
+    fn dispatch(&mut self, ev: &KeyEvent, chord: Option<Chord>, cmd: Option<Command>, tx: &mut Tx) -> bool {
+        if let Some(done) = self.tour_key(ev, tx) {
+            return done;
+        }
+        if let Some(done) = self.universal_key(chord, tx) {
+            return done;
+        }
+        if self.keymap_profile().vim_motions()
+            && let Some(done) = self.vim_key(ev, tx)
+        {
+            return done;
+        }
+        match cmd {
+            Some(c) => self.run(c, tx),
+            None if is_escape(chord) => self.escape(tx),
+            None => false,
+        }
+    }
+
+    /// The first key of a two-key shortcut: held with no view run. One that also acts alone
+    /// (`alone`, or a Vim motion) waits only the keymap's timeout, as Vim's `timeoutlen`.
+    fn hold_key(&mut self, ev: &KeyEvent, chord: Chord, alone: bool, tx: &mut Tx) -> bool {
+        let alone = alone || (self.vim_keys() && vim_key_of(ev).is_some_and(VimKey::acts_alone));
+        let due = alone.then(|| {
+            let wait = self.settings.keymap.timeout();
+            tx.wake_after(wait);
+            Instant::now() + wait
+        });
+        self.key_wait.held = Some(HeldKey {
+            ev: ev.clone(),
+            chord,
+            due,
+        });
+        if !self.key_wait.loud {
+            tx.live_only();
+        }
+        true
+    }
+
+    /// The key after a held one: Escape drops it, the shortcut's second key runs its command,
+    /// and any other key, as in Vim, lets the first do what it does alone and is then read
+    /// afresh.
+    fn second_key(&mut self, first: HeldKey, ev: &KeyEvent, chord: Option<Chord>, tx: &mut Tx) -> bool {
+        if is_escape(chord) {
+            self.active_mut().vim_cancel();
+            tx.live_only();
+            return true;
+        }
+        if let Some(cmd) = chord.and_then(|c| keymap::with_active(|k| k.pair(&first.chord, &c))) {
+            self.active_mut().vim_cancel();
+            return self.run(cmd, tx);
+        }
+        let ran = self.replay(first, tx);
+        self.key_wait.loud = ran;
+        let took = on_key(self, ev, tx);
+        self.key_wait.loud = false;
+        took || ran
+    }
+
+    /// A held key does what it does alone.
+    fn replay(&mut self, first: HeldKey, tx: &mut Tx) -> bool {
+        let cmd = keymap::with_active(|k| k.lookup(&first.chord));
+        self.key_wait.loud = true;
+        let ran = self.dispatch(&first.ev, Some(first.chord), cmd, tx);
+        self.key_wait.loud = false;
+        ran
+    }
+
+    /// Whether keys go somewhere other than the reader's keymap: a text field, a dialog.
+    fn keys_elsewhere(&self) -> bool {
+        self.raining() || self.picker_normal() || self.shortcuts.open || self.playground.open || self.typing() || self.phase != Phase::Ready
+    }
+
+    /// A held key whose wait is over by `now` acts alone; true when that changed something.
+    pub(crate) fn held_key_expire_at(&mut self, now: Instant, tx: &mut Tx) -> bool {
+        let Some(due) = self.key_wait.held.as_ref().and_then(|h| h.due) else {
+            return false;
+        };
+        if now < due {
+            tx.wake_after(due - now);
+            return false;
+        }
+        let Some(first) = self.key_wait.held.take() else {
+            return false;
+        };
+        !self.keys_elsewhere() && self.replay(first, tx)
+    }
+
+    /// Each frame: a held key goes when the keys go elsewhere, and acts alone when its wait ends.
+    pub(crate) fn held_key_poll(&mut self, tx: &mut Tx) -> bool {
+        if self.key_wait.held.is_none() {
+            return false;
+        }
+        if self.keys_elsewhere() {
+            self.key_wait.held = None;
+            return false;
+        }
+        self.held_key_expire_at(Instant::now(), tx)
+    }
 }
 
 pub fn on_key(s: &mut App, ev: &KeyEvent, tx: &mut Tx) -> bool {
     // The rain holds every key: Enter took the break, Esc snoozes it.
     if s.raining() {
+        s.key_wait.held = None;
         match ev.key {
             Key::Enter => s.rest_taken(),
             Key::Escape => s.rest_snooze(),
@@ -169,6 +305,8 @@ pub fn on_key(s: &mut App, ev: &KeyEvent, tx: &mut Tx) -> bool {
     if matches!(ev.key, Key::Modifier { .. }) {
         return s.active_mut().key(ev, tx);
     }
+    // Taken here, so a first key never outlives a key that goes to a text field or a dialog.
+    let held = s.key_wait.held.take();
     if s.picker_normal() {
         return s.picker_normal_key(ev, tx);
     }
@@ -194,27 +332,24 @@ pub fn on_key(s: &mut App, ev: &KeyEvent, tx: &mut Tx) -> bool {
     if s.map_lab_key(chord) {
         return true;
     }
-    let cmd = chord.and_then(|c| keymap::with_active(|k| k.lookup(&c)));
+    let (cmd, starts) = match chord {
+        Some(c) => keymap::with_active(|k| (k.lookup(&c), k.starts_pair(&c))),
+        None => (None, false),
+    };
     if s.phase != Phase::Ready {
         return match cmd {
             Some(c @ (Command::Reload | Command::ToggleTheme)) => s.run(c, tx),
             _ => is_escape(chord) && s.escape(tx),
         };
     }
-    if let Some(done) = s.tour_key(ev, tx) {
-        return done;
+    if let Some(first) = held {
+        return s.second_key(first, ev, chord, tx);
     }
-    if let Some(done) = s.universal_key(chord, tx) {
-        return done;
-    }
-    if s.keymap_profile().vim_motions()
-        && let Some(done) = s.vim_key(ev, tx)
+    if starts
+        && let Some(c) = chord
+        && !(s.vim_keys() && s.active().vim_waiting())
     {
-        return done;
+        return s.hold_key(ev, c, cmd.is_some(), tx);
     }
-    match cmd {
-        Some(c) => s.run(c, tx),
-        None if is_escape(chord) => s.escape(tx),
-        None => false,
-    }
+    s.dispatch(ev, chord, cmd, tx)
 }

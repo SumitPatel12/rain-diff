@@ -5,7 +5,7 @@ use std::cell::RefCell;
 use std::collections::BTreeMap;
 
 use rain_core::command::Command;
-use rain_core::keymap::{self, Chord, Keymap, Profile};
+use rain_core::keymap::{self, Chord, Keymap, Profile, Shortcut};
 use rune::TextEdit;
 
 use super::App;
@@ -107,15 +107,15 @@ impl ShortcutsState {
         self.draft.chords(cmd) != self.defaults.chords(cmd)
     }
 
-    fn set_keys(&mut self, cmd: Command, chords: &[Chord]) {
-        let keys = chords.iter().map(Chord::display).collect();
+    fn set_keys(&mut self, cmd: Command, keys: &[Shortcut]) {
+        let keys = keys.iter().map(Shortcut::display).collect();
         self.overrides.insert(cmd.id().to_owned(), keys);
     }
 
     fn add_key(&mut self, cmd: Command, chord: Chord) {
         let mut keys = self.draft.chords(cmd).to_vec();
-        if !keys.contains(&chord) {
-            keys.push(chord);
+        if !keys.contains(&chord.into()) {
+            keys.push(chord.into());
         }
         self.set_keys(cmd, &keys);
         self.rebuild();
@@ -137,13 +137,22 @@ impl App {
     }
 
     /// Builds the keymap the settings describe and makes it the window's; returns what it
-    /// ignored and says so in the status line.
+    /// ignored and says so in the status line, or else names a key a two-key shortcut slowed.
     pub fn apply_keymap(&mut self) -> Vec<String> {
         let (km, ignored) = self.settings.keymap.build();
+        let waits = km.waiting_chord();
         keymap::set_active(km);
         self.keymap_gen += 1;
+        self.key_wait.held = None;
         if !ignored.is_empty() {
             self.status = ignored_message(&ignored);
+        } else if let Some((chord, cmd)) = waits {
+            let ms = self.settings.keymap.timeout().as_millis();
+            self.status = format!(
+                "Keyboard shortcuts: {} also starts a two-key shortcut, so {} waits {ms} ms",
+                chord.display(),
+                cmd.label()
+            );
         }
         ignored
     }
@@ -151,9 +160,10 @@ impl App {
     /// Switches the shortcut profile now (the palette's rows), keeping the overrides.
     pub fn set_profile(&mut self, p: Profile) {
         self.settings.keymap.profile = p;
-        self.save_settings();
         self.apply_keymap();
         self.status = format!("Keyboard shortcuts: {}", p.label());
+        // Last, so a failed save is what the status line says.
+        self.save_settings();
     }
 
     pub fn open_shortcuts(&mut self) {
@@ -240,18 +250,18 @@ impl App {
             sh.note.clear();
             return;
         }
-        let keep: Vec<Chord> = sh.draft.chords(c.holder).iter().copied().filter(|k| *k != c.chord).collect();
+        let keep: Vec<Shortcut> = sh.draft.chords(c.holder).iter().copied().filter(|k| *k != c.chord.into()).collect();
         sh.set_keys(c.holder, &keep);
         sh.add_key(c.cmd, c.chord);
         sh.note = format!("{} now {}; {} lost it", c.chord.display(), c.cmd.label(), c.holder.label());
     }
 
-    pub fn remove_shortcut(&mut self, cmd: Command, chord: Chord) {
+    pub fn remove_shortcut(&mut self, cmd: Command, keys: Shortcut) {
         let sh = &mut self.shortcuts;
-        let keep: Vec<Chord> = sh.draft.chords(cmd).iter().copied().filter(|k| *k != chord).collect();
+        let keep: Vec<Shortcut> = sh.draft.chords(cmd).iter().copied().filter(|k| *k != keys).collect();
         sh.set_keys(cmd, &keep);
         sh.rebuild();
-        sh.note = format!("Removed {} from {}", chord.display(), cmd.label());
+        sh.note = format!("Removed {} from {}", keys.display(), cmd.label());
     }
 
     pub fn reset_shortcut(&mut self, cmd: Command) {
@@ -275,12 +285,13 @@ impl App {
         let overrides = self.shortcuts.trimmed();
         self.settings.keymap.profile = self.shortcuts.profile;
         self.settings.keymap.set_overrides(&overrides);
-        self.save_settings();
         self.apply_keymap();
         self.shortcuts.open = false;
         self.shortcuts.search.focused = false;
         self.shortcuts.recording = None;
         self.shortcuts.conflict = None;
         self.status = format!("Keyboard shortcuts saved: {}", self.shortcuts.profile.label());
+        // Last, so a failed save is what the status line says.
+        self.save_settings();
     }
 }

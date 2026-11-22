@@ -276,6 +276,84 @@ fn shift_e_reads_off_the_ui_thread_and_reports_progress() {
     assert_eq!(rows_of(&rt, a), 82);
 }
 
+/// `n` files of 60 lines, each with line 30 changed in the last commit.
+fn many_repo(n: usize) -> PathBuf {
+    let d = temp_dir().join("repo");
+    std::fs::create_dir_all(&d).unwrap();
+    git(&d, &["init", "-q", "-b", "main"]);
+    for (k, v) in [
+        ("user.name", "t"),
+        ("user.email", "t@t.invalid"),
+        ("core.autocrlf", "false"),
+        ("commit.gpgsign", "false"),
+    ] {
+        git(&d, &["config", k, v]);
+    }
+    for edited in [false, true] {
+        for f in 0..n {
+            let line = |i| {
+                if edited && i == 30 {
+                    format!("int f{f}_thirty;")
+                } else {
+                    format!("int f{f}_{i};")
+                }
+            };
+            std::fs::write(d.join(format!("f{f:03}.cs")), numbered(60, line)).unwrap();
+        }
+        git(&d, &["add", "-A"]);
+        git(&d, &["commit", "-q", "-m", "c"]);
+    }
+    d
+}
+
+/// Where the cursor's row sits in the viewport.
+fn cursor_on_screen(rt: &Runtime<App>) -> f32 {
+    let a = rt.state.active();
+    let (f, l) = a.cursor().unwrap();
+    a.row_y(a.row_of_line(f, l).unwrap() as usize) - a.scroll_offset()
+}
+
+const MANY: usize = 40;
+
+fn all_open(rt: &Runtime<App>) {
+    for f in 0..MANY {
+        assert!(rt.state.diff.whole(f) && rt.state.diff.expandable(f), "file {f}");
+        assert_eq!(rows_of(rt, f), 1 + 60 + 1, "file {f}: header, every line and the removed one");
+    }
+}
+
+#[test]
+fn shift_e_lays_the_rows_out_once_per_batch_of_files_not_once_per_file() {
+    let dir = many_repo(MANY);
+    let mut rt = threaded(&dir);
+    let done = format!("Whole file: {MANY} files open");
+    let c = counts::counted(&mut rt, |rt| {
+        typed(rt, "E");
+        wait(rt, &|s| s.status == done);
+    });
+    println!("expand {MANY} files off the UI thread: {c:?}");
+    all_open(&rt);
+    assert!(c.layouts <= 5, "{} layouts for {MANY} files", c.layouts);
+    assert!(c.rekeys <= 5, "{} re-keys for {MANY} files", c.rekeys);
+}
+
+#[test]
+fn shift_e_without_a_window_lays_the_rows_out_once_and_keeps_the_place() {
+    let dir = many_repo(MANY);
+    let mut rt = unified(&dir);
+    on_file(&mut rt, 20, 30);
+    let (cursor, y) = (rt.state.active().cursor(), cursor_on_screen(&rt));
+    let c = counts::counted(&mut rt, |rt| typed(rt, "E"));
+    println!("expand {MANY} files on the UI thread: {c:?}");
+    all_open(&rt);
+    assert_eq!(c.layouts, 1);
+    assert_eq!(rt.state.active().cursor(), cursor, "the cursor stays on its line");
+    // The list holds the top row in place; the fold above the cursor's line became lines.
+    let (now, line) = (cursor_on_screen(&rt), rt.state.active().metrics().line);
+    assert!((now - y).abs() <= line, "and within a line of its place on screen: {y} then {now}");
+    assert!(!rt.state.diff.collapsed(20));
+}
+
 #[test]
 fn added_and_deleted_files_are_already_whole() {
     let dir = whole_repo();

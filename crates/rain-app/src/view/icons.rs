@@ -212,7 +212,6 @@ pub static RAIN: Icon = Icon {
     body: r#"<path d="M8 5.5 6 10.5M12.5 5.5l-3 7.5M16 8.5l-2 5M10 14.5 9 17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>"#,
 };
 
-/// `i` at `size` points in `color`.
 pub fn draw(i: &'static Icon, size: f32, color: rune::Color) -> El {
     icon(i, size).color(color).a11y_hidden()
 }

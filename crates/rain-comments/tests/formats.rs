@@ -6,7 +6,9 @@ use rain_comments::{
     Autosave, SessionFile, anchor_label, apply, autosave, comments_json, comments_json_string, comments_output, from_difit_json, import,
     ops, post_threads,
 };
-use rain_core::{Anchor, CodeSnapshot, DiffSet, Disposition, FileDiffBuilder, FileStatus, LineKind, RepoInfo, Session, Shared, Side};
+use rain_core::{
+    Anchor, CodeSnapshot, DiffSet, Disposition, FileDiffBuilder, FileStatus, LineKind, RepoInfo, Session, SessionRepo, Shared, Side,
+};
 
 fn fixture(name: &str) -> String {
     let p = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/difit").join(name);
@@ -75,6 +77,140 @@ fn import_dedupes_by_file_side_line_body() {
     assert_eq!(s.threads.len(), 4);
     assert_eq!(s.threads[0].messages[0].body, "Fix this.");
     assert_eq!(s.threads[3].repo, "server");
+}
+
+fn with_repos(ids: &[&str]) -> Session {
+    Session {
+        repos: ids
+            .iter()
+            .map(|id| SessionRepo {
+                id: (*id).into(),
+                ..SessionRepo::default()
+            })
+            .collect(),
+        ..Session::default()
+    }
+}
+
+fn thread_at(path: &str, body: &str) -> String {
+    format!(r#"{{"type":"thread","filePath":"{path}","position":{{"side":"new","line":10}},"body":"{body}"}}"#)
+}
+
+fn reply_at(path: &str, body: &str) -> String {
+    format!(r#"{{"type":"reply","filePath":"{path}","position":{{"side":"new","line":10}},"body":"{body}","author":"claude"}}"#)
+}
+
+#[test]
+fn a_reply_by_file_reaches_a_single_repo_thread_in_every_form() {
+    for stored in ["shop", ""] {
+        let mut s = with_repos(&["shop"]);
+        apply(&mut s, from_difit_json(&thread_at("api/Tips.cs", "Why?")).unwrap(), stored);
+        assert_eq!(
+            (s.threads[0].repo.as_str(), s.threads[0].file_path.as_str()),
+            (stored, "api/Tips.cs")
+        );
+        for (n, (path, repo)) in [("shop/api/Tips.cs", ""), ("api/Tips.cs", "shop"), ("api/Tips.cs", "")]
+            .into_iter()
+            .enumerate()
+        {
+            let r = apply(&mut s, from_difit_json(&reply_at(path, &format!("r{n}"))).unwrap(), repo);
+            assert!(r.warnings.is_empty(), "{path} in {repo:?}, thread in {stored:?}: {:?}", r.warnings);
+            assert!(r.changed);
+            assert_eq!(s.threads[0].messages.len(), n + 2);
+        }
+    }
+}
+
+#[test]
+fn a_reply_by_file_reaches_a_multi_repo_thread_by_prefix_or_repo() {
+    let mut s = with_repos(&["server", "app"]);
+    apply(&mut s, from_difit_json(&thread_at("api/Tips.cs", "Why?")).unwrap(), "server");
+    for (n, (path, repo)) in [
+        ("server/api/Tips.cs", ""),
+        ("api/Tips.cs", "server"),
+        ("server/api/Tips.cs", "server"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let r = apply(&mut s, from_difit_json(&reply_at(path, &format!("r{n}"))).unwrap(), repo);
+        assert!(r.warnings.is_empty(), "{path} in {repo:?}: {:?}", r.warnings);
+        assert_eq!(s.threads[0].messages.len(), n + 2);
+    }
+    let other = apply(&mut s, from_difit_json(&reply_at("api/Tips.cs", "x")).unwrap(), "app");
+    assert_eq!(
+        other.warnings,
+        ["Skipped reply import for api/Tips.cs:new:10 because no matching thread was found."]
+    );
+    let bare = apply(&mut s, from_difit_json(&reply_at("api/Tips.cs", "x")).unwrap(), "");
+    assert_eq!(bare.warnings.len(), 1, "a bare path names no repo among several");
+    let wrong = apply(&mut s, from_difit_json(&reply_at("app/api/Tips.cs", "x")).unwrap(), "");
+    assert_eq!(
+        wrong.warnings,
+        ["Skipped reply import for api/Tips.cs:new:10 because no matching thread was found."]
+    );
+}
+
+#[test]
+fn a_repo_prefixed_thread_lands_in_that_repo_and_dedupes_against_either_form() {
+    let mut s = with_repos(&["shop"]);
+    apply(&mut s, from_difit_json(&thread_at("shop/api/Tips.cs", "Why?")).unwrap(), "");
+    assert_eq!(
+        (s.threads[0].repo.as_str(), s.threads[0].file_path.as_str()),
+        ("shop", "api/Tips.cs")
+    );
+    for (path, repo) in [("shop/api/Tips.cs", ""), ("api/Tips.cs", "shop"), ("api/Tips.cs", "")] {
+        let r = apply(&mut s, from_difit_json(&thread_at(path, "Why?")).unwrap(), repo);
+        assert!(!r.changed, "{path} in {repo:?} is the same thread");
+    }
+    assert_eq!(s.threads.len(), 1);
+
+    let mut bare = with_repos(&["shop"]);
+    apply(&mut bare, from_difit_json(&thread_at("api/Tips.cs", "Why?")).unwrap(), "");
+    assert!(!apply(&mut bare, from_difit_json(&thread_at("shop/api/Tips.cs", "Why?")).unwrap(), "").changed);
+    assert!(!apply(&mut bare, from_difit_json(&thread_at("api/Tips.cs", "Why?")).unwrap(), "shop").changed);
+
+    let mut many = with_repos(&["server", "app"]);
+    apply(&mut many, from_difit_json(&thread_at("server/a.cs", "Why?")).unwrap(), "");
+    assert!(!apply(&mut many, from_difit_json(&thread_at("a.cs", "Why?")).unwrap(), "server").changed);
+    assert!(apply(&mut many, from_difit_json(&thread_at("a.cs", "Why?")).unwrap(), "app").changed);
+    assert!(
+        apply(&mut many, from_difit_json(&thread_at("server/a.cs", "Why?")).unwrap(), "app").changed,
+        "a named repo keeps the path as written"
+    );
+    assert_eq!(
+        (many.threads[2].repo.as_str(), many.threads[2].file_path.as_str()),
+        ("app", "server/a.cs")
+    );
+}
+
+#[test]
+fn a_folder_named_like_the_repo_is_found_as_written_first() {
+    let mut s = with_repos(&["api"]);
+    ops::add_thread(
+        &mut s,
+        "",
+        "api/Tips.cs",
+        Anchor::Line { side: Side::New, line: 10 },
+        "In the api folder.",
+        None,
+        None,
+    );
+    ops::add_thread(
+        &mut s,
+        "",
+        "Tips.cs",
+        Anchor::Line { side: Side::New, line: 10 },
+        "At the root.",
+        None,
+        None,
+    );
+    let r = apply(&mut s, from_difit_json(&reply_at("api/Tips.cs", "ok")).unwrap(), "");
+    assert!(r.warnings.is_empty(), "{:?}", r.warnings);
+    assert_eq!((s.threads[0].messages.len(), s.threads[1].messages.len()), (2, 1));
+    let r = apply(&mut s, from_difit_json(&reply_at("api/api/Tips.cs", "again")).unwrap(), "");
+    assert!(r.warnings.is_empty(), "{:?}", r.warnings);
+    assert_eq!(s.threads[0].messages.len(), 3);
 }
 
 #[test]
@@ -166,7 +302,7 @@ fn span_and_disposition_lines_are_additive() {
         content: "total =".into(),
         ..CodeSnapshot::default()
     };
-    let id = ops::add_thread(&mut s, "server", "src/a.ts", span, "Rename this.", Some("sumit"), Some(snap));
+    let id = ops::add_thread(&mut s, "server", "src/a.ts", span, "Rename this.", Some("reviewer"), Some(snap));
     ops::set_disposition(&mut s, &id, Some(Disposition::Ask));
     let out = comments_output(&s, Some("server"));
     assert!(
@@ -179,6 +315,21 @@ fn span_and_disposition_lines_are_additive() {
     assert_eq!(v["threads"][0]["position"]["line"]["start"], 4);
     assert_eq!(v["threads"][0]["span"]["endCol"], 9);
     assert_eq!(v["threads"][0]["disposition"], "ask");
+}
+
+#[test]
+fn a_repo_filter_reads_back_every_thread_of_a_one_repo_session() {
+    let mut s = with_repos(&["shop"]);
+    apply(&mut s, from_difit_json(&thread_at("a.cs", "made in the window")).unwrap(), "");
+    apply(&mut s, from_difit_json(&thread_at("b.cs", "made with a repo")).unwrap(), "shop");
+    assert_eq!(comments_json(&s, Some("shop"))["threads"].as_array().unwrap().len(), 2);
+    assert!(comments_output(&s, Some("shop")).contains("Total comments: 2"));
+    assert_eq!(comments_output(&s, Some("other")), "");
+
+    let mut many = with_repos(&["server", "app"]);
+    apply(&mut many, from_difit_json(&thread_at("a.cs", "no repo")).unwrap(), "");
+    apply(&mut many, from_difit_json(&thread_at("b.cs", "in server")).unwrap(), "server");
+    assert_eq!(comments_json(&many, Some("server"))["threads"].as_array().unwrap().len(), 1);
 }
 
 #[test]
@@ -317,6 +468,33 @@ fn the_session_file_is_compact_json() {
 }
 
 #[test]
+fn a_thread_waits_on_whoever_did_not_speak_last() {
+    use ops::Owed;
+    let mut s = Session::default();
+    let at = Anchor::Line { side: Side::New, line: 1 };
+    let id = ops::add_thread(&mut s, "", "a", at, "F1 issue: x", Some("claude"), None);
+    assert_eq!(ops::waiting_on_agent(&s.threads[0], ""), None, "the agent's own draft");
+    ops::reply(&mut s, &id, "not like this", None).unwrap();
+    assert_eq!(ops::waiting_on_agent(&s.threads[0], ""), Some(Owed::Reply));
+    assert!(!ops::waiting_on_user(&s.threads[0], ""));
+    ops::reply(&mut s, &id, "Reworked.", Some("claude")).unwrap();
+    assert_eq!(ops::waiting_on_agent(&s.threads[0], ""), None);
+    assert!(ops::waiting_on_user(&s.threads[0], ""));
+
+    ops::reply(&mut s, &id, "@claude why a lock?", None).unwrap();
+    s.threads[0].answer = Some(rain_core::Answer::default());
+    assert_eq!(ops::waiting_on_agent(&s.threads[0], ""), Some(Owed::Question));
+    assert_eq!(ops::claim(&mut s, &id, false), Some(true));
+    assert_eq!(ops::waiting_on_agent(&s.threads[0], ""), Some(Owed::Claimed));
+    ops::reply(&mut s, &id, "To keep the total right.", Some("claude")).unwrap();
+    assert_eq!(ops::waiting_on_agent(&s.threads[0], ""), None, "answered");
+
+    ops::reply(&mut s, &id, "still wrong", None).unwrap();
+    assert!(ops::resolve(&mut s, &id));
+    assert_eq!(ops::waiting_on_agent(&s.threads[0], ""), None, "a settled thread waits on nobody");
+}
+
+#[test]
 fn ops_bump_the_version_only_on_change() {
     let mut s = Session::default();
     let id = ops::add_thread(
@@ -329,9 +507,9 @@ fn ops_bump_the_version_only_on_change() {
         None,
     );
     assert_eq!(s.version, 1);
-    assert!(ops::waiting_on_user(&s.threads[0], "sumit"));
+    assert!(ops::waiting_on_user(&s.threads[0], "reviewer"));
     let m = ops::reply(&mut s, &id, "y", None).unwrap();
-    assert!(!ops::waiting_on_user(&s.threads[0], "sumit"));
+    assert!(!ops::waiting_on_user(&s.threads[0], "reviewer"));
     assert_eq!(s.version, 2);
     assert!(!ops::edit_message(&mut s, &id, &m, "y"));
     assert!(ops::edit_message(&mut s, &id, &m, "z"));

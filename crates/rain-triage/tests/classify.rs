@@ -100,6 +100,103 @@ fn every_group_has_its_reason() {
 }
 
 #[test]
+fn a_file_of_rewrapped_code_is_formatting_only_on_a_reading_not_a_fact() {
+    let file = |path: &str, last: &str| {
+        let mut b = FileDiffBuilder::new(0, path, FileStatus::Modified);
+        b.push_hunk(1, 2, 1, 4, "");
+        b.push_line(LineKind::Removed, 1, 0, "    var order = Orders.Create(customer, items);");
+        b.push_line(LineKind::Added, 0, 1, "    var order = Orders.Create(");
+        b.push_line(LineKind::Added, 0, 2, "        customer,");
+        b.push_line(LineKind::Added, 0, 3, last);
+        b.push_line(LineKind::Context, 2, 4, "    order.Save();");
+        b.finish()
+    };
+    let l = Loaded {
+        files: vec![
+            file("src/Shop/Wrap.cs", "        items);"),
+            file("src/Shop/Edit.cs", "        items, gift);"),
+            file("tools/wrap.py", "        items);"),
+        ],
+        keys: vec!["src/Shop/Wrap.cs".into(), "src/Shop/Edit.cs".into(), "tools/wrap.py".into()],
+        similarity: vec![None; 3],
+    };
+    let t = run(&l);
+    let wrap = item(&t, "src/Shop/Wrap.cs");
+    assert_eq!(
+        (wrap.group, wrap.reason.text.as_str(), wrap.reason.trusted),
+        (Group::FormattingOnly, "formatting-only (re-wrapped)", false)
+    );
+    assert_eq!(item(&t, "src/Shop/Edit.cs").group, Group::Review, "an added argument is a change");
+    assert_eq!(item(&t, "tools/wrap.py").group, Group::Review, "layout is syntax in Python");
+}
+
+#[test]
+fn a_file_of_blocks_moved_elsewhere_is_a_move_on_a_reading_not_a_fact() {
+    let block = [
+        "    public decimal LineTotal(CartLine line)",
+        "    {",
+        "        var gross = line.Quantity * line.UnitPrice;",
+        "        return gross - line.Discount;",
+        "    }",
+    ];
+    let file = |path: &str, kind: LineKind, extra: Option<&str>| {
+        let mut b = FileDiffBuilder::new(0, path, FileStatus::Modified);
+        b.push_hunk(1, 1, 1, 1, "");
+        b.push_line(LineKind::Context, 1, 1, "{");
+        for (k, text) in block.iter().copied().chain(extra).enumerate() {
+            let n = k as u32 + 2;
+            let (old, new) = if kind == LineKind::Removed { (n, 0) } else { (0, n) };
+            b.push_line(kind, old, new, text);
+        }
+        b.finish()
+    };
+    let l = Loaded {
+        files: vec![
+            file("src/Shop/Cart.cs", LineKind::Removed, None),
+            file("src/Shop/CartLines.cs", LineKind::Added, None),
+            file("src/Shop/VoucherRules.cs", LineKind::Removed, None),
+            file("src/Shop/VoucherLines.cs", LineKind::Added, Some("    // rounded per line")),
+        ],
+        keys: ["Cart", "CartLines", "VoucherRules", "VoucherLines"]
+            .map(|n| format!("src/Shop/{n}.cs"))
+            .to_vec(),
+        similarity: vec![None; 4],
+    };
+    let moves = rain_core::moves::detect(&l.files);
+    assert_eq!(moves.moves.len(), 2);
+    let moved: BTreeSet<String> = (0..4)
+        .filter(|&i| moves.only_moves(i, &l.files[i]))
+        .map(|i| l.keys[i].clone())
+        .collect();
+    let t = classify(&Input {
+        files: &l.files,
+        keys: &l.keys,
+        similarity: &l.similarity,
+        moved_only: Some(&moved),
+        ..Input::default()
+    });
+    for key in ["src/Shop/Cart.cs", "src/Shop/CartLines.cs"] {
+        let i = item(&t, key);
+        assert_eq!(
+            (i.group, i.reason.text.as_str(), i.reason.trusted),
+            (Group::Moves, "moved blocks (same lines elsewhere)", false),
+            "{key}"
+        );
+    }
+    let moves_group = t.groups.iter().find(|g| g.group == Group::Moves).unwrap();
+    assert_eq!((moves_group.count, moves_group.trusted), (2, false));
+    let risky = item(&t, "src/Shop/VoucherRules.cs");
+    assert_eq!(risky.group, Group::Must, "a money path is read even when it only moved");
+    assert!(risky.why.as_deref().unwrap_or_default().contains("moved blocks"), "{:?}", risky.why);
+    assert_eq!(item(&t, "src/Shop/VoucherLines.cs").group, Group::Must);
+    assert_eq!(
+        run(&l).items.iter().filter(|i| i.group == Group::Moves).count(),
+        0,
+        "not without the moves"
+    );
+}
+
+#[test]
 fn facts_count_groups_tests_and_tests_turned_off() {
     let t = run(&load(GROUPS));
     let f = &t.facts;
@@ -190,6 +287,7 @@ fn numstat_huge_churn_and_overview_signals() {
         rated: Some(&rated),
         ignored: Some(&ignored),
         round: 1,
+        ..Input::default()
     });
     let get = |k| {
         let i = item(&t, k);

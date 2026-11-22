@@ -152,17 +152,17 @@ fn rewrite_is_outdated_then_addressed_after_an_agent_reply() {
     ops::mark_outdated(&mut s, &set(vec![added("src/a.rs", &["a", "b", "c2", "d", "e"])]));
     let t = ops::thread(&s, &id).unwrap();
     assert_eq!((t.placement(), t.outdated), (AnchorState::Outdated, true));
-    assert!(!ops::addressed_suggested(t) && !ops::waiting_on_user(t, "sumit"));
+    assert!(!ops::addressed_suggested(t) && !ops::waiting_on_user(t, "reviewer"));
 
     ops::reply(&mut s, &id, "Fixed in the next commit.", Some("claude"));
     let t = ops::thread(&s, &id).unwrap();
-    assert!(ops::addressed_suggested(t) && ops::waiting_on_user(t, "sumit"));
+    assert!(ops::addressed_suggested(t) && ops::waiting_on_user(t, "reviewer"));
     assert_eq!(t.state, ThreadState::Open, "a suggestion, never applied by itself");
 
     assert!(ops::confirm_addressed(&mut s, &id));
     let t = ops::thread(&s, &id).unwrap();
     assert_eq!(t.state, ThreadState::Addressed);
-    assert!(!ops::waiting_on_user(t, "sumit"));
+    assert!(!ops::waiting_on_user(t, "reviewer"));
 }
 
 #[test]
@@ -556,8 +556,45 @@ fn imports_snapshot_against_the_loaded_diff_or_stay_on_their_line() {
     assert_eq!(a.status, AnswerStatus::Answered);
     assert_eq!(a.message_id.as_deref(), Some(s.threads[2].messages[1].id.as_str()));
     assert!(
-        ops::waiting_on_user(&s.threads[2], "sumit"),
+        ops::waiting_on_user(&s.threads[2], "reviewer"),
         "an answered question waits on the user"
+    );
+}
+
+#[test]
+fn a_repo_prefixed_import_lands_where_the_diff_has_the_line() {
+    let files = set(vec![added("src/a.rs", &["a", "b", "c"]), added("shop/b.rs", &["x", "y"])]);
+    let excerpt = |_: &str, p: &str, a: &Anchor| files.files.iter().find(|f| f.path == p).and_then(|f| ops::snapshot_at(f, a, p));
+    let mut s = Session {
+        repos: vec![rain_core::SessionRepo {
+            id: "shop".into(),
+            ..rain_core::SessionRepo::default()
+        }],
+        ..Session::default()
+    };
+    let json = r#"[{"type":"thread","filePath":"shop/src/a.rs","position":{"side":"new","line":2},"body":"prefixed"},
+                   {"type":"thread","filePath":"shop/b.rs","position":{"side":"new","line":2},"body":"a folder named like the repo"},
+                   {"type":"thread","filePath":"shop/src/a.rs","position":{"side":"new","line":40},"body":"outside the diff"}]"#;
+    let r = apply_with_excerpts(&mut s, from_difit_json(json).unwrap(), "", &excerpt);
+    assert!(r.warnings.is_empty(), "{:?}", r.warnings);
+    let at: Vec<(&str, &str, Option<&str>)> = s
+        .threads
+        .iter()
+        .map(|t| {
+            (
+                t.repo.as_str(),
+                t.file_path.as_str(),
+                t.code_snapshot.as_ref().map(|c| c.content.as_str()),
+            )
+        })
+        .collect();
+    assert_eq!(
+        at,
+        [
+            ("shop", "src/a.rs", Some("b")),
+            ("", "shop/b.rs", Some("y")),
+            ("shop", "src/a.rs", None)
+        ]
     );
 }
 
@@ -598,7 +635,7 @@ fn states_keep_history_and_leave_default_readback() {
     assert!(ops::resolve(&mut s, &id));
     assert!(!ops::resolve(&mut s, &id));
     assert_eq!(s.threads.len(), 2, "resolve never deletes");
-    assert!(!ops::waiting_on_user(&s.threads[0], "sumit"));
+    assert!(!ops::waiting_on_user(&s.threads[0], "reviewer"));
     assert!(!rain_comments::comments_json_string(&s, None).contains(&id));
     assert!(rain_comments::comments_json_string_with(&s, None, true).contains(&id));
     assert!(!rain_comments::comments_output(&s, None).contains("L1"));
@@ -615,13 +652,13 @@ fn states_keep_history_and_leave_default_readback() {
     let t = ops::thread(&s, &other).unwrap();
     assert_eq!(t.state_sha.as_deref(), Some("abc123"));
     assert!(
-        ops::waiting_on_user(t, "sumit"),
+        ops::waiting_on_user(t, "reviewer"),
         "the agent's addressed waits for the user's confirm"
     );
     assert!(ops::confirm_addressed(&mut s, &other));
     let t = ops::thread(&s, &other).unwrap();
     assert_eq!(t.state_sha.as_deref(), Some("abc123"));
-    assert!(!ops::waiting_on_user(t, "sumit"));
+    assert!(!ops::waiting_on_user(t, "reviewer"));
 }
 
 #[test]

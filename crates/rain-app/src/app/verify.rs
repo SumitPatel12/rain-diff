@@ -123,7 +123,6 @@ impl App {
         self.toggle_verify_card();
     }
 
-    /// Ticks or unticks a Verify item, in the session.
     pub fn toggle_verified(&mut self, item: &str) {
         let item = item.to_owned();
         self.mutate(|s| {

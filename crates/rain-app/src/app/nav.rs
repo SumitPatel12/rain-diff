@@ -26,7 +26,8 @@ impl App {
         self.leave_filter_for(g);
         self.single_on(g);
         if let Some(l) = self.local(g) {
-            let big = self.active().files()[l].lines.len() > LARGE_FILE_LINES;
+            let f = &self.active().files()[l];
+            let big = f.lines.len() > LARGE_FILE_LINES || super::folds::wide(f);
             if self.active().collapsed(l) && !big {
                 self.active_mut().set_collapsed(l, false);
             }
@@ -55,6 +56,24 @@ impl App {
         }
         let key = self.keys[g].clone();
         self.tree.reveal(&key, tx);
+    }
+
+    /// Goes to where the moved block under the cursor went to, or came from.
+    pub fn other_side_of_move(&mut self, tx: &mut Tx) {
+        match self.active().cursor() {
+            Some((l, at)) => self.goto_other_side_of_move(l, at, tx),
+            None => self.status = "Put the cursor on a moved line first".into(),
+        }
+    }
+
+    /// [`App::other_side_of_move`] for line `at` of the active diff's file `l`.
+    pub(crate) fn goto_other_side_of_move(&mut self, l: usize, at: LineRef, tx: &mut Tx) {
+        let Some((g, to)) = self.active().move_target(l, at) else {
+            self.status = "This line is not part of a moved block".into();
+            return;
+        };
+        self.status = format!("The other side of the move: {}:{}", self.keys[g], to.line);
+        self.goto_line(g, to, tx);
     }
 
     pub fn goto_key(&mut self, key: &str, tx: &mut Tx) {
@@ -183,11 +202,8 @@ impl App {
         }
         self.tree.set_viewed_many(keys.iter().map(|k| (k.as_str(), true)));
         self.persist_viewed_keys(&keys);
-        for k in &keys {
-            if let Some(g) = self.index_of(k) {
-                self.fold_viewed(g, true);
-            }
-        }
+        let files: Vec<usize> = keys.iter().filter_map(|k| self.index_of(k)).collect();
+        self.fold_viewed_many(&files, true);
         self.status = format!("Marked {} file{} viewed", keys.len(), if keys.len() == 1 { "" } else { "s" });
     }
 }

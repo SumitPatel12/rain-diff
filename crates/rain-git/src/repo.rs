@@ -1,6 +1,9 @@
+use std::collections::hash_map::DefaultHasher;
 use std::collections::{BTreeSet, HashSet};
+use std::hash::{Hash, Hasher};
 use std::io::{BufRead, BufReader, Read};
 use std::path::{Component, Path, PathBuf};
+use std::time::SystemTime;
 
 use rain_core::{FileDiff, FileDiffBuilder, FileStatus, LineKind, RepoLaunch, Side};
 use sha2::{Digest, Sha256};
@@ -10,7 +13,6 @@ use crate::cmd::{self, Streaming};
 use crate::generated::{self, HEADER_BYTES, HEADER_LINES};
 use crate::parse::{self, Patch};
 
-/// What the diff's new side is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TargetKind {
     Commit,
@@ -90,6 +92,8 @@ impl Default for DiffOpts {
 const PARALLEL_MIN_FILES: usize = 16;
 /// Keeps each process's pathspec well under Windows' 32 767-character command line.
 const MAX_PATHSPEC_BYTES: usize = 24 * 1024;
+/// Renames only, at git's default similarity, whatever `diff.renames` says.
+const FIND_RENAMES: &str = "--find-renames=50%";
 
 fn check_repo(repo: &Path) -> Result<(), GitError> {
     match cmd::run(repo, &["rev-parse", "--git-dir"]) {
@@ -161,16 +165,7 @@ pub fn resolve(repo: &Path, launch: &RepoLaunch) -> Result<Resolved, GitError> {
 }
 
 fn diff_args<'a>(r: &'a Resolved, extra: &[&'a str], ignore_whitespace: bool) -> Vec<&'a str> {
-    let mut args = vec![
-        "diff",
-        "--no-ext-diff",
-        "--no-textconv",
-        "--color=never",
-        "--no-relative",
-        "--submodule=short",
-        "--src-prefix=a/",
-        "--dst-prefix=b/",
-    ];
+    let mut args = cmd::DIFF.to_vec();
     args.extend_from_slice(extra);
     if ignore_whitespace {
         args.push("-w");
@@ -229,7 +224,7 @@ pub fn diff_patch(repo: &Path, repo_index: u16, r: &Resolved, opts: &DiffOpts) -
 fn diff_stream(repo: &Path, repo_index: u16, r: &Resolved, opts: &DiffOpts, paths: &[String]) -> Result<Patch, GitError> {
     let unified = format!("-U{}", opts.context);
     let mut args = vec!["--literal-pathspecs"];
-    args.extend(diff_args(r, &["--find-renames", &unified], opts.ignore_whitespace));
+    args.extend(diff_args(r, &[FIND_RENAMES, &unified], opts.ignore_whitespace));
     args.extend(paths.iter().map(String::as_str));
     let (proc, stdout) = Streaming::spawn(repo, &args, None)?;
     let patch = parse::parse_reader(BufReader::with_capacity(1 << 18, stdout), repo_index)?;
@@ -247,7 +242,7 @@ struct Listed {
 
 /// Every changed path, whitespace included, or `None` when a path is one git would quote.
 fn name_status(repo: &Path, r: &Resolved) -> Result<Option<Vec<Listed>>, GitError> {
-    let args = diff_args(r, &["--name-status", "-z", "--find-renames"], false);
+    let args = diff_args(r, &["--name-status", "-z", FIND_RENAMES], false);
     let out = cmd::run(repo, &args)?;
     let mut entries = Vec::new();
     let mut tokens = out.split(|&b| b == 0).filter(|t| !t.is_empty());
@@ -372,6 +367,48 @@ pub fn target_moved(repo: &Path, target: &str, loaded: &str, head_at_load: &str)
             .unwrap_or_else(|| "HEAD".to_owned())
     };
     Ok(Some(Moved { from, to, commits, branch }))
+}
+
+/// A mark of what `r`'s diff would show now, for noticing edits under a working-tree or index
+/// target; `None` for a commit range. Working-tree files are told apart by size and modified
+/// time, so no content is read.
+pub fn edit_mark(repo: &Path, r: &Resolved, include_untracked: bool) -> Result<Option<u64>, GitError> {
+    if r.kind == TargetKind::Commit {
+        return Ok(None);
+    }
+    let mut args = vec!["diff", "--raw", "-z", "--no-abbrev", "--no-renames", "--no-ext-diff"];
+    args.extend(r.range_args());
+    args.push("--");
+    let out = cmd::run(repo, &args)?;
+    let mut h = DefaultHasher::new();
+    let mut tokens = out.split(|&b| b == 0);
+    while let (Some(meta), Some(path)) = (tokens.next(), tokens.next()) {
+        if r.working_tree {
+            // The new side's id is the index's: staging changes it and the diff stays the same.
+            for (i, field) in meta.split(|&b| b == b' ').enumerate() {
+                if i != 3 {
+                    field.hash(&mut h);
+                }
+            }
+            file_stamp(repo, path).hash(&mut h);
+        } else {
+            meta.hash(&mut h);
+        }
+        path.hash(&mut h);
+    }
+    if include_untracked && r.working_tree {
+        let out = cmd::run(repo, &["ls-files", "--others", "--exclude-standard", "-z"])?;
+        for path in out.split(|&b| b == 0).filter(|p| !p.is_empty()) {
+            path.hash(&mut h);
+            file_stamp(repo, path).hash(&mut h);
+        }
+    }
+    Ok(Some(h.finish()))
+}
+
+fn file_stamp(repo: &Path, path: &[u8]) -> Option<(u64, Option<SystemTime>)> {
+    let m = std::fs::symlink_metadata(repo.join(String::from_utf8_lossy(path).as_ref())).ok()?;
+    Some((m.len(), m.modified().ok()))
 }
 
 /// The changed paths split into contiguous groups (a rename's two paths kept together, so each
@@ -741,14 +778,9 @@ pub fn side_commit(r: &Resolved, side: Side) -> Option<&str> {
 pub fn line_map(repo: &Path, r: &Resolved, side: Side, from: &str, path: &str) -> Result<Vec<[u32; 4]>, GitError> {
     check_commit_id(from)?;
     worktree_path(repo, path)?;
-    let mut args = vec![
-        "--literal-pathspecs",
-        "diff",
-        "--no-ext-diff",
-        "--no-textconv",
-        "--color=never",
-        "-U0",
-    ];
+    let mut args = vec!["--literal-pathspecs"];
+    args.extend_from_slice(cmd::DIFF);
+    args.extend(["--no-renames", "-U0"]);
     args.extend(line_map_range(r, side, from));
     args.extend(["--", path]);
     let out = cmd::run(repo, &args)?;
@@ -783,17 +815,9 @@ pub fn line_maps(repo: &Path, r: &Resolved, side: Side, from: &str, paths: &[&st
         batches.push(batch);
     }
     for batch in batches {
-        let mut args = vec![
-            "--literal-pathspecs",
-            "diff",
-            "--no-ext-diff",
-            "--no-textconv",
-            "--color=never",
-            "--no-renames",
-            "--src-prefix=a/",
-            "--dst-prefix=b/",
-            "-U0",
-        ];
+        let mut args = vec!["--literal-pathspecs"];
+        args.extend_from_slice(cmd::DIFF);
+        args.extend(["--no-renames", "-U0"]);
         args.extend(line_map_range(r, side, from));
         args.push("--");
         args.extend(batch.iter().copied());

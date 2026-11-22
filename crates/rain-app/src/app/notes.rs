@@ -1,15 +1,9 @@
 //! Notes beside the diff: agent story, file and line notes from the session, plus the overview's
 //! intent notes mapped onto the same model at render time (never stored).
 
-use rain_core::{Anchor, Note, NoteKind, Session};
+use rain_core::{Anchor, Note, NoteKind};
 
 use super::App;
-
-/// Whether `fresh` holds different notes from `old`; [`App::sync_session`] calls
-/// [`App::on_notes_changed`] when it does.
-pub(crate) fn notes_changed(old: &Session, fresh: &Session) -> bool {
-    old.notes_version != fresh.notes_version || old.notes != fresh.notes
-}
 
 /// The `expanded` entry of a note's "Show all" state; prefixed so it never meets a thread id.
 pub(crate) fn expanded_key(id: &str) -> String {
@@ -76,7 +70,6 @@ impl App {
         }
     }
 
-    /// Whether note `id` is open in the Intent window.
     pub fn note_popped(&self, id: &str) -> bool {
         self.popped_note.as_deref() == Some(id)
     }

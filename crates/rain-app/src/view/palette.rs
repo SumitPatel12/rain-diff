@@ -6,7 +6,7 @@ use rune::{El, Key, KeyEvent, ScrollSpec, Tx, col, el, row, text};
 use rune_kit::{Kit, TextInput};
 
 use super::icons;
-use super::ui::sr;
+use super::ui::{matched, sr};
 use crate::app::App;
 use crate::palette;
 use crate::theme::{TYPE, radius};
@@ -56,6 +56,7 @@ fn group_title(kind: &str) -> String {
 pub(super) fn palette_overlay(s: &App, k: &Kit) -> El {
     let (surf, r) = sr(k);
     let rows = palette::filtered(s, &s.palette.edit.text);
+    let marks = palette::marks(s, &s.palette.edit.text, &rows);
     let sel = s.palette.sel.min(rows.len().saturating_sub(1));
     let mut list = col().w_full().px(6.0).pb(6.0);
     let mut height = 0.0;
@@ -89,7 +90,7 @@ pub(super) fn palette_overlay(s: &App, k: &Kit) -> El {
                 s.palette.sel = i;
                 palette::run_selected(s, tx);
             })
-            .child(text(e.label.clone()).font(TYPE.ui).color(k.c.text_base).shrink().truncate());
+            .child(matched(&e.label, &marks[i], k).shrink().truncate());
         if on {
             line = line.child(
                 row()

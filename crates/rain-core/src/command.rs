@@ -14,6 +14,8 @@ pub enum Command {
     Back,
     Forward,
     NextWaiting,
+    /// To where the block under the cursor moved to, or from.
+    OtherSideOfMove,
     ViewedAndNext,
     ToggleViewed,
     MarkGroupViewed,
@@ -34,6 +36,7 @@ pub enum Command {
     Picker,
     Palette,
     Find,
+    ToggleFindFuzzy,
     Comment,
     Ask,
     Reply,
@@ -59,8 +62,6 @@ pub enum Command {
     ToggleDensity,
     DiagramPlayground,
     Escape,
-    /// Round-2 commands with no chord and no place in [`Command::ALL`]; the round-2 shell still
-    /// dispatches them until the round-3 shell replaces it.
     NextChapter,
     PrevChapter,
     ToggleChaptersQueue,
@@ -70,7 +71,7 @@ pub enum Command {
 }
 
 impl Command {
-    pub const ALL: [Command; 56] = [
+    pub const ALL: [Command; 58] = [
         Command::CursorDown,
         Command::CursorUp,
         Command::NextHunk,
@@ -82,6 +83,7 @@ impl Command {
         Command::Back,
         Command::Forward,
         Command::NextWaiting,
+        Command::OtherSideOfMove,
         Command::ViewedAndNext,
         Command::ToggleViewed,
         Command::MarkGroupViewed,
@@ -102,6 +104,7 @@ impl Command {
         Command::Picker,
         Command::Palette,
         Command::Find,
+        Command::ToggleFindFuzzy,
         Command::Comment,
         Command::Ask,
         Command::Reply,
@@ -130,9 +133,11 @@ impl Command {
     ];
 
     /// No key in any profile until the user binds one.
-    pub const PALETTE_ONLY: [Command; 7] = [
+    pub const PALETTE_ONLY: [Command; 9] = [
+        Command::OtherSideOfMove,
         Command::MarkAllViewed,
         Command::LayoutAuto,
+        Command::ToggleFindFuzzy,
         Command::CopyAll,
         Command::ToggleTheme,
         Command::GoOverview,
@@ -166,6 +171,7 @@ impl Command {
             Command::Back => "Back",
             Command::Forward => "Forward",
             Command::NextWaiting => "Next waiting on you",
+            Command::OtherSideOfMove => "Go to the other side of a moved block",
             Command::ViewedAndNext => "Mark viewed and go to next",
             Command::ToggleViewed => "Toggle viewed",
             Command::MarkGroupViewed => "Accept this group",
@@ -186,6 +192,7 @@ impl Command {
             Command::Picker => "Go to file",
             Command::Palette => "Command palette",
             Command::Find => "Find",
+            Command::ToggleFindFuzzy => "Toggle fuzzy find",
             Command::Comment => "Comment",
             Command::Ask => "Ask a question",
             Command::Reply => "Reply",
@@ -220,8 +227,8 @@ impl Command {
         }
     }
 
-    /// The first chord bound to this command in the active keymap, if any.
-    pub fn chord(&self) -> Option<Chord> {
+    /// The first shortcut bound to this command in the active keymap, if any.
+    pub fn chord(&self) -> Option<crate::keymap::Shortcut> {
         crate::keymap::with_active(|k| k.chord(*self))
     }
 
@@ -244,6 +251,7 @@ impl Command {
             Command::Back => "back",
             Command::Forward => "forward",
             Command::NextWaiting => "next-waiting",
+            Command::OtherSideOfMove => "other-side-of-move",
             Command::ViewedAndNext => "viewed-and-next",
             Command::ToggleViewed => "toggle-viewed",
             Command::MarkGroupViewed => "accept-group",
@@ -264,6 +272,7 @@ impl Command {
             Command::Picker => "go-to-file",
             Command::Palette => "palette",
             Command::Find => "find",
+            Command::ToggleFindFuzzy => "toggle-fuzzy-find",
             Command::Comment => "comment",
             Command::Ask => "ask",
             Command::Reply => "reply",
@@ -431,7 +440,7 @@ mod tests {
             ("Y", false, true, Command::CopyLocation),
         ] {
             assert_eq!(lookup(key, ctrl, shift), Some(cmd), "{key}");
-            assert_eq!(cmd.chord().map(|c| (c.ctrl, c.shift)), Some((ctrl, shift)), "{cmd:?}");
+            assert_eq!(cmd.chord().map(|c| (c.first.ctrl, c.first.shift)), Some((ctrl, shift)), "{cmd:?}");
         }
         assert_eq!(Command::ToggleViewed.chord().unwrap().display(), "Shift+Space");
         assert_eq!(Command::ToggleDensity.chord().unwrap().display(), "Ctrl+Shift+D");

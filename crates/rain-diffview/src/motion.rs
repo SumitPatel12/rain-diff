@@ -4,7 +4,6 @@
 
 use unicode_segmentation::GraphemeCursor;
 
-/// The lines a motion may walk, in order.
 pub(crate) trait Lines {
     type Id: Copy;
     fn text(&self, l: Self::Id) -> &str;

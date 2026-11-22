@@ -121,7 +121,7 @@ The window is the list on the left and the reader on the right.
 
 | Path | What |
 |---|---|
-| `crates/rain-core` | data model: diff arena, comments/threads, session, overview, tags, launch, keymap |
+| `crates/rain-core` | data model: diff arena, comments/threads, session, overview, tags, launch, keymap, fuzzy matching (neo_frizbee, MIT; scoring adapted from fff, MIT) |
 | `crates/rain-git` | git CLI driver + streaming unified-diff parser |
 | `crates/rain-diffview` | virtual diff view (vendored from rune-kit, MIT; see `VENDORED.md`) |
 | `crates/rain-syntax` | syntect + two-face highlighting |
@@ -147,6 +147,8 @@ cargo xtask fixtures --tier s   # regenerate fixtures/s.patch (also: m, l, xl)
 cargo xtask icon                # rebuild assets/icon/rain.ico from the SVGs
 ```
 
+Why Rain is built the way it is, each choice pinned by a test: [docs/decisions.md](docs/decisions.md).
+
 Fixture tiers write a seeded scratch repo to `fixtures/gen/<tier>/` (ignored); `s` and `m` are also copied to
 `fixtures/s.patch` and `fixtures/m.patch`. The sample code in the fixtures is synthetic.
 
@@ -169,3 +171,10 @@ license, Copyright (c) 2025 Material Extensions; see
 [crates/rain-tree/assets/file-icons/LICENSE](crates/rain-tree/assets/file-icons/LICENSE). The default file and
 folder icons are drawn from the theme's generator paths, and the Angular file icons are its recoloured clones of
 `angular.svg`, as the theme builds them.
+
+Fuzzy matching (`crates/rain-core/src/fuzzy.rs`) is built on the
+[neo_frizbee](https://crates.io/crates/neo_frizbee) crate (0.13.3), MIT, Copyright (c) 2024 Liam Dyer; see
+[crates/rain-core/LICENSE-frizbee](crates/rain-core/LICENSE-frizbee). The scoring over it (the file name bonus,
+the rules for a line of code) is adapted from [fff](https://github.com/dmtrKovalenko/fff) (commit `9a7b1c8`,
+`crates/fff-core/src/score.rs` and `grep/fuzzy_grep.rs`), MIT, Copyright (c) 2025 Dmitriy Kovalenko; see
+[crates/rain-core/LICENSE-fff](crates/rain-core/LICENSE-fff).

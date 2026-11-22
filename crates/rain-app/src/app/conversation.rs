@@ -64,7 +64,6 @@ fn is_agent(author: Option<&str>) -> bool {
     author.map(str::trim).is_some_and(|a| !a.is_empty() && !a.eq_ignore_ascii_case(ME))
 }
 
-/// Whether the agent opened the thread.
 pub fn by_agent(t: &Thread) -> bool {
     t.messages.first().is_some_and(|m| is_agent(m.author.as_deref()))
 }
@@ -89,7 +88,6 @@ pub fn section_of(t: &Thread) -> Section {
     Section::Yours
 }
 
-/// An open question still waiting for its answer.
 pub fn open_question(t: &Thread) -> bool {
     t.is_open() && t.kind() == ThreadKind::Question && section_of(t) == Section::Yours
 }
@@ -168,7 +166,6 @@ pub struct ConversationState {
     pub closing: Option<String>,
     /// Threads whose latest comment shows whole rather than as one line.
     pub expanded: BTreeSet<String>,
-    /// The agent's presence as of the last poll.
     pub presence: Presence,
     pub toasts: Vec<AgentToast>,
     /// Per thread, what the last poll saw; `None` until the first load.
@@ -339,7 +336,6 @@ impl App {
         }
     }
 
-    /// Shows a thread's latest comment whole, or back to its one line.
     pub fn toggle_comment_expanded(&mut self, id: &str) {
         let open = &mut self.conversation.expanded;
         if !open.remove(id) {

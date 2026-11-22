@@ -50,12 +50,14 @@ impl App {
     /// Rebuilds the filter subset from the tree's shown files; true when it changed.
     fn follow_tree_filter(&mut self) -> bool {
         if self.tree.filter.is_empty() {
+            self.keep_filter_folds();
             return self.filter.subset.take().is_some();
         }
         let files: Vec<usize> = (0..self.keys.len()).filter(|&g| self.tree.is_shown(&self.keys[g])).collect();
         if self.filter.subset.as_ref().is_some_and(|s| s.files == files) {
             return false;
         }
+        self.keep_filter_folds();
         self.filter.subset = Some(self.filter_subset(files));
         self.rebuild_annotations();
         true
@@ -77,6 +79,18 @@ impl App {
         sub
     }
 
+    /// Gives the full diff the folds the filtered one has now, before it goes: a file opened or
+    /// folded under a filter stays so under the next filter and without one.
+    fn keep_filter_folds(&mut self) {
+        let Some(sub) = self.filter.subset.as_ref().filter(|_| self.review.lens.is_none()) else {
+            return;
+        };
+        for folded in [true, false] {
+            let files = sub.files.iter().enumerate().filter(|&(l, _)| sub.diff.collapsed(l) == folded);
+            self.diff.set_collapsed_many(files.map(|(_, &g)| g), folded);
+        }
+    }
+
     /// The reader's file and cursor line, when the cursor is on it.
     fn reading_place(&self) -> Option<(usize, Option<rain_diffview::LineRef>)> {
         let g = self.current()?;
@@ -96,6 +110,7 @@ impl App {
         }
         let keep = self.reading_place();
         self.tree.apply(&TreeFilter::default());
+        self.keep_filter_folds();
         self.filter.subset = None;
         if let Some((g, line)) = keep {
             let key = self.keys[g].clone();
@@ -114,6 +129,7 @@ impl App {
             return;
         }
         self.tree.apply(&TreeFilter::default());
+        self.keep_filter_folds();
         self.filter.subset = None;
         self.status = format!("Filter cleared to show {}", self.keys[g]);
     }

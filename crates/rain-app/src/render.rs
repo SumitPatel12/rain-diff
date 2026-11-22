@@ -115,6 +115,9 @@ mod tests {
         let path = crate::tests::workspace("fixtures/overview/sample-overview-schema.json");
         let loaded = rain_overview::load(&path).unwrap();
         let out = crate::tests::temp_dir();
+        // Drawing with the installed fonts would otherwise change what every other test measures with.
+        let (_, (sans, mono)) = crate::fonts();
+        let _fonts = rune::text::with_families(sans, mono);
         let written = render_overview(&loaded, &out, (800, 500)).unwrap();
         let drawable = loaded
             .targets

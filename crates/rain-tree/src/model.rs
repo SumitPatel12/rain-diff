@@ -7,7 +7,6 @@ use rune_kit::{TreeModel, natural_cmp};
 /// The element key of the tree's root, which is also the scope [`TreeState::reveal`] scrolls in.
 pub const TREE_KEY: &str = "rain-tree";
 
-/// What a node of the tree is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NodeKind {
     /// A repository root, by its index in the diff's repos.
@@ -30,7 +29,6 @@ impl Node {
     }
 }
 
-/// One changed file as the tree shows it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FileEntry {
     /// `<repoId>/<path>`: the tree node id and the key every callback reports.

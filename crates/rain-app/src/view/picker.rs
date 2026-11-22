@@ -5,7 +5,7 @@ use rune::{Cursor, Drag, El, Key, KeyEvent, ScrollSpec, Tx, col, el, row, text};
 use rune_kit::{Kit, TextInput};
 
 use super::icons;
-use super::ui::{group_tag, sr};
+use super::ui::{group_tag, matched, sr};
 use crate::app::App;
 use crate::app::picker::{PICKER_TOP, Target};
 use crate::theme::{TYPE, radius};
@@ -67,10 +67,13 @@ fn resize_grip(key: &'static str, label: &'static str, cursor: Cursor, x: bool, 
 /// right, and the keys at its foot.
 pub(super) fn picker(s: &App, k: &Kit) -> Option<El> {
     let (surf, r) = sr(k);
-    let rows = s.picker_rows();
+    let mut rows = s.picker_rows();
+    let marks = s.picker_marks();
+    let folder_marks = s.picker_folder_marks();
+    let previous = s.picker_leads_with_previous();
     let sel = s.picker.sel.min(rows.len().saturating_sub(1));
     let mut list = col().key("picker-rows").w_full().px(6.0).py(6.0);
-    for (i, e) in rows.iter().enumerate() {
+    for (i, e) in rows.iter_mut().enumerate() {
         let mut line = row()
             .key(format!("pick-{i}"))
             .role("option")
@@ -98,15 +101,29 @@ pub(super) fn picker(s: &App, k: &Kit) -> Option<El> {
                 Target::File(g) => s.file_icons.file(s.keys[g].rsplit('/').next().unwrap_or_default(), 14.0),
                 _ => icons::draw(glyph, 14.0, k.c.text_muted),
             })
-            .child(text(e.label.clone()).font(TYPE.ui).color(k.c.text_base).truncate().shrink());
+            .child(matched(&e.label, marks.get(i).map_or(&[], Vec::as_slice), k).truncate().shrink());
         if let Target::File(g) = e.target {
             let f = &s.diff.files()[g];
             let viewed = s.is_viewed(g);
+            // The folder takes the room the name leaves, so it is the one cut, at its far end.
+            line = line.child(if e.detail.is_empty() {
+                el().grow(1.0).a11y_hidden()
+            } else {
+                matched(std::mem::take(&mut e.detail), folder_marks.get(i).map_or(&[], Vec::as_slice), k)
+                    .font(TYPE.small)
+                    .color(k.c.text_muted)
+                    .truncate_head()
+                    .w(0.0)
+                    .grow(1.0)
+                    .min_w(0.0)
+            });
+            if i == 0 && previous {
+                line = line.child(text("Previous").font(TYPE.micro).color(k.c.text_faint));
+            }
             line = line.child(group_tag(s.group_of(g), k));
             line = line
                 .child(text(format!("+{}", f.additions)).font(TYPE.micro_mono).color(k.c.success.fg))
                 .child(text(format!("−{}", f.deletions)).font(TYPE.micro_mono).color(k.c.danger.fg))
-                .child(el().grow(1.0).a11y_hidden())
                 .child(if viewed {
                     icons::draw(&icons::CHECK, 14.0, r.accent)
                 } else {
@@ -317,7 +334,7 @@ fn preview(s: &App, t: &Target, width: f32, k: &Kit) -> El {
                 .child(n(l.new))
                 .child(text(sign).font(crate::CODE).color(ink).w(18.0))
                 .child(
-                    text(f.line_text(i as u32).replace('\t', "    "))
+                    text(rain_diffview::drawn_part(f.line_text(i as u32)).replace('\t', "    "))
                         .font(crate::CODE)
                         .color(k.c.text_base)
                         .single_line(),

@@ -215,8 +215,92 @@ pub struct Session {
     pub verify: crate::verify::VerifyList,
 }
 
+/// What [`Session::copy_from`] found different.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Copied {
+    pub threads: bool,
+    pub drafts: bool,
+    pub notes: bool,
+}
+
+fn copy<T: Clone + PartialEq>(to: &mut T, from: &T) -> bool {
+    let changed = to != from;
+    if changed {
+        to.clone_from(from);
+    }
+    changed
+}
+
+/// Makes `to` equal `from`, cloning only the elements that differ.
+fn copy_each<T: Clone + PartialEq>(to: &mut Vec<T>, from: &[T]) -> bool {
+    let mut changed = to.len() != from.len();
+    to.truncate(from.len());
+    for (a, b) in to.iter_mut().zip(from) {
+        changed |= copy(a, b);
+    }
+    let have = to.len();
+    to.extend_from_slice(&from[have..]);
+    changed
+}
+
 impl Session {
-    /// Records a change to the brief.
+    /// Makes this session equal `from`, copying only the parts that differ, so a reader's copy
+    /// follows a change at the cost of that change. The overview is taken to change only with
+    /// `overview_version`.
+    pub fn copy_from(&mut self, from: &Session) -> Copied {
+        let Session {
+            id,
+            repos,
+            threads,
+            viewed,
+            drafts,
+            overview,
+            self_repo,
+            links,
+            overview_version,
+            version,
+            comments_version,
+            notes,
+            notes_version,
+            brief,
+            brief_version,
+            rounds,
+            place,
+            accepted,
+            ui,
+            presence,
+            verified,
+            verify,
+        } = from;
+        if self.overview_version != *overview_version || self.overview.is_some() != overview.is_some() {
+            self.overview.clone_from(overview);
+        }
+        copy(&mut self.id, id);
+        copy_each(&mut self.repos, repos);
+        copy_each(&mut self.viewed, viewed);
+        copy(&mut self.self_repo, self_repo);
+        copy(&mut self.links, links);
+        copy(&mut self.brief, brief);
+        copy_each(&mut self.rounds, rounds);
+        copy(&mut self.place, place);
+        copy_each(&mut self.accepted, accepted);
+        copy(&mut self.ui, ui);
+        copy(&mut self.presence, presence);
+        copy_each(&mut self.verified, verified);
+        copy(&mut self.verify, verify);
+        let notes_changed = copy_each(&mut self.notes, notes) | (self.notes_version != *notes_version);
+        self.overview_version = *overview_version;
+        self.version = *version;
+        self.comments_version = *comments_version;
+        self.brief_version = *brief_version;
+        self.notes_version = *notes_version;
+        Copied {
+            threads: copy_each(&mut self.threads, threads),
+            drafts: copy_each(&mut self.drafts, drafts),
+            notes: notes_changed,
+        }
+    }
+
     pub fn bump_brief(&mut self) {
         self.version += 1;
         self.brief_version += 1;
@@ -227,7 +311,6 @@ impl Session {
         self.rounds.last().map_or(1, |r| r.n + 1)
     }
 
-    /// Records a change to the threads.
     pub fn bump_comments(&mut self) {
         self.version += 1;
         self.comments_version += 1;
@@ -262,7 +345,6 @@ pub enum UiRequest {
         caption: Option<String>,
         step: Option<(u32, u32)>,
     },
-    /// Bring the window to the front.
     Focus,
 }
 
@@ -620,6 +702,82 @@ mod tests {
         shared.lock().version += 1;
         shared.notify_waiters();
         assert_eq!(waiter.join().unwrap(), (4, true));
+    }
+
+    fn thread(id: &str) -> Thread {
+        Thread {
+            id: id.into(),
+            file_path: "server/a.cs".into(),
+            ..Thread::default()
+        }
+    }
+
+    fn viewed(path: &str) -> ViewedRecord {
+        ViewedRecord {
+            file_path: path.into(),
+            ..ViewedRecord::default()
+        }
+    }
+
+    #[test]
+    fn copy_from_copies_only_what_differs_and_says_what_did() {
+        let mut shared = Session {
+            id: "ACME-1".into(),
+            threads: vec![thread("t1"), thread("t2")],
+            viewed: vec![viewed("server/a.cs")],
+            ..Session::default()
+        };
+        let mut mirror = Session::default();
+        let first = mirror.copy_from(&shared);
+        assert_eq!(mirror, shared);
+        assert!(first.threads && !first.drafts && !first.notes);
+
+        let kept = (mirror.threads[1].id.as_ptr(), mirror.viewed[0].file_path.as_ptr());
+        shared.viewed.push(viewed("server/b.cs"));
+        shared.version += 1;
+        assert_eq!(
+            mirror.copy_from(&shared),
+            Copied::default(),
+            "a viewed mark is no thread, draft or note change"
+        );
+        assert_eq!(mirror, shared);
+        assert_eq!(
+            (mirror.threads[1].id.as_ptr(), mirror.viewed[0].file_path.as_ptr()),
+            kept,
+            "what did not change was not copied again"
+        );
+
+        shared.threads[0].file_path = "server/c.cs".into();
+        shared.bump_comments();
+        assert!(mirror.copy_from(&shared).threads);
+        assert_eq!(mirror, shared);
+        assert_eq!(mirror.threads[1].id.as_ptr(), kept.0, "nor the thread beside the one that did");
+
+        shared.threads.remove(0);
+        shared.viewed.clear();
+        shared.drafts.push(Draft::default());
+        shared.notes.push(Note::default());
+        shared.bump_notes();
+        let c = mirror.copy_from(&shared);
+        assert!(c.threads && c.drafts && c.notes);
+        assert_eq!(mirror, shared);
+    }
+
+    #[test]
+    fn copy_from_takes_the_overview_with_its_version() {
+        let doc = include_str!("../../../fixtures/overview/sample-overview-schema.json");
+        let mut shared = Session {
+            overview: Some(serde_json::from_str(doc).unwrap()),
+            overview_version: 1,
+            ..Session::default()
+        };
+        let mut mirror = Session::default();
+        mirror.copy_from(&shared);
+        assert_eq!(mirror, shared);
+        shared.overview = None;
+        shared.overview_version = 2;
+        mirror.copy_from(&shared);
+        assert_eq!(mirror, shared);
     }
 
     #[test]

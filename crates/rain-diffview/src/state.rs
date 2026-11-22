@@ -1,9 +1,6 @@
 //! What a diff view shows and where: the rows files, hunks and expanded ranges make, the line
 //! selection, the text-span selection, the line cursor, annotations, the side text selection
 //! copies, and the reading position.
-//!
-//! Sized for a million rows: a row is 16 bytes, keys are formatted on demand, and every lookup
-//! from a line to its row is arithmetic or a binary search over the rows of one hunk.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -13,11 +10,15 @@ use std::sync::Arc;
 
 use rain_core::comments::Anchor;
 use rain_core::diff::{FileDiff, FileStatus, Hunk, LineKind, Side};
+use rain_core::fuzzy::{Matcher, Query};
+use rain_core::moves::{Move, MovedLine, Moves};
 use rune::{Key, KeyEvent, Modifier, SelectedText, Tx};
-use rune_kit::syntax::{Highlight, Highlighter, Paint};
+use rune_kit::syntax::{Highlighter, Paint};
 
-use crate::model::{self, Block, LineIndex};
+use crate::lex::{CHUNK, Carry, ChunkCache, ChunkKey, ChunkText, Held, LOOKBACK, Lexer, SLOW_LOOKBACK, Worker};
+use crate::model::{self, LineIndex};
 use crate::myers;
+use crate::pairing::Pairing;
 
 mod caret;
 pub(crate) mod vim;
@@ -26,17 +27,13 @@ pub use caret::Caret;
 use vim::{Pending, Want};
 pub use vim::{Vim, VimKey, Visual};
 
-/// How a diff lays out its two sides.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum DiffMode {
-    /// One column, removed lines above the added lines that replace them.
     #[default]
     Unified,
-    /// Old on the left, new on the right, changed lines side by side.
     Split,
 }
 
-/// A line of one side of a file: what annotations, selections and the cursor point at.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct LineRef {
     pub side: Side,
@@ -60,7 +57,6 @@ pub struct LineRange {
 }
 
 impl LineRange {
-    /// One line.
     pub fn line(file: usize, at: LineRef) -> LineRange {
         LineRange { file, start: at, end: at }
     }
@@ -125,7 +121,6 @@ impl Annotation {
         }
     }
 
-    /// Under one line.
     pub fn line(file: usize, at: LineRef, id: impl Into<String>) -> Annotation {
         Annotation::new(
             file,
@@ -143,28 +138,21 @@ impl Annotation {
     }
 }
 
-/// Which way an unchanged range between hunks opens.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Expand {
-    /// Twenty lines up from the hunk below it.
     Up,
-    /// Twenty lines down from the hunk above it.
     Down,
-    /// All of it.
     All,
 }
 
-/// Lines one expand step reveals.
 pub const EXPAND_STEP: u32 = 20;
 
-/// How one file's lines are laid out as drawn.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Layout {
     /// One column across the whole width: every file in unified mode, and in split mode a file
     /// with one side only (added, deleted, binary, rename-only, contents unavailable) or every
     /// file while the view is too narrow for two sides.
     Single,
-    /// Old beside new.
     Split,
 }
 
@@ -190,10 +178,8 @@ pub struct Spot {
     pub step: Option<(u32, u32)>,
 }
 
-/// Where [`DiffState::scroll_to_range`] puts a range's first line in the viewport.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Align {
-    /// Just below the sticky header.
     Top,
     /// A fifth of the way down: inside the upper third, with the lines before it in view.
     #[default]
@@ -211,14 +197,12 @@ pub struct Metrics {
 }
 
 impl Metrics {
-    /// Compact: 20 point lines under a 38 point header.
     pub const COMPACT: Metrics = Metrics {
         line: 20.0,
         header: 38.0,
         gap: 28.0,
         note: 40.0,
     };
-    /// Comfortable: 22 point lines under a 44 point header.
     pub const COMFORTABLE: Metrics = Metrics {
         line: 22.0,
         header: 44.0,
@@ -237,6 +221,40 @@ impl Default for Metrics {
 /// for blocks pairing more lines.
 const WORD_MAX_BYTES: usize = 1000;
 const WORD_MAX_PAIRS: u32 = 128;
+
+thread_local! {
+    static WORD_DIFFS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// Line pairs compared word by word on this thread so far: a test reads it around a build to
+/// check each pair was compared once.
+pub fn word_diffs() -> u64 {
+    WORD_DIFFS.with(|n| n.get())
+}
+
+/// The most bytes of a line that are drawn, coloured, searched for marks and walked by the
+/// cursor; the rest is counted in a note under the line. Copying a line still takes all of it.
+pub const LINE_CAP: usize = 10_000;
+
+pub fn drawn_part(line: &str) -> &str {
+    if line.len() <= LINE_CAP {
+        return line;
+    }
+    let mut at = LINE_CAP;
+    while !line.is_char_boundary(at) {
+        at -= 1;
+    }
+    &line[..at]
+}
+
+/// A changed line that is part of a moved block (see [`rain_core::moves`]).
+#[derive(Clone, Copy, Debug)]
+pub struct Moved<'a> {
+    pub of: &'a Move,
+    pub line: MovedLine,
+    pub removed: bool,
+    pub first: bool,
+}
 
 /// One row of the virtual list. `i`, `del` and `add` index [`FileDiff::lines`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -263,12 +281,21 @@ impl Row {
         }
     }
 
-    /// The smallest line index a hunk row holds: rows of a hunk ascend by it in both modes.
+    /// The smallest line index a hunk row holds: rows of a hunk ascend by it in both modes,
+    /// except within a block paired by text.
     fn min_line(self) -> u32 {
         match self {
             Row::Line { i, .. } => i,
             Row::Pair { del, .. } => del,
             _ => u32::MAX,
+        }
+    }
+
+    fn holds(self, t: u32) -> bool {
+        match self {
+            Row::Line { i, .. } => i == t,
+            Row::Pair { del, add, .. } => del == t || add == t,
+            _ => false,
         }
     }
 
@@ -289,7 +316,6 @@ pub struct Opened {
 #[derive(Clone, Debug, Default)]
 struct FileUi {
     collapsed: bool,
-    /// Every unchanged range open, now or once the whole texts arrive.
     whole: bool,
     /// Lines revealed at the top and bottom of each unchanged range (`hunks.len() + 1` of them).
     revealed: Vec<(u32, u32)>,
@@ -309,7 +335,7 @@ pub(crate) struct Gap {
 #[derive(Debug, Default)]
 struct FileIdx {
     side: [Vec<u32>; 2],
-    blocks: Vec<Block>,
+    pairing: Pairing,
     gaps: Vec<Gap>,
     texts: [Option<LineIndex>; 2],
     digits: u32,
@@ -318,51 +344,40 @@ struct FileIdx {
     hunk_base: u32,
 }
 
-/// Highlights of 128 lines of one side, by line number.
-struct Chunk {
-    /// Byte offset of each line in the chunk's text, and one past the last.
-    starts: Vec<u32>,
-    hl: Rc<[Highlight]>,
-}
-
-const CHUNK: u32 = 128;
-const CHUNK_CAP: usize = 512;
-
-type ChunkKey = (u32, Side, u32);
-
-/// Highlighted chunks, oldest evicted first once [`CHUNK_CAP`] are held.
-#[derive(Default)]
-struct ChunkCache {
-    map: HashMap<ChunkKey, Rc<Chunk>>,
-    order: std::collections::VecDeque<ChunkKey>,
-}
-
-impl ChunkCache {
-    fn get(&self, k: &ChunkKey) -> Option<&Rc<Chunk>> {
-        self.map.get(k)
-    }
-
-    fn insert(&mut self, k: ChunkKey, c: Rc<Chunk>) {
-        if self.map.insert(k, c).is_none() {
-            self.order.push_back(k);
-        }
-        while self.map.len() > CHUNK_CAP {
-            let Some(old) = self.order.pop_front() else { break };
-            self.map.remove(&old);
-        }
-    }
-
-    fn clear(&mut self) {
-        self.map.clear();
-        self.order.clear();
-    }
-
-    fn retain(&mut self, keep: impl Fn(&ChunkKey) -> bool) {
-        self.map.retain(|k, _| keep(k));
-        self.order.retain(|k| keep(k));
-    }
-}
 const NONE: u32 = u32::MAX;
+
+thread_local! {
+    static LAYOUTS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static REKEYS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static ROW_KEYS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// Row keys formatted on this thread so far: a test reads it around a change to check the
+/// change keyed the rows near the viewport, not every row.
+pub fn row_keys_built() -> u64 {
+    ROW_KEYS.with(|n| n.get())
+}
+
+/// A file's index with its whole old and new texts, for [`DiffState::set_texts_many`].
+pub type FileTexts = (usize, Option<Arc<str>>, Option<Arc<str>>);
+
+/// What a batch of whole texts changed: any file at all, and the file an expansion waits for.
+#[derive(Default)]
+struct Landed {
+    any: bool,
+    expand: bool,
+}
+
+/// Times any [`DiffState`] on this thread laid its rows out again, so a test can check a batch
+/// of changes cost one layout.
+pub fn layout_builds() -> u64 {
+    LAYOUTS.with(|n| n.get())
+}
+
+/// How many of those layouts changed the rows, so the list keys every row again.
+pub fn rekeys() -> u64 {
+    REKEYS.with(|n| n.get())
+}
 
 /// Where a row sits, independent of mode and expansion: used to keep the reader's place.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -379,11 +394,12 @@ pub struct DiffState {
     idx: Vec<FileIdx>,
     ui: Vec<FileUi>,
     repo_ids: Vec<String>,
+    /// The moved blocks of the diff these files are from, and each file's index there.
+    moves: Option<(Arc<Moves>, Vec<u32>)>,
     mode: DiffMode,
     wrap: bool,
     annotations: Vec<Annotation>,
     by_line: HashMap<(u32, Side, u32), Vec<u32>>,
-    /// Range and span annotations, by file.
     spans_by_file: HashMap<u32, Vec<u32>>,
     selection: Option<LineRange>,
     selecting: bool,
@@ -414,14 +430,21 @@ pub struct DiffState {
     /// The line under the pointer (its row key, and its side in split), whose `+` and `?` mount.
     hover_line: Option<(String, Option<Side>)>,
     highlighter: Highlighter,
+    /// Colours the code instead of `highlighter` when set.
+    lexer: Option<Arc<dyn Lexer>>,
     chunks: RefCell<ChunkCache>,
-    /// The widest line of any file, in columns.
+    /// Counts the chunks whose colours changed after rows could have drawn them.
+    recoloured: std::cell::Cell<u32>,
+    /// The `recoloured` count when the worker last dropped a chunk it was asked for: what a row
+    /// whose chunk is not held draws at, so the rows of a dropped chunk rebuild and ask again.
+    unheld: std::cell::Cell<u32>,
+    /// Lexes slow languages' chunks off this thread, when the window gave a way to wake it.
+    worker: Option<Worker>,
     columns: u32,
     pub(crate) rows: Vec<Row>,
     file_rows: Vec<u32>,
     /// Per file and gap, the first row of the unchanged range's rows (`NONE` when collapsed).
     gap_rows: Vec<u32>,
-    /// Per file and hunk, the row of its first line.
     hunk_line_rows: Vec<u32>,
     /// Rows taller than a line (headers, notes, gap bars), ascending, each with the extra height
     /// of it and every tall row before it.
@@ -430,6 +453,8 @@ pub struct DiffState {
     hunk_rows: Vec<u32>,
     /// Bumped whenever the rows change, so built rows rebuild.
     pub(crate) rev: u64,
+    /// How many of those only folded or opened a file: the other files' rows draw as before.
+    folds: u64,
     /// Changes with the rows' keys, unique across states so a swapped-in state never matches.
     pub(crate) keys_rev: u64,
     /// Files were replaced since the last rebuild: the keys change even if the rows don't.
@@ -437,7 +462,6 @@ pub struct DiffState {
     visible_rows: Range<usize>,
     view_w: std::cell::Cell<f32>,
     visible: usize,
-    /// The visible file last reported to the app.
     reported: Option<usize>,
     nav: Option<u32>,
     /// An expansion asked for before the file's whole texts arrived.
@@ -450,7 +474,10 @@ pub struct DiffState {
     /// Find's query (lowercased when ASCII) and its current hit `(file, line index)`, marked in
     /// the code.
     find: Option<(String, Option<(usize, u32)>)>,
-    /// The spot's first and last rows, kept with the rows.
+    /// Find's query as terms when it marks fuzzy matches, and the matcher they run on.
+    find_terms: Option<Query>,
+    find_matcher: RefCell<Matcher>,
+    find_scratch: RefCell<Vec<Range<usize>>>,
     spot_rows: Option<(u32, u32)>,
     /// Per file and hunk (by `hunk_base`), its stable id.
     hunk_ids: Vec<u64>,
@@ -477,6 +504,25 @@ impl Default for DiffState {
     }
 }
 
+/// Calls `f` with where each match of `q` starts in `text`, left to right without overlap; an
+/// ASCII `q` (already lower case) matches whatever the case.
+fn each_exact(text: &str, q: &str, mut f: impl FnMut(usize)) {
+    if !q.is_ascii() {
+        text.match_indices(q).for_each(|(at, _)| f(at));
+        return;
+    }
+    let (t, q) = (text.as_bytes(), q.as_bytes());
+    let mut at = 0;
+    while at + q.len() <= t.len() {
+        if t[at..at + q.len()].eq_ignore_ascii_case(q) {
+            f(at);
+            at += q.len();
+        } else {
+            at += 1;
+        }
+    }
+}
+
 impl DiffState {
     /// Over owned files, or over `Arc`s shared with another view.
     pub fn new(files: Vec<impl Into<Arc<FileDiff>>>) -> DiffState {
@@ -485,6 +531,7 @@ impl DiffState {
             idx: Vec::new(),
             ui: Vec::new(),
             repo_ids: Vec::new(),
+            moves: None,
             mode: DiffMode::Unified,
             wrap: false,
             annotations: Vec::new(),
@@ -509,7 +556,11 @@ impl DiffState {
             hovered: Vec::new(),
             hover_line: None,
             highlighter: Highlighter::builtin(),
+            lexer: None,
             chunks: RefCell::new(ChunkCache::default()),
+            recoloured: std::cell::Cell::new(0),
+            unheld: std::cell::Cell::new(0),
+            worker: None,
             columns: 0,
             rows: Vec::new(),
             file_rows: Vec::new(),
@@ -518,6 +569,7 @@ impl DiffState {
             tall_rows: Vec::new(),
             hunk_rows: Vec::new(),
             rev: 0,
+            folds: 0,
             keys_rev: 0,
             new_files: false,
             visible_rows: 0..0,
@@ -530,6 +582,9 @@ impl DiffState {
             side_cols: None,
             spot: None,
             find: None,
+            find_terms: None,
+            find_matcher: RefCell::new(Matcher::in_words()),
+            find_scratch: RefCell::new(Vec::new()),
             spot_rows: None,
             hunk_ids: Vec::new(),
             scroll: Rc::new(std::cell::Cell::new([0.0; 3])),
@@ -540,7 +595,6 @@ impl DiffState {
         s
     }
 
-    /// The row heights the view draws and scrolls by.
     pub fn metrics(&self) -> Metrics {
         self.m
     }
@@ -572,7 +626,7 @@ impl DiffState {
         self.idx = files
             .iter()
             .map(|f| {
-                let mut ix = index_file(f);
+                let mut ix = index_file(f, Pairing::new(f));
                 ix.gap_base = gap_base;
                 ix.hunk_base = hunk_base;
                 gap_base += f.hunks.len() as u32 + 1;
@@ -582,12 +636,13 @@ impl DiffState {
             .collect();
         self.columns = files.iter().zip(&self.idx).map(|(f, ix)| text_columns(f, ix)).max().unwrap_or(0);
         self.files = files;
+        self.moves = None;
         self.selection = None;
         self.span = None;
         self.cursor = None;
         self.visual = None;
         self.pending = Pending::default();
-        self.chunks.borrow_mut().clear();
+        self.drop_colours();
         self.visible = 0;
         self.reported = None;
         self.visible_rows = 0..0;
@@ -621,7 +676,6 @@ impl DiffState {
         }
     }
 
-    /// The repo id shown before a file's path, when repo ids are set.
     pub fn repo_id(&self, file: usize) -> Option<&str> {
         let f = self.files.get(file)?;
         self.repo_ids.get(f.repo as usize).map(String::as_str).filter(|id| !id.is_empty())
@@ -675,7 +729,6 @@ impl DiffState {
         was && before != Some(cols)
     }
 
-    /// The columns of code one split side has, once the view has reported them.
     pub fn columns_per_side(&self) -> Option<u32> {
         self.side_cols
     }
@@ -691,12 +744,10 @@ impl DiffState {
         Some(format!("{cols} columns of code fit each side; split needs {}", self.min_split))
     }
 
-    /// Whether removed and added lines pair side by side in the rows.
     fn pairs(&self) -> bool {
         self.mode == DiffMode::Split && !self.narrow()
     }
 
-    /// How `file` lays out as drawn now.
     pub fn layout(&self, file: usize) -> Layout {
         match self.draw(file) {
             Draw::Split => Layout::Split,
@@ -732,23 +783,93 @@ impl DiffState {
         }
     }
 
-    /// Highlight code with `h` instead of the built-in scanners.
     pub fn set_highlighter(&mut self, h: Highlighter) {
         self.highlighter = h;
-        self.chunks.borrow_mut().clear();
+        self.lexer = None;
+        self.drop_colours();
         self.rev += 1;
+    }
+
+    /// Highlight code with `lexer`, which carries a comment, string or template left open at
+    /// one chunk's end into the next. With `wake`, a language the lexer calls slow is lexed on
+    /// a worker thread: its lines draw plain at once, the worker calls `wake` when their colours
+    /// are ready, and [`DiffState::poll_colours`] takes them in. Without, all on this thread.
+    pub fn set_lexer(&mut self, lexer: Arc<dyn Lexer>, wake: Option<Arc<dyn Fn() + Send + Sync>>) {
+        self.lexer = Some(lexer);
+        match wake {
+            Some(wake) if self.worker.is_none() => self.worker = Some(Worker::new(wake)),
+            Some(_) => {}
+            None => self.worker = None,
+        }
+        self.drop_colours();
+        self.rev += 1;
+    }
+
+    /// Forgets every chunk's colours and whatever the worker was asked for.
+    fn drop_colours(&mut self) {
+        self.chunks.get_mut().clear();
+        if let Some(w) = &mut self.worker {
+            w.reset();
+        }
+    }
+
+    /// Takes in the colours the worker has ready. True when any arrived, so the rows of those
+    /// chunks rebuild: colour only, so no line moves.
+    pub fn poll_colours(&mut self) -> bool {
+        let Some(w) = &self.worker else { return false };
+        let done = w.done();
+        let any = !done.is_empty();
+        for d in done {
+            let (f, side, first) = d.first;
+            let mut end = (first, None);
+            for (c, chunk) in (first..).zip(d.chunks) {
+                end = (c, chunk.end.clone());
+                self.recoloured.set(self.recoloured.get() + 1);
+                self.chunks
+                    .borrow_mut()
+                    .insert((f, side, c), Held::new(chunk, self.recoloured.get()));
+            }
+            self.settle_after(f as usize, side, end.0, &end.1);
+        }
+        if any {
+            for (f, side, c) in w.take_waiting() {
+                self.ask(f as usize, side, c, model::language(&self.files[f as usize].path));
+            }
+        }
+        any
+    }
+
+    #[cfg(test)]
+    pub(crate) fn colours_pending(&self) -> bool {
+        self.worker.as_ref().is_some_and(|w| !w.idle())
     }
 
     pub fn collapsed(&self, file: usize) -> bool {
         self.ui.get(file).is_some_and(|u| u.collapsed)
     }
 
-    /// Show only `file`'s header, or its lines again.
     pub fn set_collapsed(&mut self, file: usize, collapsed: bool) {
-        if let Some(u) = self.ui.get_mut(file).filter(|u| u.collapsed != collapsed) {
-            u.collapsed = collapsed;
-            self.rebuild();
+        self.set_collapsed_many([file], collapsed);
+    }
+
+    /// [`DiffState::set_collapsed`] for several files, with one layout.
+    pub fn set_collapsed_many(&mut self, files: impl IntoIterator<Item = usize>, collapsed: bool) {
+        let mut changed = false;
+        for file in files {
+            if let Some(u) = self.ui.get_mut(file).filter(|u| u.collapsed != collapsed) {
+                u.collapsed = collapsed;
+                changed = true;
+            }
         }
+        if changed {
+            self.rebuild();
+            self.folds += 1;
+        }
+    }
+
+    /// What a built row is good for: [`DiffState::rev`] less the rebuilds that only moved it.
+    pub(crate) fn rows_rev(&self) -> u64 {
+        self.rev - self.folds
     }
 
     /// Collapse (or open) every file `pick` chooses, with one rebuild: e.g. generated files on
@@ -769,25 +890,64 @@ impl DiffState {
     /// Give `file` its whole old and new texts (as fetched for expanding context), or drop them
     /// with `None`. Expanded ranges fold again, except on a whole file, which opens in full.
     pub fn set_texts(&mut self, file: usize, old: Option<Arc<str>>, new: Option<Arc<str>>) {
-        let Some(f) = self.files.get_mut(file) else { return };
-        let f = Arc::make_mut(f);
-        f.old_text = old;
-        f.new_text = new;
-        self.texts_changed(file);
+        self.set_texts_many([(file, old, new)]);
+    }
+
+    /// [`DiffState::set_texts`] for several files, with one layout: expand-all's files as they
+    /// arrive.
+    pub fn set_texts_many(&mut self, texts: impl IntoIterator<Item = FileTexts>) {
+        let mut landed = Landed::default();
+        for (file, old, new) in texts {
+            let Some(f) = self.files.get_mut(file) else { continue };
+            let f = Arc::make_mut(f);
+            f.old_text = old;
+            f.new_text = new;
+            self.texts_changed(file, &mut landed);
+        }
+        self.texts_landed(landed);
     }
 
     /// [`DiffState::set_texts`] by handing over another diff's copy of the same file that already
     /// has them, so diffs over the same files share one copy instead of each cloning it.
     pub fn share_file(&mut self, file: usize, f: Arc<FileDiff>) {
-        let Some(slot) = self.files.get_mut(file) else { return };
-        *slot = f;
-        self.texts_changed(file);
+        self.share_files([(file, f)]);
     }
 
-    fn texts_changed(&mut self, file: usize) {
+    /// [`DiffState::share_file`] for several files, with one layout.
+    pub fn share_files(&mut self, files: impl IntoIterator<Item = (usize, Arc<FileDiff>)>) {
+        let mut landed = Landed::default();
+        for (file, f) in files {
+            let Some(slot) = self.files.get_mut(file) else { continue };
+            *slot = f;
+            self.texts_changed(file, &mut landed);
+        }
+        self.texts_landed(landed);
+    }
+
+    /// Lays the rows out once for the files whose texts changed, then runs the expansion that
+    /// waited for one of them.
+    fn texts_landed(&mut self, landed: Landed) {
+        if !landed.any {
+            return;
+        }
+        if let Some(w) = &mut self.worker {
+            w.reset();
+        }
+        self.rebuild();
+        if landed.expand
+            && let Some((f, gap, how)) = self.pending_expand.take()
+        {
+            self.expand(f, gap, how);
+        }
+    }
+
+    fn texts_changed(&mut self, file: usize, landed: &mut Landed) {
+        landed.any = true;
+        landed.expand |= self.pending_expand.is_some_and(|p| p.0 == file);
         let f = &self.files[file];
         let (gap_base, hunk_base) = (self.idx[file].gap_base, self.idx[file].hunk_base);
-        let mut ix = index_file(f);
+        // New texts leave the hunk lines as they were, so their pairing stands.
+        let mut ix = index_file(f, std::mem::take(&mut self.idx[file].pairing));
         ix.gap_base = gap_base;
         ix.hunk_base = hunk_base;
         self.columns = self.columns.max(text_columns(f, &ix));
@@ -797,10 +957,6 @@ impl DiffState {
             self.reveal_whole(file);
         }
         self.chunks.borrow_mut().retain(|k| k.0 != file as u32);
-        self.rebuild();
-        if let Some((f, gap, how)) = self.pending_expand.take_if(|p| p.0 == file) {
-            self.expand(f, gap, how);
-        }
     }
 
     /// [`DiffState::expand`] now, or as soon as [`DiffState::set_texts`] gives `file` its texts.
@@ -845,7 +1001,6 @@ impl DiffState {
         }
     }
 
-    /// What of `file` shows beyond its hunks.
     pub fn opened(&self, file: usize) -> Option<Opened> {
         self.ui.get(file).map(|u| Opened {
             whole: u.whole,
@@ -1007,7 +1162,6 @@ impl DiffState {
         self.rev += 1;
     }
 
-    /// The annotations under `file`'s line `at`.
     pub(crate) fn annotations_at(&self, file: usize, at: LineRef) -> impl Iterator<Item = &Annotation> {
         self.by_line
             .get(&(file as u32, at.side, at.line))
@@ -1016,7 +1170,6 @@ impl DiffState {
             .map(|&i| &self.annotations[i as usize])
     }
 
-    /// Range and span annotations covering `file`'s line `at`.
     pub(crate) fn covering(&self, file: usize, at: LineRef) -> impl Iterator<Item = &Annotation> {
         self.spans_by_file
             .get(&(file as u32))
@@ -1029,7 +1182,6 @@ impl DiffState {
             })
     }
 
-    /// Byte ranges of line `at`'s text that span annotations select.
     pub(crate) fn span_marks(&self, file: usize, at: LineRef) -> Vec<Range<usize>> {
         let mut out = Vec::new();
         for a in self.covering(file, at) {
@@ -1043,7 +1195,7 @@ impl DiffState {
             else {
                 continue;
             };
-            let Some(text) = self.side_line(file, at.side, at.line) else {
+            let Some(text) = self.side_line(file, at.side, at.line).map(drawn_part) else {
                 continue;
             };
             let from = if at.line == start_line { byte_of_col(text, start_col) } else { 0 };
@@ -1106,20 +1258,17 @@ impl DiffState {
         Some(out.join("\n"))
     }
 
-    /// The selection's first and last rows.
-    fn selected_rows(&self, sel: &LineRange) -> Option<(u32, u32)> {
+    pub(crate) fn selected_rows(&self, sel: &LineRange) -> Option<(u32, u32)> {
         let a = self.row_of(sel.file, sel.start.side, sel.start.line)?;
         let b = self.row_of(sel.file, sel.end.side, sel.end.line)?;
         Some((a.min(b), a.max(b)))
     }
 
-    /// Whether line `at` is in `sel`.
     pub(crate) fn contains(&self, sel: &LineRange, at: LineRef) -> bool {
         let Some((a, b)) = self.selected_rows(sel) else { return false };
         self.row_of(sel.file, at.side, at.line).is_some_and(|r| (a..=b).contains(&r))
     }
 
-    /// Whether row `r`'s line on `side` is selected.
     pub(crate) fn row_selected(&self, r: usize, side: Option<Side>) -> bool {
         let Some(sel) = self.selection else { return false };
         if self.rows[r].file() != sel.file {
@@ -1245,7 +1394,6 @@ impl DiffState {
         })
     }
 
-    /// The file, side and line number of the code text at element `path`.
     fn code_line(&self, path: &str) -> Option<(usize, Side, u32)> {
         let segs: Vec<&str> = path.split('/').collect();
         let (j, (f, kind, num)) = segs.iter().enumerate().find_map(|(j, s)| parse_key(s).map(|k| (j, k)))?;
@@ -1269,7 +1417,6 @@ impl DiffState {
         self.visible
     }
 
-    /// The line cursor: a file and one of its lines.
     pub fn cursor(&self) -> Option<(usize, LineRef)> {
         self.cursor
     }
@@ -1279,7 +1426,6 @@ impl DiffState {
         self.jumped(prev);
     }
 
-    /// The row the cursor is on, when it is shown.
     pub(crate) fn cursor_row(&self) -> Option<u32> {
         let (f, at) = self.cursor?;
         self.row_of(f, at.side, at.line)
@@ -1291,7 +1437,6 @@ impl DiffState {
         self.cursor_steps(forward, 1, tx)
     }
 
-    /// [`DiffState::cursor_step`] `n` lines at once.
     pub fn cursor_steps(&mut self, forward: bool, n: u32, tx: &mut Tx) -> bool {
         let from = self
             .cursor_row()
@@ -1348,8 +1493,14 @@ impl DiffState {
         }
     }
 
-    /// Row `r`'s text on `side`, when it shows that side.
+    /// The drawn part of row `r`'s text on `side`, when it shows that side: what the cursor
+    /// walks and a click lands in.
     pub(crate) fn row_text(&self, r: u32, side: Side) -> Option<&str> {
+        self.row_full(r, side).map(drawn_part)
+    }
+
+    /// Row `r`'s whole text on `side`, when it shows that side: what copying takes.
+    pub(crate) fn row_full(&self, r: u32, side: Side) -> Option<&str> {
         let row = *self.rows.get(r as usize)?;
         let file = &self.files[row.file()];
         let i = match row {
@@ -1387,7 +1538,6 @@ impl DiffState {
         }
     }
 
-    /// Scroll `file`'s header to the top.
     pub fn scroll_to_file(&mut self, file: usize, tx: &mut Tx) {
         let Some(&r) = self.file_rows.get(file) else { return };
         self.reveal_at_top(r, tx);
@@ -1440,18 +1590,64 @@ impl DiffState {
     /// Mark `query`'s matches in the code (ASCII matches ignore case), the one on line
     /// `current` (file, index into its lines) brighter; an empty query clears them.
     pub fn set_find(&mut self, query: &str, current: Option<(usize, u32)>) {
+        self.put_find(query, current, false);
+    }
+
+    /// [`DiffState::set_find`] for a fuzzy query: in each line that fits it by
+    /// [`Matcher::in_words`], the letters its terms matched are marked.
+    pub fn set_fuzzy_find(&mut self, query: &str, current: Option<(usize, u32)>) {
+        self.put_find(query, current, true);
+    }
+
+    fn put_find(&mut self, query: &str, current: Option<(usize, u32)>, fuzzy: bool) {
         let next = (!query.is_empty()).then(|| {
-            let q = if query.is_ascii() {
+            let q = if query.is_ascii() && !fuzzy {
                 query.to_ascii_lowercase()
             } else {
                 query.to_owned()
             };
             (q, current)
         });
-        if next != self.find {
+        let fuzzy = fuzzy && next.is_some();
+        if next != self.find || fuzzy != self.find_terms.is_some() {
+            self.find_terms = fuzzy.then(|| Query::new(query));
             self.find = next;
-            self.rev += 1;
         }
+    }
+
+    pub(crate) fn finding(&self) -> bool {
+        self.find.is_some()
+    }
+
+    /// What [`DiffState::find_marks`] gives for `text` on line `at`, as one number: 0 when find
+    /// marks nothing there, and another number whenever the marks differ.
+    pub(crate) fn find_sig(&self, text: &str, at: Option<(usize, u32)>) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let Some((q, current)) = &self.find else { return 0 };
+        let current = at.is_some() && *current == at;
+        let mut h = std::hash::DefaultHasher::new();
+        let mut any = false;
+        match &self.find_terms {
+            Some(terms) => {
+                let mut marks = self.find_scratch.borrow_mut();
+                marks.clear();
+                self.find_matcher.borrow_mut().marks(terms, text, 0, &mut marks);
+                any = !marks.is_empty();
+                marks.hash(&mut h);
+            }
+            None => {
+                each_exact(text, q, |at| {
+                    any = true;
+                    at.hash(&mut h);
+                });
+                q.len().hash(&mut h);
+            }
+        }
+        if !any && !current {
+            return 0;
+        }
+        current.hash(&mut h);
+        h.finish() | 1
     }
 
     /// Byte ranges of find's matches in `text`, and whether line `at` holds the current hit.
@@ -1459,12 +1655,21 @@ impl DiffState {
         let Some((q, current)) = &self.find else {
             return (Vec::new(), false);
         };
-        let hay = if q.is_ascii() { text.to_ascii_lowercase() } else { text.to_owned() };
-        let marks = hay.match_indices(q.as_str()).map(|(i, m)| i..i + m.len()).collect();
+        let marks = match &self.find_terms {
+            Some(terms) => {
+                let mut marks = Vec::new();
+                self.find_matcher.borrow_mut().marks(terms, text, 0, &mut marks);
+                marks
+            }
+            None => {
+                let mut marks = Vec::new();
+                each_exact(text, q, |at| marks.push(at..at + q.len()));
+                marks
+            }
+        };
         (marks, at.is_some() && *current == at)
     }
 
-    /// The spot's first and last rows, when its lines have rows.
     pub fn spotlight_rows(&self) -> Option<(u32, u32)> {
         self.spot_rows
     }
@@ -1534,7 +1739,6 @@ impl DiffState {
         self.scroll.get()[0]
     }
 
-    /// How far the code is scrolled sideways in points, as last drawn.
     pub fn scroll_offset_x(&self) -> f32 {
         self.scroll.get()[2]
     }
@@ -1572,7 +1776,6 @@ impl DiffState {
         (hunk < self.files[file].hunks.len()).then(|| format!("{:016x}", self.hunk_ids[ix.hunk_base as usize + hunk]))
     }
 
-    /// The hunk index of `file` whose id is `id`.
     pub fn hunk_by_id(&self, file: usize, id: &str) -> Option<usize> {
         let ix = self.idx.get(file)?;
         let id = u64::from_str_radix(id, 16).ok()?;
@@ -1634,7 +1837,6 @@ impl DiffState {
         true
     }
 
-    /// Scroll to the next (or previous) file's header.
     pub fn next_file(&mut self, forward: bool, tx: &mut Tx) -> bool {
         let at = match self.cursor {
             Some((f, _)) if self.cursor_row().is_some() => f,
@@ -1680,11 +1882,6 @@ impl DiffState {
         Some(r as u32)
     }
 
-    /// Handle a key for the diff (UX keymap): `j`/`k` move the line cursor, `n`/`p` the next
-    /// and previous hunk, `]`/`[` the next and previous file, Escape clears the line selection,
-    /// then the text selection, then the cursor; Cmd-C copies the line selection, and Shift
-    /// (with `App::modifier_keys`) makes a click on a line number extend the selection. Call it
-    /// from the app's `on_key`; it returns whether it took the key.
     pub fn key(&mut self, ev: &KeyEvent, tx: &mut Tx) -> bool {
         match &ev.key {
             Key::Modifier {
@@ -1729,7 +1926,6 @@ impl DiffState {
         }
     }
 
-    /// The scroll viewport's rect.
     pub(crate) fn set_viewport(&self, r: [f32; 4]) {
         self.view_w.set(r[2]);
     }
@@ -1743,13 +1939,20 @@ impl DiffState {
         let before_sticky = self.sticky();
         self.visible_rows = rows;
         if let Some(&r) = self.rows.get(self.visible_rows.start) {
-            self.visible = r.file();
+            self.visible = self.stopped_short().unwrap_or(r.file());
         }
         let reported = (!self.files.is_empty() && self.reported != Some(self.visible)).then(|| {
             self.reported = Some(self.visible);
             self.visible
         });
         (reported, self.sticky() != before_sticky)
+    }
+
+    /// The file the last jump went to, while the diff's end keeps its row on screen short of the
+    /// top: the rows above it belong to earlier files, and the jump's file is still the one shown.
+    fn stopped_short(&self) -> Option<usize> {
+        let n = self.nav? as usize;
+        (self.visible_rows.end == self.rows.len() && self.visible_rows.contains(&n)).then(|| self.rows[n].file())
     }
 
     /// The row reached by moving `y` points vertically from the top of row `from`.
@@ -1781,12 +1984,11 @@ impl DiffState {
         (self.visible_rows.start > header).then_some(f)
     }
 
-    /// Scroll so row `r` is at the top: to the end first, so the reveal comes from below.
+    /// Scroll so row `r` is at the top: into view first, which mounts it, then to the top.
     fn reveal_at_top(&self, r: u32, tx: &mut Tx) {
-        if let Some(&last) = self.rows.last() {
-            tx.scroll_into_view(self.key_of(last));
-        }
-        tx.scroll_into_view(self.key_of(self.rows[r as usize]));
+        let key = self.key_of(self.rows[r as usize]);
+        tx.scroll_into_view(key.clone());
+        tx.scroll_key_to(key, 0.0);
     }
 
     /// Scroll so row `r` sits just below the sticky header: the row a header's height above it
@@ -1845,58 +2047,246 @@ impl DiffState {
     /// Word changes of line `i` of `file` against the line it pairs with: byte ranges of its
     /// text. Computed on demand, so loading never pays for them.
     pub fn word_changes(&self, file: usize, i: u32) -> Vec<Range<usize>> {
-        let f = &self.files[file];
-        let Some(b) = model::block_of(&self.idx[file].blocks, i) else {
+        let Some(p) = self.idx[file].pairing.partner(i).filter(|_| !self.formatting_only(file, i)) else {
             return Vec::new();
         };
-        if b.pairs() > WORD_MAX_PAIRS {
+        let (del, add) = if i < p { (i, p) } else { (p, i) };
+        let (old, new) = self.pair_words(file, del, add);
+        if i == del { old } else { new }
+    }
+
+    /// Whether changed line `i` of `file` only moved or re-spaced code: its block's removed and
+    /// added lines are the same code laid out differently.
+    pub fn formatting_only(&self, file: usize, i: u32) -> bool {
+        self.idx[file].pairing.block_of(i).is_some_and(|b| b.quiet)
+    }
+
+    /// Mark the blocks `moves` found moved in the diff these files are from; `files` is each
+    /// file's index in that diff. Only how lines draw changes: rows, numbers and anchors stay.
+    pub fn set_moves(&mut self, moves: Arc<Moves>, files: Vec<u32>) {
+        self.moves = (!moves.is_empty()).then_some((moves, files));
+        self.rev += 1;
+    }
+
+    pub fn moved(&self, file: usize, i: u32) -> Option<Moved<'_>> {
+        let (moves, at) = self.moves.as_ref()?;
+        let line = *moves.line(*at.get(file)? as usize, i)?;
+        let of = moves.of(&line);
+        let removed = self.files[file].lines.get(i as usize)?.kind == LineKind::Removed;
+        let start = if removed { of.from.start } else { of.to.start };
+        Some(Moved {
+            of,
+            line,
+            removed,
+            first: start == i,
+        })
+    }
+
+    /// Where the block holding `file`'s line `at` moved to or from: that file's index in the
+    /// whole diff, and the line `at` is there (the block's first line, for a line with none).
+    pub fn move_target(&self, file: usize, at: LineRef) -> Option<(usize, LineRef)> {
+        let m = self.moved(file, self.line_index(file, at.side, at.line)?)?;
+        let (span, first, side) = if m.removed {
+            (m.of.to, m.of.to_line, Side::New)
+        } else {
+            (m.of.from, m.of.from_line, Side::Old)
+        };
+        let line = first + m.line.partner.map_or(0, |p| p - span.start);
+        Some((span.file as usize, LineRef::new(side, line)))
+    }
+
+    pub(crate) fn starts_move(&self, r: Row) -> bool {
+        self.moves.is_some()
+            && match r {
+                Row::Line { f, i } => self.moved(f as usize, i).is_some_and(|m| m.first),
+                Row::Pair { f, del, add } => [del, add].into_iter().any(|i| self.moved(f as usize, i).is_some_and(|m| m.first)),
+                _ => false,
+            }
+    }
+
+    /// Word changes of line `i`, changed inside a moved block, against the line it was (or
+    /// became) at the block's other end, the indent aside.
+    pub(crate) fn move_words(&self, file: usize, i: u32) -> Vec<Range<usize>> {
+        let Some((m, (_, at))) = self.moved(file, i).zip(self.moves.as_ref()) else {
+            return Vec::new();
+        };
+        let other = if m.removed { m.of.to.file } else { m.of.from.file };
+        let (Some(p), Some(o)) = (m.line.partner, at.iter().position(|&g| g == other)) else {
+            return Vec::new();
+        };
+        let (mine, theirs) = (self.files[file].line_text(i), self.files[o].line_text(p));
+        if mine.len() > WORD_MAX_BYTES || theirs.len() > WORD_MAX_BYTES {
             return Vec::new();
         }
-        let Some(p) = b.partner(i) else { return Vec::new() };
-        let (del, add) = if i < p { (i, p) } else { (p, i) };
+        let indent = mine.len() - mine.trim_start().len();
+        WORD_DIFFS.with(|n| n.set(n.get() + 1));
+        let (old, new) = if m.removed {
+            myers::words(mine.trim_start(), theirs.trim_start())
+        } else {
+            myers::words(theirs.trim_start(), mine.trim_start())
+        };
+        let words = if m.removed { old } else { new };
+        words.into_iter().map(|r| r.start + indent..r.end + indent).collect()
+    }
+
+    /// Word changes of removed line `del` and of the added line `add` it pairs with, from one
+    /// comparison.
+    pub(crate) fn pair_words(&self, file: usize, del: u32, add: u32) -> (Vec<Range<usize>>, Vec<Range<usize>>) {
+        let f = &self.files[file];
+        if self.idx[file]
+            .pairing
+            .block_of(del)
+            .is_none_or(|b| b.quiet || b.pairs() > WORD_MAX_PAIRS)
+        {
+            return (Vec::new(), Vec::new());
+        }
         let (a, c) = (f.line_text(del), f.line_text(add));
         if a.len() > WORD_MAX_BYTES || c.len() > WORD_MAX_BYTES {
-            return Vec::new();
+            return (Vec::new(), Vec::new());
         }
-        let (old, new) = myers::words(a, c);
-        if i == del { old } else { new }
+        WORD_DIFFS.with(|n| n.set(n.get() + 1));
+        myers::words(a, c)
     }
 
     /// Colour-only highlights of line `n` of `side` of file `f`, relative to the line.
     pub(crate) fn highlights(&self, f: usize, side: Side, n: u32) -> Vec<(Range<usize>, Paint)> {
         let lang = model::language(&self.files[f].path);
-        if self.highlighter.is_builtin() && !lang.is_some_and(rune_kit::syntax::known) {
+        if self.lexer.is_none() && self.highlighter.is_builtin() && !lang.is_some_and(rune_kit::syntax::known) {
             return Vec::new();
         }
         let c = n.saturating_sub(1) / CHUNK;
-        let key = (f as u32, side, c);
-        let chunk = self.chunks.borrow().get(&key).cloned();
-        let chunk = chunk.unwrap_or_else(|| {
-            let mut text = String::new();
-            let mut starts = Vec::with_capacity(CHUNK as usize + 1);
-            for m in c * CHUNK + 1..=(c + 1) * CHUNK {
-                starts.push(text.len() as u32);
-                text.push_str(self.side_line(f, side, m).unwrap_or(""));
-                text.push('\n');
-            }
-            starts.push(text.len() as u32);
-            let hl = self.highlighter.highlight(lang, &text);
-            let chunk = Rc::new(Chunk { starts, hl });
-            self.chunks.borrow_mut().insert(key, chunk.clone());
-            chunk
-        });
-        let k = (n.saturating_sub(1) % CHUNK) as usize;
-        let (a, b) = (chunk.starts[k] as usize, chunk.starts[k + 1] as usize - 1);
-        let first = chunk.hl.partition_point(|(r, _)| r.end <= a);
-        chunk.hl[first..]
-            .iter()
-            .take_while(|(r, _)| r.start < b)
-            .map(|(r, p)| (r.start.max(a) - a..r.end.min(b) - a, *p))
-            .filter(|(r, _)| !r.is_empty())
-            .collect()
+        let held = self.chunks.borrow().get(&(f as u32, side, c)).cloned();
+        let held = match held {
+            Some(held) if !held.stale.get() => held,
+            // The worker's: the old colours, or none, until its own arrive.
+            held if self.ask(f, side, c, lang) => match held {
+                Some(held) => held,
+                None => return Vec::new(),
+            },
+            _ => self.lex_chunk(f, side, c, lang),
+        };
+        held.chunk.line((n.saturating_sub(1) % CHUNK) as usize)
     }
 
-    /// Row `r`'s line number on `side`.
+    /// The chunks to lex for chunk `c` of `side` of file `f`, in order from the first one's
+    /// number, and the state the first starts from. When nothing holds the state the chunk
+    /// before `c` ends in, the chunks before are lexed too: back to one that is held, to a line
+    /// the diff doesn't hold (a fresh start), or `lookback` chunks, where a fresh start is a
+    /// guess that a later look at the chunk before corrects. `None` when the run would start
+    /// from a chunk that is `asked` for and not back.
+    fn run_to(
+        &self,
+        f: usize,
+        side: Side,
+        c: u32,
+        lookback: u32,
+        asked: impl Fn(&ChunkKey) -> bool,
+    ) -> Option<(u32, Vec<ChunkText>, Carry)> {
+        let text = |c: u32| ChunkText::new(|k| self.side_line(f, side, c * CHUNK + k + 1).map(drawn_part));
+        let mut texts = vec![text(c)];
+        let mut first = c;
+        let mut from: Carry = None;
+        while first > 0 && texts.last().is_some_and(ChunkText::leads) {
+            let prev = (f as u32, side, first - 1);
+            if asked(&prev) {
+                return None;
+            }
+            if let Some(prev) = self.chunks.borrow().get(&prev).filter(|p| !p.stale.get()) {
+                from = prev.chunk.end.clone();
+                break;
+            }
+            if c - first == lookback || self.side_line(f, side, first * CHUNK).is_none() {
+                break;
+            }
+            first -= 1;
+            texts.push(text(first));
+        }
+        texts.reverse();
+        Some((first, texts, from))
+    }
+
+    /// Lexes chunk `c` of `side` of file `f` into the cache on this thread (see
+    /// [`DiffState::run_to`]): a fast lexer runs back [`LOOKBACK`] chunks, a slow one none.
+    fn lex_chunk(&self, f: usize, side: Side, c: u32, lang: Option<&str>) -> Rc<Held> {
+        let lookback = if self.lexer.as_ref().is_some_and(|l| !l.slow(lang)) {
+            LOOKBACK
+        } else {
+            0
+        };
+        let (first, texts, mut from) = self.run_to(f, side, c, lookback, |_| false).expect("nothing is asked for");
+        let mut last = None;
+        for (k, text) in (first..).zip(texts) {
+            let chunk = text.lex(from, |code, from| match &self.lexer {
+                Some(l) => l.lex(lang, code, from),
+                None => (self.highlighter.highlight(lang, code).to_vec(), None),
+            });
+            from = chunk.end.clone();
+            let key = (f as u32, side, k);
+            let mut chunks = self.chunks.borrow_mut();
+            let held = Held::new(chunk, chunks.get(&key).map_or(self.unheld.get(), |old| old.rev.get()));
+            chunks.insert(key, held.clone());
+            last = Some(held);
+        }
+        self.settle_after(f, side, c, &from);
+        last.expect("chunk c is always lexed")
+    }
+
+    /// Whether chunk `c` of `side` of file `f` is the worker's to lex (a slow language, with a
+    /// worker), asking it to unless it already is: with the chunks before it as
+    /// [`DiffState::run_to`] finds them, [`SLOW_LOOKBACK`] back at most.
+    fn ask(&self, f: usize, side: Side, c: u32, lang: Option<&str>) -> bool {
+        let (Some(w), Some(lexer)) = (&self.worker, &self.lexer) else {
+            return false;
+        };
+        let key = (f as u32, side, c);
+        if w.has(&key) {
+            return true;
+        }
+        if !lexer.slow(lang) {
+            return false;
+        }
+        let kept = match self.run_to(f, side, c, SLOW_LOOKBACK, |k| w.asked(k)) {
+            Some((first, texts, from)) => w.push((f as u32, side, first), lang, texts, from, lexer.clone()),
+            None => w.wait(key),
+        };
+        if !kept {
+            self.recoloured.set(self.recoloured.get() + 1);
+            self.unheld.set(self.recoloured.get());
+        }
+        true
+    }
+
+    /// Marks the chunk after `c` stale when it was lexed from another state than `end`, the one
+    /// `c` now ends in, so its rows rebuild and lex it again.
+    fn settle_after(&self, f: usize, side: Side, c: u32, end: &Carry) {
+        let chunks = self.chunks.borrow();
+        let same = |a: &Carry, b: &Carry| match &self.lexer {
+            Some(l) => l.same(a, b),
+            None => true,
+        };
+        if let Some(next) = chunks
+            .get(&(f as u32, side, c + 1))
+            .filter(|n| !n.stale.get() && !n.chunk.follows(end, same))
+        {
+            self.recoloured.set(self.recoloured.get() + 1);
+            next.rev.set(self.recoloured.get());
+            next.stale.set(true);
+        }
+    }
+
+    /// Changes when the colours of row `r`'s lines changed after the row could have drawn them.
+    pub(crate) fn colours_rev(&self, r: Row) -> (u32, u32) {
+        if self.recoloured.get() == 0 {
+            return (0, 0);
+        }
+        let chunks = self.chunks.borrow();
+        let of = |side| {
+            let held = chunks.get(&(r.file() as u32, side, self.row_line(r, side)?.saturating_sub(1) / CHUNK));
+            Some(held.map_or(self.unheld.get(), |h| h.rev.get()))
+        };
+        (of(Side::Old).unwrap_or(0), of(Side::New).unwrap_or(0))
+    }
+
     pub(crate) fn row_line(&self, r: Row, side: Side) -> Option<u32> {
         match r {
             Row::Ctx { old, new, .. } => Some(if side == Side::Old { old } else { new }),
@@ -1906,7 +2296,6 @@ impl DiffState {
         }
     }
 
-    /// The row showing line `n` of `side` of file `f`, if one does.
     pub(crate) fn row_of(&self, f: usize, side: Side, n: u32) -> Option<u32> {
         let file = self.files.get(f)?;
         if n == 0 || self.ui[f].collapsed {
@@ -1923,12 +2312,18 @@ impl DiffState {
             return match self.pairs() {
                 false => Some(start + (t - hunk.lines.start)),
                 true => {
-                    let target = match model::block_of(&ix.blocks, t) {
+                    let end = self.gap_rows[(ix.gap_base + h as u32 + 1) as usize];
+                    let rows = &self.rows[start as usize..end as usize];
+                    let block = ix.pairing.block_of(t);
+                    if let Some(b) = block.filter(|b| b.by_text) {
+                        let p = rows.partition_point(|r| r.min_line() < b.d0);
+                        let mut within = rows[p..].iter().take((b.e - b.d0) as usize);
+                        return within.position(|r| r.holds(t)).map(|k| start + (p + k) as u32);
+                    }
+                    let target = match block {
                         Some(b) if t >= b.a0 => b.partner(t).unwrap_or(t),
                         _ => t,
                     };
-                    let end = self.gap_rows[(ix.gap_base + h as u32 + 1) as usize];
-                    let rows = &self.rows[start as usize..end as usize];
                     let p = rows.partition_point(|r| r.min_line() < target);
                     (rows.get(p).map(|r| r.min_line()) == Some(target)).then_some(start + p as u32)
                 }
@@ -1979,6 +2374,7 @@ impl DiffState {
     /// Lay the rows out again from the files, modes and expanded ranges. No allocation per
     /// line: the rows vector and per-hunk tables only.
     fn rebuild(&mut self) {
+        LAYOUTS.with(|n| n.set(n.get() + 1));
         self.rev += 1;
         self.nav = None;
         let top = (!self.visible_rows.is_empty())
@@ -2023,7 +2419,7 @@ impl DiffState {
                 tall(&rows, m.note);
                 continue;
             }
-            let mut blocks = ix.blocks.iter().peekable();
+            let mut blocks = ix.pairing.blocks.iter().peekable();
             let mut folded = false;
             for gap in 0..=file.hunks.len() {
                 let g = ix.gaps[gap];
@@ -2058,6 +2454,21 @@ impl DiffState {
                 while i < h.lines.end {
                     if pairs && file.lines[i as usize].kind != LineKind::Context {
                         while blocks.next_if(|b| b.e <= i).is_some() {}
+                        if let Some(b) = blocks.peek().filter(|b| b.d0 == i && b.by_text) {
+                            let (mut d, mut a) = (b.d0, b.a0);
+                            let ends = [(b.a0, b.e)];
+                            for &(del, add) in ix.pairing.pairs_of(b).iter().chain(&ends) {
+                                for i in (d..del).chain(a..add) {
+                                    rows.push(Row::Line { f: fu, i });
+                                }
+                                if del < b.a0 {
+                                    rows.push(Row::Pair { f: fu, del, add });
+                                }
+                                (d, a) = (del + 1, add + 1);
+                            }
+                            i = b.e;
+                            continue;
+                        }
                         if let Some(b) = blocks.peek().filter(|b| b.d0 == i) {
                             let (nd, na) = (b.a0 - b.d0, b.e - b.a0);
                             for k in 0..nd.max(na) {
@@ -2087,6 +2498,7 @@ impl DiffState {
         if std::mem::take(&mut self.new_files) || !same {
             static KEYS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
             self.keys_rev = KEYS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            REKEYS.with(|n| n.set(n.get() + 1));
         }
         if !self.visible_rows.is_empty() {
             let len = self.visible_rows.len();
@@ -2101,24 +2513,66 @@ impl DiffState {
     /// A row's key: the same for an unchanged or removed line in both modes, so switching moves
     /// it rather than replacing it. Formatted on demand: the state keeps no key strings.
     pub(crate) fn key_of(&self, r: Row) -> String {
+        ROW_KEYS.with(|n| n.set(n.get() + 1));
+        use std::fmt::Write;
+        let (f, tag, n) = self.key_parts(r);
+        // Room for the longest key, so a key is one allocation: `format!` grew it a second time.
+        let mut key = String::with_capacity(24);
+        let _ = write!(key, "df{f}{tag}");
+        if let Some(n) = n {
+            let _ = write!(key, "{n}");
+        }
+        key
+    }
+
+    fn key_parts(&self, r: Row) -> (u32, &'static str, Option<u32>) {
         match r {
-            Row::File(f) => format!("df{f}"),
-            Row::Note(f) => format!("df{f}.note"),
-            Row::Gap { f, gap } => format!("df{f}.g{gap}"),
-            Row::Ctx { f, old, .. } => format!("df{f}.c{old}"),
+            Row::File(f) => (f, "", None),
+            Row::Note(f) => (f, ".note", None),
+            Row::Gap { f, gap } => (f, ".g", Some(gap)),
+            Row::Ctx { f, old, .. } => (f, ".c", Some(old)),
             Row::Line { f, i } => {
                 let l = &self.files[f as usize].lines[i as usize];
                 match l.kind {
-                    LineKind::Context => format!("df{f}.c{}", l.old),
-                    LineKind::Removed => format!("df{f}.o{}", l.old),
-                    LineKind::Added => format!("df{f}.n{}", l.new),
+                    LineKind::Context => (f, ".c", Some(l.old)),
+                    LineKind::Removed => (f, ".o", Some(l.old)),
+                    LineKind::Added => (f, ".n", Some(l.new)),
                 }
             }
-            Row::Pair { f, del, .. } => format!("df{f}.o{}", self.files[f as usize].lines[del as usize].old),
+            Row::Pair { f, del, .. } => (f, ".o", Some(self.files[f as usize].lines[del as usize].old)),
         }
     }
 
-    /// Row `i`'s key.
+    /// The row whose key is `key`: [`DiffState::key_of`] backwards, so the list asks for the
+    /// rows it needs instead of keeping a key for every row.
+    pub fn row_of_key(&self, key: &str) -> Option<usize> {
+        let rest = key.strip_prefix("df")?;
+        let (file, tail) = rest.split_at(rest.find('.').unwrap_or(rest.len()));
+        let fu: u32 = file.parse().ok()?;
+        let f = fu as usize;
+        let (tag, n) = match tail {
+            "" | ".note" => (tail, None),
+            _ => {
+                let (tag, n) = tail.split_at_checked(2)?;
+                (tag, Some(n.parse::<u32>().ok()?))
+            }
+        };
+        let row = match (tag, n) {
+            ("", None) => *self.file_rows.get(f)?,
+            (".note", None) => self.file_rows.get(f)? + 1,
+            (".g", Some(gap)) => {
+                let r0 = *self.gap_rows.get((self.idx.get(f)?.gap_base + gap) as usize)?;
+                let top = self.ui[f].revealed.get(gap as usize)?.0;
+                r0.checked_add(top)?
+            }
+            (".c" | ".o", Some(n)) => self.row_of(f, Side::Old, n)?,
+            (".n", Some(n)) => self.row_of(f, Side::New, n)?,
+            _ => return None,
+        } as usize;
+        let found = self.key_parts(*self.rows.get(row)?);
+        (found.0 == fu && found.1 == tag && found.2 == n).then_some(row)
+    }
+
     pub fn row_key(&self, i: usize) -> Option<String> {
         self.rows.get(i).map(|&r| self.key_of(r))
     }
@@ -2132,7 +2586,6 @@ impl DiffState {
         self.visible_rows.clone()
     }
 
-    /// Each file's header row, by file.
     pub fn file_rows(&self) -> &[u32] {
         &self.file_rows
     }
@@ -2149,7 +2602,6 @@ impl DiffState {
             .filter(|&r| r != NONE)
     }
 
-    /// The file row `row` belongs to.
     pub fn row_file(&self, row: usize) -> Option<usize> {
         self.rows.get(row).map(|r| r.file())
     }
@@ -2187,12 +2639,10 @@ impl DiffState {
         self.row_y(self.rows.len())
     }
 
-    /// The digits `file`'s line numbers take.
     pub(crate) fn digits(&self, file: usize) -> u32 {
         self.idx.get(file).map_or(3, |ix| ix.digits)
     }
 
-    /// The widest line of any file, in columns.
     pub(crate) fn columns(&self) -> u32 {
         self.columns
     }
@@ -2205,7 +2655,7 @@ impl DiffState {
             .iter()
             .map(|ix| {
                 (ix.side[0].capacity() + ix.side[1].capacity()) * 4
-                    + ix.blocks.capacity() * size_of::<Block>()
+                    + ix.pairing.heap_bytes()
                     + ix.gaps.capacity() * size_of::<Gap>()
                     + ix.texts.iter().flatten().map(|t| t.len() as usize * 8).sum::<usize>()
             })
@@ -2221,7 +2671,7 @@ impl DiffState {
 }
 
 /// The derived tables for one file: one pass over its lines.
-fn index_file(f: &FileDiff) -> FileIdx {
+fn index_file(f: &FileDiff, pairing: Pairing) -> FileIdx {
     let (mut old, mut new) = (0usize, 0usize);
     for l in &f.lines {
         old += usize::from(l.old != 0);
@@ -2239,7 +2689,7 @@ fn index_file(f: &FileDiff) -> FileIdx {
     let texts = [f.old_text.as_deref().map(LineIndex::new), f.new_text.as_deref().map(LineIndex::new)];
     let mut ix = FileIdx {
         side,
-        blocks: model::blocks(f),
+        pairing,
         gaps: Vec::new(),
         texts,
         digits: 3,
@@ -2252,17 +2702,24 @@ fn index_file(f: &FileDiff) -> FileIdx {
     ix
 }
 
-/// The widest line of `f`'s hunks and whole texts.
 fn text_columns(f: &FileDiff, ix: &FileIdx) -> u32 {
     let texts = [(&ix.texts[0], &f.old_text), (&ix.texts[1], &f.new_text)];
     let whole = texts
         .into_iter()
         .filter_map(|(i, t)| i.as_ref().zip(t.as_deref()))
         .flat_map(|(i, t)| (1..=i.len()).filter_map(move |n| i.line(t, n)))
-        .map(model::columns)
+        .map(|l| model::columns(drawn_part(l)))
         .max()
         .unwrap_or(0);
-    f.max_columns.max(whole)
+    let hunks = if f.max_columns as usize > LINE_CAP {
+        (0..f.lines.len() as u32)
+            .map(|i| model::columns(drawn_part(f.line_text(i))))
+            .max()
+            .unwrap_or(0)
+    } else {
+        f.max_columns
+    };
+    hunks.max(whole)
 }
 
 /// How many lines the old side has, when known: from the old text, or the new text and the
@@ -2275,7 +2732,6 @@ fn old_len(f: &FileDiff, ix: &FileIdx) -> Option<u32> {
     Some((i64::from(t.len()) - i64::from(f.additions) + i64::from(f.deletions)).max(0) as u32)
 }
 
-/// The largest line number either side shows.
 fn last_line(f: &FileDiff, ix: &FileIdx) -> u32 {
     let hunks = f
         .hunks
@@ -2285,7 +2741,6 @@ fn last_line(f: &FileDiff, ix: &FileIdx) -> u32 {
     hunks.max(texts)
 }
 
-/// The unchanged ranges before each hunk of `f` and after its last.
 fn gaps(f: &FileDiff, ix: &FileIdx) -> Vec<Gap> {
     let mut out = Vec::with_capacity(f.hunks.len() + 1);
     let (mut old, mut new) = (1, 1);
@@ -2542,6 +2997,63 @@ mod tests {
         assert!(std::mem::size_of::<Row>() <= 16, "Row is {} bytes", std::mem::size_of::<Row>());
     }
 
+    fn two_files() -> DiffState {
+        let old = numbered(100);
+        let new = old
+            .replace("line 50\n", "line fifty\nline fifty and a half\n")
+            .replace("line 70\n", "");
+        let mut s = DiffState::new(vec![from_texts("a.txt", &old, &new), from_texts("b.txt", &old, &new)]);
+        s.expand(1, 0, Expand::Up);
+        s.expand(1, 1, Expand::All);
+        s
+    }
+
+    #[test]
+    fn a_fold_moves_rows_without_making_the_built_ones_stale() {
+        let mut s = two_files();
+        let (rev, built) = (s.rev, s.rows_rev());
+        s.set_collapsed(0, true);
+        assert_ne!(s.rev, rev, "the rows changed");
+        assert_eq!(s.rows_rev(), built, "the other file's rows draw as they did");
+        s.set_collapsed(0, false);
+        assert_eq!(s.rows_rev(), built);
+        s.set_mode(DiffMode::Split);
+        assert_ne!(s.rows_rev(), built, "a mode switch draws every row again");
+    }
+
+    #[test]
+    fn folding_several_files_lays_the_rows_out_once() {
+        let mut s = two_files();
+        let (layouts, built) = (layout_builds(), s.rows_rev());
+        s.set_collapsed_many([0, 1], true);
+        assert_eq!(layout_builds() - layouts, 1);
+        assert_eq!(s.rows_rev(), built);
+        assert_eq!(shown(&s), ["file", "file"]);
+        s.set_collapsed_many([0, 1], true);
+        assert_eq!(layout_builds() - layouts, 1, "nothing left to fold: no layout");
+    }
+
+    #[test]
+    fn every_line_row_is_found_again_by_its_line() {
+        for mode in [DiffMode::Split, DiffMode::Unified] {
+            let mut s = two_files();
+            s.set_mode(mode);
+            for folded in [false, true] {
+                s.set_collapsed(0, folded);
+                let mut lines = 0;
+                for (i, &r) in s.rows.iter().enumerate() {
+                    for side in [Side::Old, Side::New] {
+                        if let Some(n) = s.row_line(r, side) {
+                            lines += 1;
+                            assert_eq!(s.row_of(r.file(), side, n), Some(i as u32), "{mode:?} row {i} {side:?} {n}");
+                        }
+                    }
+                }
+                assert!(lines > 60, "{lines}");
+            }
+        }
+    }
+
     #[test]
     fn collapsed_ranges_expand_by_twenty_and_all() {
         let mut s = sample();
@@ -2619,6 +3131,60 @@ mod tests {
         s.set_whole_where(false, |_| true);
         assert_eq!(s.rev, rev + 2);
         assert!(s.ui.iter().all(|u| !u.whole && u.revealed.iter().all(|&r| r == (0, 0))));
+    }
+
+    #[test]
+    fn fuzzy_find_marks_the_matched_letters_and_exact_find_is_as_before() {
+        let mut s = DiffState::default();
+        let line = "    return new VouchersController(service, clock);";
+        let marked = |s: &DiffState, text: &str, at| {
+            let (marks, current) = s.find_marks(text, at);
+            (marks.iter().map(|r| text[r.clone()].to_owned()).collect::<Vec<_>>(), current)
+        };
+        let rev = s.rev;
+        assert_eq!(s.find_sig(line, Some((0, 3))), 0, "nothing is marked before a search");
+        s.set_fuzzy_find("vouchcontr", Some((0, 3)));
+        let fuzzy = s.find_sig(line, Some((0, 3)));
+        assert_ne!(fuzzy, 0, "a line with marks has a signature");
+        assert_ne!(s.find_sig(line, Some((0, 4))), fuzzy, "and another when it isn't the current hit");
+        assert_eq!(marked(&s, line, Some((0, 3))), (vec!["Vouch".to_owned(), "Contr".to_owned()], true));
+        assert!(!marked(&s, line, Some((0, 4))).1, "another line isn't the current hit");
+        let spread = "    var voucher = new Account(controller);";
+        assert_eq!(marked(&s, spread, None), (vec![], false), "its letters are there, far apart");
+        assert_eq!(s.find_sig(spread, None), 0, "a line without marks has none");
+        s.set_fuzzy_find("clock SERV", None);
+        assert_eq!(marked(&s, line, None).0, ["serv", "clock"], "each word of the query, in any order");
+        s.set_fuzzy_find("vouchcontr", Some((0, 3)));
+        assert_eq!(s.find_sig(line, Some((0, 3))), fuzzy, "the same query again marks the same");
+
+        s.set_find("vouchcontr", Some((0, 3)));
+        assert_ne!(s.find_sig(line, Some((0, 3))), fuzzy, "the same text, matched exactly now");
+        assert_ne!(
+            s.find_sig(line, Some((0, 3))),
+            0,
+            "the current hit's line counts with no mark on it"
+        );
+        assert_eq!(s.find_sig(line, Some((0, 4))), 0);
+        assert_eq!(s.rev, rev, "find leaves the rows it doesn't mark alone");
+        assert_eq!(marked(&s, line, Some((0, 3))), (vec![], true));
+        s.set_find("SC", None);
+        assert_eq!(marked(&s, line, None).0, ["sC"]);
+        assert_eq!(marked(&s, "disc discs", None).0, ["sc", "sc"], "exact find marks every occurrence");
+        s.set_find("aa", None);
+        assert_eq!(
+            marked(&s, "aAa Aaé aa", None).0,
+            ["aA", "Aa", "aa"],
+            "matches don't overlap, whatever the case"
+        );
+        s.set_find("é a", None);
+        assert_eq!(marked(&s, "aAa Aaé aa É a", None).0, ["é a"], "other letters match as typed");
+        s.set_fuzzy_find("SC", None);
+        assert_eq!(marked(&s, line, None).0, ["sC"]);
+        s.set_fuzzy_find("", None);
+        assert_eq!(marked(&s, line, Some((0, 3))), (vec![], false), "an empty query clears the marks");
+        s.set_find("sc", None);
+        s.set_find("", None);
+        assert_eq!(marked(&s, line, None).0, Vec::<String>::new());
     }
 
     #[test]
@@ -2812,6 +3378,23 @@ mod tests {
     }
 
     #[test]
+    fn a_jump_the_end_stops_short_keeps_its_file_and_no_other_header_sticks_over_it() {
+        let files = (0..3).map(|i| from_texts(&format!("f{i}"), "a\n", "b\n")).collect();
+        let mut s = DiffState::new(files);
+        let header = s.file_rows[2] as usize;
+        s.set_visible_rows(0..6);
+        s.scroll_to_file(2, &mut Tx::default());
+        s.set_visible_rows(4..9);
+        assert!(header > 4, "the end of the diff keeps file 2's header below the top");
+        assert_eq!((s.visible_file(), s.sticky()), (2, None), "file 1's header would cover it");
+        s.set_visible_rows(3..8);
+        assert_eq!(s.visible_file(), 1, "scrolled off the end, the top row's file again");
+        s.nav = None;
+        s.set_visible_rows(4..9);
+        assert_eq!((s.visible_file(), s.sticky()), (1, Some(1)), "no jump: the top row's file");
+    }
+
+    #[test]
     fn a_mode_switch_keeps_the_reader_on_the_same_line() {
         let old: String = (1..=40).map(|i| format!("v{i}\n")).collect();
         let new = old.replace("v10\n", "ten\n").replace("v20\n", "twenty\n");
@@ -2834,6 +3417,123 @@ mod tests {
         assert_eq!(&f.line_text(added)[s.word_changes(0, added)[0].clone()], "2");
         let last = f.lines.len() as u32 - 1;
         assert!(s.word_changes(0, last).is_empty());
+    }
+
+    const CHECKOUT_OLD: &str = "fn checkout() {\n    let subtotal = cart.items.iter().map(Item::price).sum();\n    let tax = subtotal * region.tax_rate;\n    let total = subtotal + tax;\n}\n";
+    const CHECKOUT_NEW: &str = "fn checkout() {\n    let subtotal = cart.items.iter().map(Item::net_price).sum();\n    let discount = coupons.best_for(&cart);\n    let tax = (subtotal - discount) * region.tax_rate;\n    let total = subtotal - discount + tax;\n}\n";
+
+    #[test]
+    fn a_line_inserted_mid_block_sits_alone_and_the_rest_stay_beside_their_edits() {
+        let mut s = DiffState::new(vec![from_texts("cart.rs", CHECKOUT_OLD, CHECKOUT_NEW)]);
+        let unified = shown(&s);
+        assert_eq!(unified, ["file", "1|1", "2|-", "3|-", "4|-", "-|2", "-|3", "-|4", "-|5", "5|6"]);
+        let removed_keys: Vec<String> = (2..5).map(|r| s.row_key(r).unwrap()).collect();
+        s.set_mode(DiffMode::Split);
+        assert_eq!(shown(&s), ["file", "1|1", "2|2", "-|3", "3|4", "4|5", "5|6"]);
+        for (r, &row) in s.rows.iter().enumerate().skip(1) {
+            for side in [Side::Old, Side::New] {
+                if let Some(n) = s.row_line(row, side) {
+                    assert_eq!(s.row_of(0, side, n), Some(r as u32), "{side:?} line {n}");
+                }
+            }
+        }
+        let keys: Vec<String> = (0..s.row_count()).map(|r| s.row_key(r).unwrap()).collect();
+        let unique: std::collections::HashSet<&String> = keys.iter().collect();
+        assert_eq!(unique.len(), keys.len());
+        assert_eq!(
+            [&keys[2], &keys[4], &keys[5]],
+            [&removed_keys[0], &removed_keys[1], &removed_keys[2]]
+        );
+
+        let f = &s.files()[0];
+        let line = |side: Side, n: u32| s.line_index(0, side, n).unwrap();
+        let words = |i: u32| -> Vec<&str> { s.word_changes(0, i).into_iter().map(|r| &f.line_text(i)[r]).collect() };
+        assert_eq!(words(line(Side::Old, 2)), ["price"]);
+        let total = words(line(Side::New, 5)).concat();
+        assert!(
+            total.contains("discount") && !total.contains("total"),
+            "compared with the old total line: {total:?}"
+        );
+        assert!(
+            words(line(Side::New, 3)).is_empty(),
+            "the inserted line has nothing to compare with"
+        );
+        s.set_mode(DiffMode::Unified);
+        assert_eq!(shown(&s), unified, "unified lists the lines as before");
+    }
+
+    #[test]
+    fn a_rewrapped_block_is_formatting_only_and_has_no_word_changes() {
+        let old = "fn ship() {\n    let order = Order::new(customer, items, shipping);\n    audit(order);\n    order.total = 1;\n}\n";
+        let new = "fn ship() {\n    let order = Order::new(\n        customer,\n        items,\n        shipping,\n    );\n    audit(order);\n    order.total = 2;\n}\n";
+        let quiet = |path: &str| {
+            let mut s = DiffState::new(vec![from_texts(path, old, new)]);
+            s.set_mode(DiffMode::Split);
+            let line = |side: Side, n: u32| s.line_index(0, side, n).unwrap();
+            let (call, wrapped, total) = (line(Side::Old, 2), line(Side::New, 2), line(Side::Old, 4));
+            assert!(
+                !s.formatting_only(0, total) && !s.word_changes(0, total).is_empty(),
+                "{path}: a real change"
+            );
+            assert_eq!(shown(&s)[1..4], ["1|1", "2|2", "-|3"], "{path}: every line still shows");
+            (
+                s.formatting_only(0, call),
+                s.formatting_only(0, wrapped),
+                s.word_changes(0, call).len(),
+            )
+        };
+        assert_eq!(quiet("src/shop.rs"), (true, true, 0));
+        let (call, wrapped, words) = quiet("app/shop.py");
+        assert!(!call && !wrapped && words > 0, "layout is syntax in Python");
+    }
+
+    #[test]
+    fn a_line_changed_inside_a_moved_block_shows_what_changed_on_the_way() {
+        let body = |rate: &str| {
+            format!(
+                "let cart = carts.load(customer.id)?;\nlet subtotal = cart.subtotal();\nlet discount = coupons.best_for(&cart);\nlet tax = subtotal * {rate};\nlet total = subtotal - discount + tax;\nledger.record(customer.id, total)?;\nreceipts.send(customer.email, total);\n"
+            )
+        };
+        let indented: String = body("region.rate_on(today)").lines().map(|l| format!("    {l}\n")).collect();
+        let files = vec![
+            from_texts("src/a.rs", &format!("// a\n{}", body("region.rate")), "// a\n"),
+            from_texts("src/b.rs", "// b\n", &format!("// b\n{indented}")),
+        ];
+        let moves = Arc::new(rain_core::moves::detect(&files));
+        let mut s = DiffState::new(files);
+        let rows = s.rows.clone();
+        s.set_moves(moves, vec![0, 1]);
+        assert_eq!(s.rows, rows, "moves change no row");
+        let (old, new) = (s.line_index(0, Side::Old, 5).unwrap(), s.line_index(1, Side::New, 5).unwrap());
+        let (a, b) = (s.moved(0, old).unwrap(), s.moved(1, new).unwrap());
+        assert!(a.of.edited && !a.line.exact && !b.line.exact && a.removed && !b.removed);
+        let words = |file: usize, i: u32| -> String {
+            let text = s.files()[file].line_text(i);
+            s.move_words(file, i).into_iter().map(|r| &text[r]).collect()
+        };
+        assert_eq!(words(0, old), "rate");
+        assert_eq!(words(1, new), "rate_on(today)", "past the deeper indent, which is no change");
+        let first = s.line_index(0, Side::Old, 2).unwrap();
+        assert!(s.moved(0, first).is_some_and(|m| m.first && m.line.exact));
+        assert!(s.move_words(0, first).is_empty());
+        assert_eq!(s.move_target(0, LineRef::new(Side::Old, 5)), Some((1, LineRef::new(Side::New, 5))));
+        assert_eq!(s.move_target(1, LineRef::new(Side::New, 8)), Some((0, LineRef::new(Side::Old, 8))));
+        assert_eq!(s.move_target(0, LineRef::new(Side::Old, 1)), None, "an unchanged line");
+        s.set_files(Vec::<Arc<FileDiff>>::new());
+        assert!(s.moves.is_none(), "new files drop the old files' moves");
+    }
+
+    #[test]
+    fn new_texts_keep_a_files_pairing_without_comparing_again() {
+        let mut f = from_texts("cart.rs", CHECKOUT_OLD, CHECKOUT_NEW);
+        (f.old_text, f.new_text) = (None, None);
+        let mut s = DiffState::new(vec![f]);
+        s.set_mode(DiffMode::Split);
+        let pairs = |s: &DiffState| s.rows.iter().filter(|r| matches!(r, Row::Pair { .. })).copied().collect::<Vec<_>>();
+        let before = (pairs(&s), crate::pairing::likeness_cells());
+        assert_eq!(before.0.len(), 3);
+        s.set_texts(0, Some(Arc::from(CHECKOUT_OLD)), Some(Arc::from(CHECKOUT_NEW)));
+        assert_eq!((pairs(&s), crate::pairing::likeness_cells()), before);
     }
 
     #[test]

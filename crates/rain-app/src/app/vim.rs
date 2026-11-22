@@ -67,6 +67,12 @@ impl App {
         match self.active_mut().vim(key, tx) {
             Vim::Pass => None,
             Vim::Done => Some(true),
+            Vim::Wait => {
+                if !self.key_wait.loud {
+                    tx.live_only();
+                }
+                Some(true)
+            }
             Vim::Yank(text) => {
                 self.copied(text, tx);
                 Some(true)

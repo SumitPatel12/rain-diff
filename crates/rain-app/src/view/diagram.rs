@@ -17,7 +17,6 @@ use crate::app::{App, ComposeMode, MapTab, Overlay};
 use crate::theme::{TYPE, radius, space};
 
 pub(super) const PANE_WIDTH: f32 = 300.0;
-/// Below this width the Map stacks its lanes one under another.
 pub(crate) const STACK_WIDTH: f32 = 700.0;
 
 /// A segmented switch on the well: one item per label, `on` lifted, `keys` in each tooltip.

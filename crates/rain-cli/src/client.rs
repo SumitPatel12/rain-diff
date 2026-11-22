@@ -214,6 +214,7 @@ pub fn run(sub: Sub) -> i32 {
             report(Http::new(p).json("POST", "/api/highlight", Some(body.to_string()), "Failed to highlight"))
         }),
         Sub::Watch(w) => on(&w.conn.clone(), |p| watch(p, &w)),
+        Sub::Next { format, conn } => on(&conn, |p| next(p, format)),
         Sub::Triage { format, conn } => on(&conn, |p| triage(p, format)),
         Sub::State { conn } => on(&conn, |p| {
             report(Http::new(p).json("GET", "/api/state", None, "Failed to read the state"))
@@ -407,8 +408,11 @@ pub fn events_text(v: &Value) -> String {
 }
 
 /// Ids of the threads anchored on `file` (`<repo>/<path>`, or a path within `repo`) whose
-/// anchor covers `line` on `side`. An exact `<repo>/<path>` match wins over a bare path match.
-pub fn threads_covering(comments_json: &str, file: &str, line: u32, side: SideArg, repo: Option<&str>) -> Vec<String> {
+/// anchor covers `line` on `side`. `sole` is the session's repo when it has one: there the path
+/// as written wins over a `<repo>/` prefix, as it does for a reply; among several repos an exact
+/// `<repo>/<path>` match wins over a bare path match.
+pub fn threads_covering(comments_json: &str, file: &str, line: u32, side: SideArg, repo: Option<&str>, sole: Option<&str>) -> Vec<String> {
+    use rain_comments::ops::same_repo;
     #[derive(serde::Deserialize)]
     struct All {
         threads: Vec<Thread>,
@@ -427,15 +431,32 @@ pub fn threads_covering(comments_json: &str, file: &str, line: u32, side: SideAr
     };
     let pick =
         |m: &dyn Fn(&Thread) -> bool| -> Vec<String> { all.threads.iter().filter(covers).filter(|t| m(t)).map(|t| t.id.clone()).collect() };
-    if let Some(r) = repo {
-        return pick(&|t| t.repo == r && t.file_path == file);
+    let (head, rest) = rain_core::paths::split_repo_path(&file);
+    let prefixed = |t: &Thread| !head.is_empty() && same_repo(sole, &t.repo, head) && t.file_path == rest;
+    let (first, second) = match repo {
+        Some(r) => (
+            pick(&|t| same_repo(sole, &t.repo, r) && t.file_path == file),
+            pick(&|t| r == head && prefixed(t)),
+        ),
+        None if sole.is_some() => (pick(&|t| t.file_path == file), pick(&prefixed)),
+        None => (pick(&prefixed), pick(&|t| t.file_path == file)),
+    };
+    if first.is_empty() { second } else { first }
+}
+
+/// The session's repo id when it has exactly one (`repos` of `GET /api/health`).
+fn sole_repo(http: &Http) -> Option<String> {
+    let text = http.json("GET", "/api/health", None, "Failed to read the session").ok()?;
+    let v: Value = serde_json::from_str(&text).ok()?;
+    match v["repos"].as_array()?.as_slice() {
+        [only] => only.as_str().map(str::to_owned),
+        _ => None,
     }
-    let exact = pick(&|t| rain_core::paths::join(&t.repo, &t.file_path) == file);
-    if exact.is_empty() { pick(&|t| t.file_path == file) } else { exact }
 }
 
 fn comment_resolve_at(file: &str, line: u32, side: SideArg, repo: Option<&str>, port: u16) -> i32 {
     let http = Http::new(port);
+    let sole = sole_repo(&http);
     let all = match http.json(
         "GET",
         &format!("/api/comments-json{}", repo_query(repo)),
@@ -445,7 +466,7 @@ fn comment_resolve_at(file: &str, line: u32, side: SideArg, repo: Option<&str>, 
         Ok(t) => t,
         Err(e) => return report(Err(e)),
     };
-    let ids = threads_covering(&all, file, line, side, repo);
+    let ids = threads_covering(&all, file, line, side, repo, sole.as_deref());
     if ids.is_empty() {
         println!(
             r#"{{"success":false,"resolved":[],"notFound":{},"errors":[]}}"#,
@@ -926,7 +947,6 @@ pub fn health(port: u16) -> i32 {
     report(Http::new(port).json("GET", "/api/health", None, "Failed to read health"))
 }
 
-/// The `POST /api/highlight` body.
 pub fn highlight_body(path: &str, lines: (u32, u32), side: Option<SideArg>, caption: Option<&str>, step: Option<(u32, u32)>) -> Value {
     let mut v = json!({ "path": path, "lines": [lines.0, lines.1] });
     if let Some(s) = side {
@@ -1005,6 +1025,78 @@ pub fn watch_text(v: &Value) -> String {
         out.push_str(&line);
     }
     out
+}
+
+/// `rain next` exits with this when nothing waits, as `rain watch` does when its wait ends empty.
+pub const EXIT_NOTHING: i32 = 2;
+
+/// Exit 0 with something waiting on the agent, [`EXIT_NOTHING`] with nothing.
+fn next(port: u16, format: Format) -> i32 {
+    let text = match Http::new(port).json("GET", "/api/next", None, "Failed to read what is waiting") {
+        Ok(t) => t,
+        Err(e) => return report(Err(e)),
+    };
+    let v: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
+    match format {
+        Format::Json => println!("{text}"),
+        Format::Text => println!("{}", next_text(&v)),
+    }
+    next_exit(&v)
+}
+
+pub fn next_exit(v: &Value) -> i32 {
+    if v["waiting"].as_u64().unwrap_or(0) > 0 { 0 } else { EXIT_NOTHING }
+}
+
+/// `N waiting · round R · seq S`, then per item a numbered line (`kind [id …] what · where`) and
+/// the reviewer's text indented under it.
+pub fn next_text(v: &Value) -> String {
+    let tail = format!(
+        "round {} · seq {}",
+        v["round"].as_u64().unwrap_or(1),
+        v["seq"].as_u64().unwrap_or(0)
+    );
+    let items = v["items"].as_array().map_or(&[][..], Vec::as_slice);
+    if items.is_empty() {
+        return format!("nothing waiting · {tail}");
+    }
+    let mut out = vec![format!("{} waiting · {tail}", items.len())];
+    for (i, it) in items.iter().enumerate() {
+        let kind = str_of(&it["kind"]);
+        let (head, body) = match kind.as_str() {
+            "verdict" => (
+                format!(
+                    "round {}: {} · {}",
+                    it["round"].as_u64().unwrap_or(0),
+                    str_of(&it["verdict"]),
+                    str_of(&it["at"])
+                ),
+                str_of(&it["text"]),
+            ),
+            "brief" if it["reason"] == "stale" => (
+                "stale".to_owned(),
+                "The brief was written against another sha than the one loaded: update it and `rain brief set` it again.".to_owned(),
+            ),
+            "brief" => (
+                str_of(&it["reason"]),
+                "No brief is set: write one, `rain brief set` it, then `rain brief check`.".to_owned(),
+            ),
+            _ => {
+                let mut what = str_of(&it["threadKind"]);
+                if it["blocking"].as_bool() == Some(true) {
+                    what.push_str(" (blocking)");
+                }
+                let mut head = format!("[id {}] {what} · {}", str_of(&it["threadId"]), str_of(&it["where"]));
+                if let Some(status) = it["answer"]["status"].as_str() {
+                    head.push_str(&format!(" · answer: {status}"));
+                }
+                (head, str_of(&it["text"]))
+            }
+        };
+        out.push(format!("{}. {kind} {head}", i + 1));
+        out.extend(body.lines().map(|l| format!("   {l}")));
+    }
+    out.join("\n")
 }
 
 fn triage(port: u16, format: Format) -> i32 {
@@ -1409,16 +1501,40 @@ mod tests {
     #[test]
     fn resolve_picks_threads_covering_the_line() {
         let golden = include_str!("../../../fixtures/difit/comments-json.golden.json");
-        assert_eq!(threads_covering(golden, "src/app.ts", 5, SideArg::New, None), ["t-range"]);
-        assert_eq!(threads_covering(golden, "src/app.ts", 2, SideArg::New, None), ["t-line"]);
-        assert!(threads_covering(golden, "src/app.ts", 2, SideArg::Old, None).is_empty());
-        assert_eq!(threads_covering(golden, "src/legacy.cs", 7, SideArg::Old, None), ["t-old"]);
-        assert!(threads_covering(golden, "src/legacy.cs", 7, SideArg::Old, Some("server")).is_empty());
+        assert_eq!(threads_covering(golden, "src/app.ts", 5, SideArg::New, None, None), ["t-range"]);
+        assert_eq!(threads_covering(golden, "src/app.ts", 2, SideArg::New, None, None), ["t-line"]);
+        assert!(threads_covering(golden, "src/app.ts", 2, SideArg::Old, None, None).is_empty());
+        assert_eq!(threads_covering(golden, "src/legacy.cs", 7, SideArg::Old, None, None), ["t-old"]);
+        assert!(threads_covering(golden, "src/legacy.cs", 7, SideArg::Old, Some("server"), None).is_empty());
         let multi = r#"{"version":1,"threads":[
             {"id":"a","repo":"server","filePath":"x.cs","createdAt":"t","updatedAt":"t","position":{"side":"new","line":3},"messages":[]},
             {"id":"b","repo":"app","filePath":"x.cs","createdAt":"t","updatedAt":"t","position":{"side":"new","line":3},"messages":[]}]}"#;
-        assert_eq!(threads_covering(multi, "server/x.cs", 3, SideArg::New, None), ["a"]);
-        assert_eq!(threads_covering(multi, "x.cs", 3, SideArg::New, Some("app")), ["b"]);
+        assert_eq!(threads_covering(multi, "server/x.cs", 3, SideArg::New, None, None), ["a"]);
+        assert_eq!(threads_covering(multi, "x.cs", 3, SideArg::New, Some("app"), None), ["b"]);
+        assert_eq!(threads_covering(multi, "app/x.cs", 3, SideArg::New, Some("app"), None), ["b"]);
+    }
+
+    #[test]
+    fn resolve_by_file_finds_a_one_repo_thread_in_every_form() {
+        let one = r#"{"version":1,"threads":[
+            {"id":"ui","filePath":"api/x.cs","createdAt":"t","updatedAt":"t","position":{"side":"new","line":3},"messages":[]},
+            {"id":"cli","repo":"shop","filePath":"api/y.cs","createdAt":"t","updatedAt":"t","position":{"side":"new","line":3},"messages":[]},
+            {"id":"folder","filePath":"shop/x.cs","createdAt":"t","updatedAt":"t","position":{"side":"new","line":3},"messages":[]},
+            {"id":"root","filePath":"x.cs","createdAt":"t","updatedAt":"t","position":{"side":"new","line":3},"messages":[]}]}"#;
+        let at = |file: &str, repo: Option<&str>| threads_covering(one, file, 3, SideArg::New, repo, Some("shop"));
+        for (file, id) in [("api/x.cs", "ui"), ("api/y.cs", "cli")] {
+            assert_eq!(at(file, None), [id]);
+            assert_eq!(at(file, Some("shop")), [id]);
+            assert_eq!(at(&format!("shop/{file}"), None), [id]);
+            assert_eq!(at(&format!("shop/{file}"), Some("shop")), [id]);
+        }
+        assert_eq!(at("shop/x.cs", None), ["folder"], "the path as written wins");
+        assert_eq!(at("shop/shop/x.cs", None), ["folder"]);
+        assert!(at("api/x.cs", Some("other")).is_empty());
+        assert!(
+            threads_covering(one, "shop/api/x.cs", 3, SideArg::New, None, None).is_empty(),
+            "no repo is known to be the only one"
+        );
     }
 
     #[test]
@@ -1526,6 +1642,36 @@ mod tests {
             watch_text(&v),
             "seq 6: 2 event(s)\n#5 reply k3 by you {\"messageId\":\"m1\"}\n#6 reload"
         );
+    }
+
+    #[test]
+    fn next_text_lists_what_waits_and_exits_2_on_nothing() {
+        let empty = json!({ "waiting": 0, "round": 2, "seq": 41, "items": [] });
+        assert_eq!(next_text(&empty), "nothing waiting · round 2 · seq 41");
+        assert_eq!(next_exit(&empty), EXIT_NOTHING);
+        assert_eq!(next_exit(&Value::Null), EXIT_NOTHING, "an unreadable reply never reads as work");
+        let v = json!({ "waiting": 5, "round": 2, "seq": 41, "items": [
+            { "kind": "question", "threadId": "k3x9f2", "where": "server/src/Api/Vouchers.cs:L22", "threadKind": "question",
+              "answer": { "status": "queued" }, "text": "Is zero rejected too?" },
+            { "kind": "reply", "threadId": "a81bc0", "where": "server/src/Services/VoucherService.cs:L27-L31", "threadKind": "issue",
+              "blocking": true, "text": "Still double-counts.\nSee the edit path." },
+            { "kind": "claimed", "threadId": "m1n2o3", "where": "Review (whole change)", "threadKind": "question",
+              "answer": { "status": "answering", "by": "attached" }, "text": "Why one transaction?" },
+            { "kind": "verdict", "round": 1, "verdict": "request-changes", "at": "2026-11-06T10:00:00.000Z", "text": "Two blockers." },
+            { "kind": "brief", "reason": "missing" }
+        ]});
+        assert_eq!(next_exit(&v), 0);
+        assert_eq!(
+            next_text(&v),
+            "5 waiting · round 2 · seq 41\n\
+             1. question [id k3x9f2] question · server/src/Api/Vouchers.cs:L22 · answer: queued\n   Is zero rejected too?\n\
+             2. reply [id a81bc0] issue (blocking) · server/src/Services/VoucherService.cs:L27-L31\n   Still double-counts.\n   See the edit path.\n\
+             3. claimed [id m1n2o3] question · Review (whole change) · answer: answering\n   Why one transaction?\n\
+             4. verdict round 1: request-changes · 2026-11-06T10:00:00.000Z\n   Two blockers.\n\
+             5. brief missing\n   No brief is set: write one, `rain brief set` it, then `rain brief check`."
+        );
+        let stale = json!({ "waiting": 1, "items": [{ "kind": "brief", "reason": "stale" }] });
+        assert!(next_text(&stale).contains("1. brief stale\n   The brief was written against another sha"));
     }
 
     #[test]

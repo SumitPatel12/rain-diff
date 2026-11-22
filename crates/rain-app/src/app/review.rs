@@ -216,8 +216,6 @@ impl App {
         true
     }
 
-    // ----- the since-round lens -----
-
     /// Narrows the reader to the hunks changed after round `n` (`None`: every hunk).
     pub fn set_lens(&mut self, n: Option<u32>, tx: &mut Tx) {
         let Some(n) = n else {
@@ -312,10 +310,10 @@ impl App {
         let mut diff = DiffState::new(diffs);
         diff.set_repo_ids(self.repos.iter().map(|r| r.id.clone()).collect());
         if let Some(palette) = self.hl_palette {
-            diff.set_highlighter(rain_syntax::highlighter(palette));
+            diff.set_lexer(crate::theme::lexer(palette), self.wake.clone());
         }
         diff.set_mode(self.diff.mode());
-        diff.set_collapsed_where(true, |f| f.lines.len() > LARGE_FILE_LINES);
+        diff.set_collapsed_where(true, |f| f.lines.len() > LARGE_FILE_LINES || super::folds::wide(f));
         self.filter.subset = Some(Subset {
             diff,
             files: files.clone(),
@@ -450,7 +448,6 @@ fn touches(h: &rain_core::Hunk, map: &[[u32; 4]]) -> bool {
     })
 }
 
-/// `f` with only the hunks `keep`.
 fn only_hunks(f: &Arc<FileDiff>, keep: &[usize]) -> FileDiff {
     let mut b = FileDiffBuilder::new(f.repo, f.path.clone(), f.status);
     {

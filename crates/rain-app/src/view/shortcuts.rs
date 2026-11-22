@@ -2,7 +2,7 @@
 //! with its keys (record, remove, reset), the universal keys, and Save or Cancel.
 
 use rain_core::command::Command;
-use rain_core::keymap::{Chord, Profile, UNIVERSAL};
+use rain_core::keymap::{Profile, Shortcut, UNIVERSAL};
 use rune::{El, Key, KeyEvent, ScrollSpec, Tx, col, el, row, text};
 use rune_kit::{Kit, SegmentedControl, TextInput};
 
@@ -16,9 +16,9 @@ fn search_key(s: &mut App, ev: &KeyEvent, _: &mut Tx) -> bool {
 }
 
 /// One key of a command as a cap with a remove button.
-fn chip(cmd: Command, i: usize, chord: Chord, k: &Kit) -> El {
+fn chip(cmd: Command, i: usize, keys: Shortcut, k: &Kit) -> El {
     let (surf, _) = sr(k);
-    let label = chord.display();
+    let label = keys.display();
     row()
         .key(format!("sc-{}-key-{i}", cmd.id()))
         .role("group")
@@ -37,7 +37,7 @@ fn chip(cmd: Command, i: usize, chord: Chord, k: &Kit) -> El {
                 .help(format!("Remove {label} from {}", cmd.label()))
                 .height(18.0)
                 .build(k)
-                .on_activate(move |s: &mut App| s.remove_shortcut(cmd, chord)),
+                .on_activate(move |s: &mut App| s.remove_shortcut(cmd, keys)),
         )
 }
 

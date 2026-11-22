@@ -14,7 +14,6 @@ use super::{composer, notes, ruler, wholefile};
 use crate::app::{App, ME};
 use crate::theme::{TYPE, radius};
 
-/// The diff's colours from the scheme's roles.
 pub(super) fn colors(k: &Kit) -> DiffColors {
     let (s, r) = sr(k);
     DiffColors {
@@ -34,6 +33,9 @@ pub(super) fn colors(k: &Kit) -> DiffColors {
         on_button: r.on_accent,
         find_hit: r.find_hit,
         find_current: r.find_current,
+        moved_text: r.moved,
+        moved_chip: r.moved_bg,
+        moved_border: r.moved_border,
     }
 }
 
@@ -57,7 +59,8 @@ pub(super) fn diff_view(s: &App, k: &Kit) -> El {
         .on_span_select(|s: &mut App, span, _: &mut Tx| s.span_selected(span.as_ref()))
         .on_select(|s: &mut App, sel, _: &mut Tx| s.lines_selected(sel))
         .on_visible_file(|_: &mut App, _| {})
-        .on_need_texts(|s: &mut App, local| s.fetch_texts(local));
+        .on_need_texts(|s: &mut App, local| s.fetch_texts(local))
+        .on_moved(|s: &mut App, local, at, tx: &mut Tx| s.goto_other_side_of_move(local, at, tx));
     col()
         .key("diff-menu-area")
         .w_full()

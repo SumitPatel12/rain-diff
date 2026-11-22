@@ -4,6 +4,7 @@
 
 use std::collections::HashSet;
 
+use rain_core::formatting::formatting_only;
 use rain_core::{FileDiff, LineKind};
 
 /// Past this many removed × added lines (of those found on both sides) in one run, the run is not
@@ -18,6 +19,8 @@ pub struct Ws {
     pub real: u32,
     /// Removed/added pairs that differ only in whitespace.
     pub matched: u32,
+    /// Lines of runs that are the same code re-wrapped over other lines, which no pair matched.
+    pub rewrapped: u32,
     /// Where the first real change is: its new line, else its old line.
     pub real_line: Option<u32>,
 }
@@ -135,9 +138,16 @@ pub fn analyse(f: &FileDiff) -> Ws {
             }
             let la: Vec<u32> = added.iter().zip(&ma).filter(|(_, m)| !**m).map(|(a, _)| a.1).collect();
             let lr: Vec<u32> = removed.iter().zip(&mr).filter(|(_, m)| !**m).map(|(r, _)| r.1).collect();
-            out.real += la.len().max(lr.len()) as u32;
-            lone_added.extend(la);
-            lone_removed.extend(lr);
+            let lines = |run: &Run| run.first().map_or(0..0, |l| l.2..l.2 + run.len() as u32);
+            let (rl, al) = (lines(removed), lines(added));
+            let together = rl.end == al.start && removed.last().map(|l| l.2 + 1) == Some(rl.end);
+            if la.len() + lr.len() > 0 && together && formatting_only(f, rl, al) {
+                out.rewrapped += (la.len() + lr.len()) as u32;
+            } else {
+                out.real += la.len().max(lr.len()) as u32;
+                lone_added.extend(la);
+                lone_removed.extend(lr);
+            }
             removed.clear();
             added.clear();
         };
@@ -187,6 +197,7 @@ mod tests {
                 changed: 6,
                 real: 1,
                 matched: 2,
+                rewrapped: 0,
                 real_line: Some(3)
             }
         );
@@ -231,6 +242,32 @@ mod tests {
         assert_eq!(hunk("ci/build.yml"), 1);
         assert_eq!(hunk("Makefile"), 1);
         assert_eq!(hunk("src/a.ts"), 0);
+    }
+
+    #[test]
+    fn a_rewrapped_call_is_not_a_real_change_where_layout_is_free() {
+        let hunk = |path: &str, extra: bool| {
+            let mut b = FileDiffBuilder::new(0, path, FileStatus::Modified);
+            b.push_hunk(1, 2, 1, 6, "");
+            b.push_line(LineKind::Removed, 1, 0, "    let order = Order::new(customer, items, shipping);");
+            b.push_line(LineKind::Added, 0, 1, "    let order = Order::new(");
+            b.push_line(LineKind::Added, 0, 2, "        customer,");
+            b.push_line(LineKind::Added, 0, 3, "        items,");
+            b.push_line(
+                LineKind::Added,
+                0,
+                4,
+                if extra { "        shipping, gift," } else { "        shipping," },
+            );
+            b.push_line(LineKind::Added, 0, 5, "    );");
+            b.push_line(LineKind::Context, 2, 6, "    order.save();");
+            let w = analyse(&b.finish());
+            (w.changed, w.real, w.rewrapped)
+        };
+        assert_eq!(hunk("src/shop.rs", false), (6, 0, 6));
+        assert_eq!(hunk("src/shop.rs", true), (6, 5, 0), "one more argument is a real change");
+        assert_eq!(hunk("app/shop.py", false), (6, 5, 0));
+        assert_eq!(hunk("notes.txt", false), (6, 5, 0));
     }
 
     #[test]

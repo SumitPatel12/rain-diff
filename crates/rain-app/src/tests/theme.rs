@@ -133,19 +133,38 @@ fn every_scheme_gives_every_role_and_reads() {
     }
 }
 
+/// `ink` over `under` as a window blends them: in sRGB, as a browser does.
+fn on(ink: Color, under: Color) -> Color {
+    use rune::theme::{srgb_decode, srgb_encode};
+    let m = |b: f32, t: f32| srgb_decode(srgb_encode(b) + (srgb_encode(t) - srgb_encode(b)) * ink.a);
+    Color {
+        r: m(under.r, ink.r),
+        g: m(under.g, ink.g),
+        b: m(under.b, ink.b),
+        a: 1.0,
+    }
+}
+
+#[test]
+fn matched_letters_read_on_picker_and_palette_rows_in_every_scheme() {
+    for scheme in Scheme::ALL {
+        let l = look(scheme);
+        let (c, s, r) = (&l.kit.c, l.s, l.r);
+        let ink = crate::view::ui::match_ink(&l.kit);
+        for (name, g) in [
+            ("row", r.raised),
+            ("selected row", on(s.selected_row, r.raised)),
+            ("hovered row", on(c.hover, r.raised)),
+        ] {
+            let ratio = contrast(on(ink, g), g);
+            assert!(ratio >= 4.5, "{scheme:?}: a matched letter on the {name}: {ratio:.2}");
+        }
+        assert_ne!(hex(ink), hex(c.text_base), "{scheme:?}: it differs from the rest of the label");
+    }
+}
+
 #[test]
 fn secondary_text_reads_on_every_ground_and_row_state() {
-    use rune::theme::{srgb_decode, srgb_encode};
-    // Windows blend in sRGB, as a browser does.
-    let on = |ink: Color, under: Color| {
-        let m = |b: f32, t: f32| srgb_decode(srgb_encode(b) + (srgb_encode(t) - srgb_encode(b)) * ink.a);
-        Color {
-            r: m(under.r, ink.r),
-            g: m(under.g, ink.g),
-            b: m(under.b, ink.b),
-            a: 1.0,
-        }
-    };
     let mut low = Vec::new();
     for scheme in Scheme::ALL {
         let l = look(scheme);

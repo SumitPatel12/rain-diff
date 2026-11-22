@@ -166,7 +166,6 @@ fn rail(s: &App, look: &Look) -> El {
     )
 }
 
-/// The controls and the style's canvas.
 fn stage(s: &App, look: &Look, reduced: bool) -> El {
     let ink = look.scheme.diagram();
     super::lab::stage(s, Slot::Playground, reduced, &ink, &look.kit, &look.s, &look.r).unwrap_or_else(el)

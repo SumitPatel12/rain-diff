@@ -24,7 +24,6 @@ pub(crate) fn route(ctx: &Ctx, r: &Req) -> Option<Reply> {
     })
 }
 
-/// The optional `{"author"}` of a lifecycle request body.
 fn author(body: &str) -> Option<String> {
     serde_json::from_str::<Value>(body)
         .ok()?

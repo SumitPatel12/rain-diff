@@ -7,12 +7,13 @@ use serde::Serialize;
 use serde_json::{Value, json};
 
 use crate::label::first_sentence;
-use crate::ops::addressed_suggested;
+use crate::ops::{addressed_suggested, same_repo, sole_repo};
 
 fn in_repo<'a>(s: &'a Session, repo: Option<&'a str>, all: bool) -> impl Iterator<Item = &'a Thread> + 'a {
+    let sole = sole_repo(s);
     s.threads
         .iter()
-        .filter(move |t| repo.is_none_or(|r| t.repo == r) && (all || t.is_open()))
+        .filter(move |t| repo.is_none_or(|r| same_repo(sole, &t.repo, r)) && (all || t.is_open()))
 }
 
 /// `{"version": n, "threads": [...]}`, open threads of `repo` only when given. A `Value` sorts
@@ -94,6 +95,11 @@ fn lines_label(a: &Anchor) -> String {
             format!("L{x}-L{y}")
         }
     }
+}
+
+/// Where `t` sits, as the first line of its readback: `<repo>/<path>:L12`, `Brief › How 2 "…"`, ….
+pub fn thread_location(s: &Session, t: &Thread) -> String {
+    location(s, t, true)
 }
 
 fn location(s: &Session, t: &Thread, with_repo: bool) -> String {

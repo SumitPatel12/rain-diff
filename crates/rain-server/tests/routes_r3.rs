@@ -403,8 +403,90 @@ fn lock_file_names_the_running_server_and_goes_with_it() {
 
     drop(t);
     assert!(!path.exists(), "dropping the server removes its lock");
-    assert!(lock.is_stale(), "nothing answers on the port any more");
+    // The acceptors release their sockets asynchronously after being unblocked.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !lock.is_stale() {
+        assert!(Instant::now() < deadline, "the stopped server still answers on its port");
+        std::thread::sleep(Duration::from_millis(10));
+    }
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn two_servers_in_one_process_cannot_both_own_a_session() {
+    let dir = std::env::temp_dir().join(format!("rain-server-same-pid-{}", std::process::id()));
+    let opts = ServerOptions {
+        session_file: Some(dir.join("S.json")),
+        ..ServerOptions::default()
+    };
+    let first = serve(opts.clone());
+    let second = serve(opts);
+    let read_only = second.server.read_only;
+    drop(second);
+    let owner = read_lock(first.server.lock.as_ref().unwrap()).map(|l| l.port);
+    let first_port = first.server.port;
+    drop(first);
+    let _ = std::fs::remove_dir_all(dir);
+    assert!(read_only, "the port, not just the process, identifies a window");
+    assert_eq!(owner, Some(first_port), "dropping the second server must preserve the first lock");
+}
+
+#[test]
+fn a_server_that_cannot_take_its_lock_opens_read_only_and_says_why() {
+    let dir = std::env::temp_dir().join(format!("rain-server-lock-error-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let blocked = dir.join("not-a-directory");
+    std::fs::write(&blocked, "keep").unwrap();
+    let t = serve(ServerOptions {
+        session_file: Some(blocked.join("S.json")),
+        ..ServerOptions::default()
+    });
+    assert!(
+        t.server.read_only && t.server.lock.is_none(),
+        "a failed lock write must not grant write access"
+    );
+    let cause = t.server.lock_error.clone().unwrap();
+    let one = r#"{"type":"thread","filePath":"a.cs","position":{"side":"new","line":1},"body":"x"}"#;
+    let (status, refused) = t.send("POST", "/api/comment-imports", one);
+    assert_eq!(status, 423);
+    let why = refused["error"].as_str().unwrap();
+    assert!(why.contains("could not be taken") && why.contains(&cause), "{why}");
+    assert!(t.shared.lock().threads.is_empty());
+    assert_eq!(t.get("/api/comments-json").0, 200, "reads still work");
+    drop(t);
+    assert_eq!(std::fs::read_to_string(&blocked).unwrap(), "keep", "nothing was saved");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn shutdown_refuses_a_mutation_whose_body_arrives_after_the_final_save() {
+    use std::io::{Read, Write};
+    let t = serve(ServerOptions::default());
+    let body = r#"{"type":"thread","filePath":"a.cs","position":{"side":"new","line":1},"body":"late"}"#;
+    let mut socket = std::net::TcpStream::connect(("127.0.0.1", t.server.port)).unwrap();
+    socket.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+    write!(
+        socket,
+        "POST /api/comment-imports HTTP/1.1\r\nHost: localhost:{}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nExpect: 100-continue\r\nConnection: close\r\n\r\n",
+        t.server.port,
+        body.len()
+    )
+    .unwrap();
+    let mut interim = Vec::new();
+    while !interim.ends_with(b"\r\n\r\n") {
+        let mut byte = [0];
+        socket.read_exact(&mut byte).unwrap();
+        interim.push(byte[0]);
+        assert!(interim.len() < 4096);
+    }
+    assert!(interim.starts_with(b"HTTP/1.1 100 Continue\r\n"));
+    t.server.stop_then(|| assert!(t.shared.lock().threads.is_empty()));
+    socket.write_all(body.as_bytes()).unwrap();
+    let mut response = String::new();
+    socket.read_to_string(&mut response).unwrap();
+    assert!(response.starts_with("HTTP/1.1 503"), "{response}");
+    assert!(t.shared.lock().threads.is_empty(), "no mutation after shutdown returns");
 }
 
 /// A live process that isn't this one.
@@ -502,20 +584,22 @@ fn health_answers_while_long_polls_fill_every_request_slot() {
     use std::io::Write;
     let t = serve(ServerOptions::default());
     let port = t.server.port;
-    let polls: Vec<std::net::TcpStream> = (0..rain_server::MAX_IN_FLIGHT)
-        .map(|_| {
-            let mut s = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
-            let req = format!("GET /api/events?timeout=20 HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\r\n");
-            s.write_all(req.as_bytes()).unwrap();
-            s
-        })
-        .collect();
+    let mut polls = Vec::new();
     let deadline = Instant::now() + Duration::from_secs(10);
-    // Once the slots are full, other routes get a 503; health still answers as Rain.
-    while t.get("/api/comments-json").0 != 503 {
+    loop {
+        let mut s = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+        let req = format!("GET /api/events?timeout=20 HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\r\n");
+        s.write_all(req.as_bytes()).unwrap();
+        polls.push(s);
+        // The probe itself can take the last slot before a poll does. Keep adding polls
+        // until admission actually refuses the probe, rather than assuming all were admitted.
+        if t.get("/api/comments-json").0 == 503 {
+            break;
+        }
         assert!(Instant::now() < deadline, "the long polls never filled the slots");
         std::thread::sleep(Duration::from_millis(20));
     }
+    // Once the slots are full, health still answers as Rain.
     let (status, h) = t.get("/api/health");
     assert_eq!((status, h["app"].clone()), (200, json!("rain")));
     drop(polls);

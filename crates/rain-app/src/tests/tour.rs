@@ -360,6 +360,38 @@ fn esc_leaves_keeping_the_place_and_enter_resumes_without_moving_the_reader() {
 }
 
 #[test]
+fn the_next_key_on_the_end_card_closes_the_tour() {
+    use rain_core::keymap::Profile;
+    for (profile, next, name) in [(Profile::Vim, key("n"), "n"), (Profile::JetBrains, Key::Function(7), "F7")] {
+        let mut rt = runtime(with_brief(app(story(), true)));
+        rt.update(move |s, _| s.set_profile(profile));
+        rt.update(|s, tx| s.start_tour(tx));
+        press(&mut rt, Key::Enter, Mods::default());
+        rt.update(|s, tx| s.tour_goto(4, tx));
+        settle(&mut rt);
+        press(&mut rt, next.clone(), Mods::default());
+        assert_eq!(rt.state.tour.stage, TourStage::End, "{name}: past the last step is the end card");
+        assert!(rt.find("tour-end").is_some(), "{name}: the end card still shows");
+        let closes = format!("{name} or Esc closes");
+        assert!(rt.state.status.ends_with(&closes), "{name}: {}", rt.state.status);
+        rt.update(|s, tx| s.start_tour(tx));
+        assert!(rt.state.status.ends_with(&closes), "{name}: {}", rt.state.status);
+        let help = rt
+            .elements()
+            .into_iter()
+            .find(|e| e.key.as_deref() == Some("tour-close"))
+            .and_then(|e| e.help);
+        assert_eq!(help, Some(format!("Close the tour  {name}")));
+
+        press(&mut rt, next, Mods::default());
+        assert!(!rt.state.layout.is_open(Overlay::Tour), "{name}: the next key closes the end card");
+        assert!(rt.find("tour-end").is_none());
+        assert!(!rt.state.tour.resumable, "{name}: a finished tour is not resumed");
+        assert_eq!(rt.state.status, "");
+    }
+}
+
+#[test]
 fn the_end_card_lists_the_files_the_tour_never_cites() {
     let mut rt = runtime(with_brief(app(story(), true)));
     begin(&mut rt);

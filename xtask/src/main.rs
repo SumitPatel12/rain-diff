@@ -115,8 +115,6 @@ impl Tier {
     }
 }
 
-// ---------------------------------------------------------------- deterministic random
-
 struct Rng(u64);
 
 impl Rng {
@@ -144,8 +142,6 @@ impl Rng {
         &xs[self.below(xs.len())]
     }
 }
-
-// ---------------------------------------------------------------- file model
 
 #[derive(Clone)]
 enum Content {
@@ -557,9 +553,6 @@ fn png(seed: u64, len: usize) -> Vec<u8> {
     v
 }
 
-// ---------------------------------------------------------------- tiers
-
-/// A generated source file of `kind` for entity `e`, scaled by `size`.
 type BlockFn = Box<dyn FnMut(&mut Rng) -> Vec<String>>;
 
 fn source(rng: &mut Rng, kind: usize, e: &str, size: usize) -> (String, Vec<String>, BlockFn) {
@@ -788,8 +781,6 @@ fn build_tier(t: Tier) -> (Tree, Tree) {
         Tier::Xl => tier_xl(),
     }
 }
-
-// ---------------------------------------------------------------- git
 
 fn git(repo: &Path, args: &[&str]) -> Res<()> {
     let out = Command::new("git")

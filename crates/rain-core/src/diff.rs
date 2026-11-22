@@ -1,6 +1,3 @@
-//! A compact diff: one text arena per file plus fixed-size line records, so a million-line
-//! change costs a few bytes per line beyond its text.
-
 use std::ops::Range;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -132,7 +129,6 @@ pub fn display_columns(s: &str) -> u32 {
     col
 }
 
-/// Builds a [`FileDiff`] line by line, appending text to the arena.
 #[derive(Debug, Default)]
 pub struct FileDiffBuilder {
     file: FileDiff,

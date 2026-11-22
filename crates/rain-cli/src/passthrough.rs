@@ -40,7 +40,6 @@ const FLAG: &[&str] = &[
     "--chrome",
     "--hot",
 ];
-/// Flags whose value is optional.
 const OPTIONAL: &[&str] = &["--keys", "--playground"];
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]

@@ -37,7 +37,6 @@ pub use render::render_overview;
 pub use settings::{CodeSize, Density, Settings, Theme, ViewLayout};
 pub use view::view;
 
-/// The installed JetBrains Mono Nerd Font's family name.
 pub const MONO_FAMILY: &str = "JetBrainsMono Nerd Font Mono";
 pub const CODE: TextStyle = TextStyle::new(13.0, 400.0).mono();
 
@@ -489,7 +488,7 @@ fn spec() -> AppSpec<App> {
                 seed_threads(s);
                 let g = scene_file(s);
                 s.reloader.changed.insert(g, vec![0]);
-                s.reloader.banner = Some(app::Stale {
+                s.reloader.banner = Some(app::Stale::Commits {
                     repo: String::new(),
                     branch: "feature/vouchers".into(),
                     commits: Some(3),
@@ -649,10 +648,15 @@ pub fn run(launch: Launch, shared: Arc<Shared>) -> bool {
         launch
     };
     let _ = START.set((launch, shared, Instant::now()));
-    let mut app = rune::App::new(spec()).modifier_keys().on_close(on_close).on_window(|w| {
-        icon::apply(w);
-        title_bar::remember(w);
-    });
+    let on_focus = |s: &mut App, focused: bool, _: &mut Tx| s.window_focus(focused);
+    let mut app = rune::App::new(spec())
+        .modifier_keys()
+        .on_close(on_close)
+        .on_focus(on_focus)
+        .on_window(|w| {
+            icon::apply(w);
+            title_bar::remember(w);
+        });
     peek_window::register(&mut app);
     let main = app.handle();
     note_window::register(&mut app, main);

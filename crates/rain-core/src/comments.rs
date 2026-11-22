@@ -34,7 +34,6 @@ impl Anchor {
         }
     }
 
-    /// First and last line covered.
     pub fn lines(&self) -> (u32, u32) {
         match *self {
             Anchor::Line { line, .. } => (line, line),

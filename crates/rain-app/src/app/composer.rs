@@ -35,7 +35,6 @@ pub struct ComposerUi {
     pub mode: ComposerMode,
     pub kind: ThreadKind,
     pub blocking: bool,
-    /// The kind dropdown's list is open.
     pub kind_menu: bool,
     /// The long editor (`⤢`) is open in its floating window.
     pub long: bool,

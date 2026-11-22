@@ -22,12 +22,10 @@ use crate::app::{App, ME};
 use crate::settings::Density;
 use crate::theme::{Look, Roles, Surfaces, TYPE, radius};
 
-/// A file row's height: 26 compact, 32 comfortable.
 pub(crate) fn row_height(s: &App) -> f32 {
     if s.settings.density == Density::Compact { 26.0 } else { 32.0 }
 }
 
-/// A group row's height in the tray: 30 compact, 36 comfortable.
 fn group_height(s: &App) -> f32 {
     if s.settings.density == Density::Compact { 30.0 } else { 36.0 }
 }
@@ -46,6 +44,20 @@ struct RowLook {
     r: Roles,
     /// The rows' width as last laid out; `None` before the first layout.
     width: Option<f32>,
+    /// What the colours and the Viewed tooltip's key come from, for a file row's memo.
+    scheme: crate::theme::Scheme,
+    viewed_key: Option<String>,
+}
+
+#[cfg(test)]
+thread_local! {
+    static FILE_ROW_BUILDS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// How many file rows the list has built on this thread; a row it reused isn't counted.
+#[cfg(test)]
+pub(crate) fn file_row_builds() -> u64 {
+    FILE_ROW_BUILDS.with(|n| n.get())
 }
 
 /// The narrowest folder hint worth drawing: an ellipsis and a few letters.
@@ -126,6 +138,8 @@ fn body(s: &App, look: &Look) -> El {
         s: look.s,
         r: look.r,
         width: rune::memo::layout_size("list-files").map(|size| size[0]),
+        scheme: s.seen_scheme.get(),
+        viewed_key: rain_core::Command::ToggleViewed.chord().map(|c| c.display()),
     });
     let n = listing.rows.len();
     let rows = col()
@@ -169,7 +183,23 @@ fn build_row(s: &App, i: usize, look: &RowLook) -> El {
     match listing.rows.get(i).cloned() {
         Some(Row::Header(sec)) => header(s, sec, &listing, k),
         Some(Row::Sub(g)) => sub_header(s, g, &listing, key, k),
-        Some(Row::File(g)) => file_row(s, g, key, look),
+        Some(Row::File(g)) => {
+            let f = &s.diff.files()[g];
+            let version = (
+                g,
+                s.group_of(g),
+                (f.additions, f.deletions),
+                s.is_viewed(g),
+                s.tree.file(&s.keys[g]).map_or(0, |e| e.comments),
+                s.item(g).map(|i| i.reason.text.as_str()),
+                s.reader_tab() == crate::app::ReaderTab::Changes && s.current() == Some(g),
+                look.width.map(f32::to_bits),
+                row_height(s).to_bits(),
+                look.scheme,
+                &look.viewed_key,
+            );
+            rune::memo(key, version, || file_row(s, g, row_key(s, i), look))
+        }
         Some(Row::Accepted(a)) => accepted_row(s, a, key, k),
         Some(Row::AcceptedFile(g)) => accepted_file_row(s, g, key, k),
         None => row().key(key).h(row_height(s)),
@@ -317,6 +347,8 @@ fn folder_room(width: Option<f32>, name: &str, plus: &str, minus: &str, threads:
 
 /// Group tag · icon · name · dim folder · `+n −m` · thread count · ✓ once viewed.
 fn file_row(s: &App, g: usize, key: String, look: &RowLook) -> El {
+    #[cfg(test)]
+    FILE_ROW_BUILDS.with(|n| n.set(n.get() + 1));
     let k = &look.kit;
     let path = &s.keys[g];
     let (dir, name) = path.rsplit_once('/').unwrap_or(("", path.as_str()));
@@ -745,8 +777,6 @@ fn waiting_row(s: &App, t: &Thread, k: &Kit) -> El {
             .truncate(),
     )
 }
-
-// ----- file-at-a-time cards -----
 
 /// The reader's card in file-at-a-time when the item is not a file.
 pub(super) fn single_card(s: &App, k: &Kit) -> Option<El> {

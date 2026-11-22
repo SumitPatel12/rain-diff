@@ -18,7 +18,6 @@ pub enum Tone {
     Success,
 }
 
-/// A message's action: a label and what it runs.
 pub type Action = (&'static str, fn(&mut App, &mut Tx));
 
 fn tone_colors(t: Tone, k: &Kit) -> (rune::Color, rune::Color) {

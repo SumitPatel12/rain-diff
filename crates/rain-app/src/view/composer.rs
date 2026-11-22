@@ -83,7 +83,6 @@ fn wired(s: &App, k: &Kit, rows: (usize, usize), long: bool, bare: bool) -> El {
     if long { built.key("long-composer") } else { built }
 }
 
-/// The composer under its line in the diff.
 pub(super) fn inline(s: &App, k: &Kit) -> El {
     wired(s, k, (3, 12), false, false)
 }

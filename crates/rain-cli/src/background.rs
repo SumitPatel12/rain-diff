@@ -40,12 +40,10 @@ pub fn with_extras(line: &str, token: Option<&str>, read_only: bool) -> String {
     format!("{}{extra}}}", &line[..line.len() - 1])
 }
 
-/// Whether the handshake `line` says the window is read-only.
 pub fn is_read_only(line: &str) -> bool {
     serde_json::from_str::<serde_json::Value>(line.trim()).is_ok_and(|v| v["readOnly"] == true)
 }
 
-/// The parsed handshake, when `line` is one.
 pub fn parse_handshake(line: &str) -> Option<(u16, String, u32)> {
     let v: serde_json::Value = serde_json::from_str(line.trim()).ok()?;
     Some((

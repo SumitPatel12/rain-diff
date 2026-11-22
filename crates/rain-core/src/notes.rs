@@ -8,12 +8,9 @@ use crate::comments::{Anchor, AnchorHow, AnchorState, CodeSnapshot, Orphan};
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum NoteKind {
-    /// The whole change.
     #[default]
     Story,
-    /// One file.
     File,
-    /// Lines of one file.
     Line,
 }
 

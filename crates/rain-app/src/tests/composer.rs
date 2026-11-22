@@ -20,7 +20,11 @@ fn click(rt: &mut Runtime<App>, key: &str) {
 
 /// The story fixture with the cursor on an added line of the first file that has no thread.
 fn on_a_line() -> Runtime<App> {
-    let mut rt = runtime(app(story(), true));
+    on_a_line_of(app(story(), true))
+}
+
+fn on_a_line_of(a: App) -> Runtime<App> {
+    let mut rt = runtime(a);
     let n = rt.state.diff.files()[0].lines.iter().filter(|l| l.new != 0).nth(2).unwrap().new;
     rt.update(move |s, _| s.active_mut().set_cursor(Some((0, LineRef::new(Side::New, n)))));
     settle(&mut rt);
@@ -572,8 +576,10 @@ fn act(rt: &mut Runtime<App>, id: &str, a: rain_comments::CardAction) {
 
 #[test]
 fn deleting_your_thread_offers_undo_that_puts_it_back_exactly() {
-    let mut rt = on_a_line();
-    rt.update(|s, _| seed_threads(s));
+    // Seeded before the first poll: seeded after, the agent's threads raise a five-second toast.
+    let mut a = app(story(), true);
+    seed_threads(&mut a);
+    let mut rt = on_a_line_of(a);
     typed(&mut rt, "c");
     typed(&mut rt, "Mine to delete");
     press(&mut rt, Key::Enter, ctrl());

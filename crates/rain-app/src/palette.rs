@@ -1,7 +1,10 @@
 //! Ctrl+K: commands with their chords, layouts, themes, file filters, notes, files, chapters and
 //! threads, fuzzy-matched.
 
+use std::rc::Rc;
+
 use rain_core::command::Command;
+use rain_core::fuzzy::{Fit, Matcher, Query};
 use rain_core::keymap::Profile;
 use rain_core::{FileTag, Note, NoteKind};
 use rain_diffview::{LineRef, VimKey};
@@ -64,37 +67,61 @@ pub struct Entry {
     pub kind: &'static str,
 }
 
-/// Rows the palette shows at most.
 pub const MAX_ROWS: usize = 40;
 
-/// A subsequence match of `query` in `text` (both lowercased by the caller), scored higher for
-/// runs, word starts and an early first hit; `None` when not every query char appears in order.
+/// How well `query` fits `text` (both lowercased by the caller), higher is better: see
+/// [`rain_core::fuzzy`]. `None` when a term isn't in it, or only as scattered letters.
+#[cfg(test)]
 pub fn score(query: &str, text: &str) -> Option<i32> {
-    if query.is_empty() {
-        return Some(0);
+    fit(&mut Matcher::default(), &Query::new(query), text).score()
+}
+
+/// A path's file name weighs more than its folders; a ` / ` in a command's label is no folder.
+fn name_at(text: &str) -> usize {
+    match text.rfind('/') {
+        Some(i) if !text[i + 1..].starts_with(char::is_whitespace) => i + 1,
+        _ => 0,
     }
-    let t: Vec<char> = text.chars().collect();
-    let mut score = 0;
-    let mut ti = 0;
-    let mut prev: Option<usize> = None;
-    let mut first = None;
-    for qc in query.chars() {
-        if qc == ' ' {
-            continue;
-        }
-        let at = (ti..t.len()).find(|&i| t[i] == qc)?;
-        first.get_or_insert(at);
-        score += 1;
-        if prev == Some(at.wrapping_sub(1)) {
-            score += 5;
-        }
-        if at == 0 || matches!(t[at - 1], ' ' | '/' | '.' | '_' | '-') {
-            score += 3;
-        }
-        prev = Some(at);
-        ti = at + 1;
+}
+
+fn fit(m: &mut Matcher, q: &Query, text: &str) -> Fit {
+    m.fit(q, text, name_at(text))
+}
+
+/// Per row, the byte ranges of its label that `query` matched: as typed, or forgiving a typo
+/// for a row that only fits so. Worked out once for a query and its rows, then kept.
+pub fn marks(s: &App, query: &str, rows: &[Entry]) -> Marks {
+    let mut cache = s.palette.cache.borrow_mut();
+    if let Some(m) = &cache.marked
+        && m.query == query
+        && m.labels.iter().eq(rows.iter().map(|e| &e.label))
+    {
+        return m.marks.clone();
     }
-    Some(score * 4 - first.unwrap_or(0).min(40) as i32 - (t.len() as i32 / 16))
+    let q = Query::new(&query.trim().to_lowercase());
+    let loose = q.loosened();
+    let (mut m, mut m_loose) = (Matcher::default(), Matcher::default());
+    let marks: Marks = Rc::new(
+        rows.iter()
+            .map(|e| {
+                let mut out = Vec::new();
+                let at = name_at(&e.label);
+                if m.marks(&q, &e.label, at, &mut out).score().is_none()
+                    && let Some(loose) = &loose
+                {
+                    m_loose.marks(loose, &e.label, at, &mut out);
+                }
+                out
+            })
+            .collect(),
+    );
+    cache.marks_made += 1;
+    cache.marked = Some(Marked {
+        query: query.to_owned(),
+        labels: rows.iter().map(|e| e.label.clone()).collect(),
+        marks: marks.clone(),
+    });
+    marks
 }
 
 pub fn entries(s: &App) -> Vec<Entry> {
@@ -258,14 +285,42 @@ fn toggle_filter(s: &mut App, item: &Item, tx: &mut Tx) {
 /// What [`entries`] reads, so they are rebuilt only when it changes.
 type Source = (u64, u32, ViewLayout, Theme, u64, rain_tree::TreeFilter);
 
+/// Per row, the byte ranges of its label a query matched.
+pub type Marks = Rc<Vec<Vec<std::ops::Range<usize>>>>;
+
+/// The last query, compiled; `loose` forgives a typo, when a term is long enough for one.
+struct Asked {
+    text: String,
+    strict: Query,
+    loose: Option<Query>,
+}
+
+struct Marked {
+    query: String,
+    labels: Vec<String>,
+    marks: Marks,
+}
+
 /// [`entries`] with their labels lowercased, kept while what they show stands; and the last
-/// query's matches, which a query typed on from it only narrows.
+/// query's matches, which a query typed on from it only narrows, so a redraw or a move of the
+/// selection matches nothing again.
 #[derive(Default)]
 pub struct Cache {
     source: Option<Source>,
     entries: Vec<Entry>,
     lower: Vec<String>,
-    last: Option<(String, Vec<(i32, usize)>)>,
+    asked: Option<Asked>,
+    /// The last query's matches, and the entries holding all its letters.
+    hits: Vec<(i32, usize)>,
+    held: Vec<usize>,
+    /// Its matches forgiving a typo, once nothing fitted as typed.
+    loose_hits: Option<Vec<(i32, usize)>>,
+    matcher: Matcher,
+    loose_matcher: Matcher,
+    marked: Option<Marked>,
+    /// Passes over the entries so far, and times marks were worked out.
+    pub scans: u32,
+    pub marks_made: u32,
 }
 
 impl Cache {
@@ -284,25 +339,68 @@ impl Cache {
         self.entries = entries(s);
         self.lower = self.entries.iter().map(|e| e.label.to_lowercase()).collect();
         self.source = Some(source);
-        self.last = None;
+        self.asked = None;
+        self.marked = None;
     }
 
     /// `(score, index)` of every entry matching `q`, in entry order.
     fn matches(&mut self, q: &str) -> Vec<(i32, usize)> {
-        let from = match &self.last {
-            Some((last, hits)) if last == q => return hits.clone(),
-            // Every char of the shorter query is in the longer one, in order.
-            Some((last, hits)) if q.starts_with(last.as_str()) => Some(hits.iter().map(|&(_, i)| i).collect::<Vec<_>>()),
-            _ => None,
+        let from = match &self.asked {
+            Some(last) if last.text == q => return self.hits.clone(),
+            // Every term of the shorter query is in the longer one, whole or as a term's start.
+            Some(last) if q.starts_with(last.text.as_str()) => std::mem::take(&mut self.held),
+            _ => (0..self.lower.len()).collect(),
         };
-        let lower = &self.lower;
-        let hit = |i: usize| score(q, &lower[i]).map(|sc| (sc, i));
-        let hits: Vec<(i32, usize)> = match from {
-            Some(from) => from.into_iter().filter_map(hit).collect(),
-            None => (0..lower.len()).filter_map(hit).collect(),
+        let strict = Query::new(q);
+        if !strict.is_empty() {
+            self.scans += 1;
+        }
+        let (mut hits, mut held) = (Vec::new(), Vec::new());
+        for i in from {
+            match fit(&mut self.matcher, &strict, &self.lower[i]) {
+                Fit::Miss => {}
+                Fit::Weak => held.push(i),
+                Fit::Hit(sc) => {
+                    held.push(i);
+                    hits.push((sc, i));
+                }
+            }
+        }
+        self.asked = Some(Asked {
+            text: q.to_owned(),
+            loose: strict.loosened(),
+            strict,
+        });
+        self.hits = hits;
+        self.held = held;
+        self.loose_hits = None;
+        self.hits.clone()
+    }
+
+    /// Every entry matching the last query when a typo is forgiven: one pass, at the first ask.
+    fn loose_matches(&mut self) -> Vec<(i32, usize)> {
+        let Some(loose) = self.asked.as_ref().and_then(|a| a.loose.as_ref()) else {
+            return Vec::new();
         };
-        self.last = Some((q.to_owned(), hits.clone()));
-        hits
+        if self.loose_hits.is_none() {
+            self.scans += 1;
+            let m = &mut self.loose_matcher;
+            let all = self.lower.iter().enumerate();
+            self.loose_hits = Some(all.filter_map(|(i, l)| fit(m, loose, l).score().map(|sc| (sc, i))).collect());
+        }
+        self.loose_hits.clone().unwrap_or_default()
+    }
+
+    /// The last query's score for each of `labels` (lowercased), numbered from `first`.
+    fn score_rows(&mut self, labels: &[String], first: usize, forgiving: bool) -> Vec<(i32, usize)> {
+        let Some(asked) = &self.asked else { return Vec::new() };
+        let (m, q) = match (&asked.loose, forgiving) {
+            (Some(loose), true) => (&mut self.loose_matcher, loose),
+            (None, true) => return Vec::new(),
+            (_, false) => (&mut self.matcher, &asked.strict),
+        };
+        let rows = labels.iter().enumerate();
+        rows.filter_map(|(j, l)| fit(m, q, l).score().map(|sc| (sc, first + j))).collect()
     }
 }
 
@@ -321,13 +419,14 @@ pub fn filtered(s: &App, query: &str) -> Vec<Entry> {
             kind: "Setting",
         })
         .collect();
+    let ask_labels: Vec<String> = ask_rows.iter().map(|e| e.label.to_lowercase()).collect();
     let mut scored = cache.matches(&q);
-    scored.extend(
-        ask_rows
-            .iter()
-            .enumerate()
-            .filter_map(|(j, e)| score(&q, &e.label.to_lowercase()).map(|sc| (sc, n + j))),
-    );
+    scored.extend(cache.score_rows(&ask_labels, n, false));
+    // Nothing fits as typed: everything once more, forgiving a typo.
+    if scored.is_empty() {
+        scored = cache.loose_matches();
+        scored.extend(cache.score_rows(&ask_labels, n, true));
+    }
     if !q.is_empty() {
         scored.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
     }
@@ -338,7 +437,6 @@ pub fn filtered(s: &App, query: &str) -> Vec<Entry> {
         .collect()
 }
 
-/// Runs the selected row and closes the palette.
 pub fn run_selected(s: &mut App, tx: &mut Tx) {
     let rows = filtered(s, &s.palette.edit.text.clone());
     let Some(e) = rows.get(s.palette.sel.min(rows.len().saturating_sub(1))).cloned() else {
@@ -393,6 +491,32 @@ mod tests {
         assert_eq!(hint(&a).as_deref(), Some(""));
         a.settings.layout = ViewLayout::Unified;
         assert_eq!(hint(&a).as_deref(), Some("on"), "a setting change rebuilds the rows");
+    }
+
+    #[test]
+    fn words_match_in_any_order_and_a_file_name_outweighs_its_folders() {
+        let a = crate::tests::app(crate::tests::story(), true);
+        let labels = |q: &str| -> Vec<String> { filtered(&a, q).into_iter().map(|e| e.label).collect() };
+        assert_eq!(labels("dark theme")[0], "Theme: dark");
+        let rows = labels("theme dark");
+        assert_eq!(rows[0], "Theme: dark", "the shorter label first: {rows:?}");
+        assert!(rows.contains(&"Theme: gruvbox dark hard".to_owned()), "{rows:?}");
+        assert_eq!(labels("unified split")[0], "Split / unified", "a slash in a label is no folder");
+        let files: Vec<String> = filtered(&a, "serv")
+            .into_iter()
+            .filter(|e| e.kind == "File")
+            .map(|e| e.label)
+            .collect();
+        let at = |end: &str| {
+            files
+                .iter()
+                .position(|f| f.ends_with(end))
+                .unwrap_or_else(|| panic!("{end}: {files:?}"))
+        };
+        for name in ["AccountService.cs", "VoucherService.cs", "voucher.service.ts"] {
+            assert!(at(name) < at("VouchersController.cs"), "{files:?}");
+        }
+        assert!(labels("zzzz").is_empty());
     }
 
     #[test]

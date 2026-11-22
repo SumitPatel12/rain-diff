@@ -1,0 +1,18 @@
+# Most comment lines (`//`, `///`, `//!` starting a line) each crate may have.
+# Checked by crates/rain-cli/tests/comment_ratchet.rs; lower it, never raise it without a reason.
+rain 1
+rain-app 1851
+rain-ask 72
+rain-cli 283
+rain-comments 353
+rain-core 439
+rain-diagram 152
+rain-diffview 820
+rain-git 153
+rain-lab 551
+rain-overview 136
+rain-server 213
+rain-syntax 82
+rain-tree 122
+rain-triage 76
+xtask 10

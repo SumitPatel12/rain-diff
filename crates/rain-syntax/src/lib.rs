@@ -7,14 +7,16 @@
 
 use std::ops::Range;
 use std::str::FromStr;
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use rune::Color;
 use rune_kit::syntax::{Highlight, Highlighter, Paint, Syntax};
-use syntect::easy::HighlightLines;
-use syntect::highlighting::{Color as SynColor, ScopeSelectors, StyleModifier, Theme, ThemeItem, ThemeSettings};
-use syntect::parsing::{SyntaxReference, SyntaxSet};
+use syntect::highlighting::{
+    Color as SynColor, HighlightIterator, HighlightState, Highlighter as Styler, ScopeSelectors, StyleModifier, Theme, ThemeItem,
+    ThemeSettings,
+};
+use syntect::parsing::{ParseState, ScopeStack, SyntaxReference, SyntaxSet};
 use syntect::util::LinesWithEndings;
 
 pub mod fast;
@@ -288,7 +290,6 @@ pub enum Mode {
     Rich,
 }
 
-/// Which engine colours a language.
 #[derive(Clone, Copy, Debug)]
 pub enum Engine {
     /// rune-kit's linear scanners for a language they know.
@@ -350,38 +351,150 @@ pub fn highlight(palette: Palette, lang: Option<&str>, code: &str) -> Vec<Highli
 /// `code`'s highlights: sorted, non-overlapping byte ranges painted from `palette`. Thread-safe,
 /// so a worker can highlight ahead of the view. See [`engine`] for which engine runs.
 pub fn highlight_with(mode: Mode, palette: Palette, lang: Option<&str>, code: &str) -> Vec<Highlight> {
+    highlight_from(mode, palette, lang, code, &Carry::default()).0
+}
+
+/// Whether `mode` colours `lang` with syntect, which costs milliseconds a chunk: work for a
+/// worker thread, where the linear scanners (tens of microseconds) stay on the caller's.
+pub fn slow(mode: Mode, lang: Option<&str>) -> bool {
+    matches!(engine(mode, lang), Engine::Syntect(_))
+}
+
+/// A syntect parse and highlight state at a line end.
+#[derive(Clone, PartialEq)]
+struct Resume(ParseState, HighlightState);
+
+// SAFETY: all of it is owned data. The one part that is not `Send` by itself is Oniguruma's capture
+// `Region`: heap arrays the state owns, reads and frees, with no thread affinity or shared mutation.
+unsafe impl Send for Resume {}
+unsafe impl Sync for Resume {}
+
+enum Open {
+    /// The delimiter that puts a linear scanner back inside the comment or string it was in.
+    Scan(Box<str>),
+    Syntect(Resume),
+}
+
+/// What the end of some code left open (a block comment, a multi-line string, a template), for
+/// [`highlight_from`] to continue on the lines after it. The default is a fresh start.
+#[derive(Clone, Default)]
+pub struct Carry(Option<Arc<Open>>);
+
+impl Carry {
+    pub fn is_fresh(&self) -> bool {
+        self.0.is_none()
+    }
+
+    fn opener(&self) -> &str {
+        match self.0.as_deref() {
+            Some(Open::Scan(s)) => s,
+            _ => "",
+        }
+    }
+
+    fn resume(&self) -> Option<&Resume> {
+        match self.0.as_deref() {
+            Some(Open::Syntect(r)) => Some(r),
+            _ => None,
+        }
+    }
+}
+
+impl PartialEq for Carry {
+    fn eq(&self, other: &Carry) -> bool {
+        match (&self.0, &other.0) {
+            (None, None) => true,
+            (Some(a), Some(b)) if Arc::ptr_eq(a, b) => true,
+            (Some(a), Some(b)) => match (&**a, &**b) {
+                (Open::Scan(a), Open::Scan(b)) => a == b,
+                (Open::Syntect(a), Open::Syntect(b)) => a == b,
+                _ => false,
+            },
+            _ => false,
+        }
+    }
+}
+
+impl std::fmt::Debug for Carry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.0.as_deref() {
+            None => f.write_str("Carry(fresh)"),
+            Some(Open::Scan(s)) => write!(f, "Carry({s:?})"),
+            Some(Open::Syntect(_)) => f.write_str("Carry(syntect)"),
+        }
+    }
+}
+
+/// [`highlight_with`] for code that follows on from earlier lines: starts in the state `from`
+/// (what those lines' own call returned) and returns the state `code` ends in. `code` is whole
+/// lines. Past [`MAX_BYTES`] the end state is unknown, so it comes back fresh.
+pub fn highlight_from(mode: Mode, palette: Palette, lang: Option<&str>, code: &str, from: &Carry) -> (Vec<Highlight>, Carry) {
+    let whole = code.len() <= MAX_BYTES;
     let code = capped(code);
+    let key = lang.and_then(language_key);
+    let open = from.opener();
+    let joined;
+    let text = if open.is_empty() {
+        code
+    } else {
+        joined = [open, code].concat();
+        &joined
+    };
     let mut out = match engine(mode, lang) {
         Engine::Syntect(s) => {
-            return tokens(s, code)
-                .into_iter()
-                .map(|(r, t)| (r, Paint::Color(palette.color(t))))
-                .collect();
+            let (toks, end) = tokens_from(s, code, from.resume());
+            let out = toks.into_iter().map(|(r, t)| (r, Paint::Color(palette.color(t)))).collect();
+            let end = end.filter(|_| whole).map(|r| Carry(Some(Arc::new(Open::Syntect(r)))));
+            return (out, end.unwrap_or_default());
         }
-        Engine::Builtin => rune_kit::syntax::builtin(lang.and_then(language_key).as_deref(), code),
-        Engine::CSharp => fast::csharp(code),
-        Engine::Scss => fast::scss(code),
-        Engine::None => return rune_kit::syntax::builtin(lang, code),
+        Engine::Builtin => rune_kit::syntax::builtin(key.as_deref(), text),
+        Engine::CSharp => fast::csharp(text),
+        Engine::Scss => fast::scss(text),
+        Engine::None => return (rune_kit::syntax::builtin(lang, code), Carry::default()),
     };
-    for (_, p) in &mut out {
+    let templates = key.as_deref().is_some_and(fast::has_templates);
+    let end = match fast::left_open(text, &out, templates).filter(|_| whole) {
+        Some(o) if o == open => from.clone(),
+        Some(o) => Carry(Some(Arc::new(Open::Scan(o.into())))),
+        None => Carry::default(),
+    };
+    let n = open.len();
+    out.retain_mut(|(r, p)| {
         if let Paint::Kind(k) = *p
             && let Some(t) = kind_token(k)
         {
             *p = Paint::Color(palette.color(t));
         }
-    }
-    out
+        *r = r.start.saturating_sub(n)..r.end.saturating_sub(n);
+        r.start < r.end
+    });
+    (out, end)
+}
+
+fn styler() -> &'static Styler<'static> {
+    static STYLER: OnceLock<Styler<'static>> = OnceLock::new();
+    STYLER.get_or_init(|| Styler::new(theme()))
 }
 
 /// `code`'s token ranges by `syntax`, merged across whitespace on one line.
 pub fn tokens(syntax: &SyntaxReference, code: &str) -> Vec<(Range<usize>, Token)> {
+    tokens_from(syntax, code, None).0
+}
+
+/// [`tokens`] from the state `from`, and the state after `code`'s last line (`None` when syntect
+/// gave up on a line).
+fn tokens_from(syntax: &SyntaxReference, code: &str, from: Option<&Resume>) -> (Vec<(Range<usize>, Token)>, Option<Resume>) {
     let set = syntaxes();
-    let mut h = HighlightLines::new(syntax, theme());
+    let styler = styler();
+    let Resume(mut parse, mut high) = match from {
+        Some(r) => r.clone(),
+        None => Resume(ParseState::new(syntax), HighlightState::new(styler, ScopeStack::new())),
+    };
     let mut out: Vec<(Range<usize>, Token)> = Vec::new();
     let mut off = 0;
     for line in LinesWithEndings::from(code) {
-        let Ok(regions) = h.highlight_line(line, set) else { break };
-        for (style, piece) in regions {
+        let Ok(ops) = parse.parse_line(line, set) else { return (out, None) };
+        for (style, piece) in HighlightIterator::new(&mut high, &ops, line, styler) {
             let start = off;
             off += piece.len();
             let fg = style.foreground;
@@ -401,7 +514,7 @@ pub fn tokens(syntax: &SyntaxReference, code: &str) -> Vec<(Range<usize>, Token)
             out.push((start..end, tok));
         }
     }
-    out
+    (out, Some(Resume(parse, high)))
 }
 
 /// A rune-kit highlighter in `palette` with [`Mode::Fast`].

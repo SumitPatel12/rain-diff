@@ -234,19 +234,16 @@ impl App {
         self.settings.section_collapsed(sub_bit(g))
     }
 
-    /// Folds or unfolds a change group and remembers it.
     pub fn toggle_sub(&mut self, g: Group) {
         self.settings.toggle_section(sub_bit(g));
         self.save_settings();
     }
 
-    /// Folds or unfolds a list section and remembers it.
     pub fn toggle_list_section(&mut self, section: u8) {
         self.settings.toggle_section(section);
         self.save_settings();
     }
 
-    /// Unfolds `section` when it is folded.
     pub fn unfold_section(&mut self, section: u8) {
         if self.section_folded(section) {
             self.toggle_list_section(section);
@@ -408,8 +405,6 @@ impl App {
         self.filter_files(tx);
     }
 
-    // ----- accept -----
-
     /// `Shift+A`: accepts the current item's group.
     pub fn accept_group(&mut self, tx: &mut Tx) {
         let group = match self.board.pick {
@@ -541,8 +536,6 @@ impl App {
             .map(|(m, _)| m.as_str())
     }
 
-    // ----- reader mode -----
-
     pub fn single_mode(&self) -> bool {
         self.mirror.ui.reader == ReaderMode::Single
     }
@@ -573,7 +566,6 @@ impl App {
         }
     }
 
-    /// File-at-a-time shows `pick`.
     pub fn show_pick(&mut self, pick: Pick) {
         let files = match pick {
             Pick::File(g) if g < self.keys.len() => vec![g],
@@ -581,10 +573,9 @@ impl App {
         };
         let mut sub = Subset::new(self, files, None);
         if let Some(&g) = sub.files.first() {
-            sub.diff.set_collapsed(
-                0,
-                self.diff.collapsed(g) && self.diff.files()[g].lines.len() > crate::load::LARGE_FILE_LINES,
-            );
+            let f = &self.diff.files()[g];
+            let big = f.lines.len() > crate::load::LARGE_FILE_LINES || super::folds::wide(f);
+            sub.diff.set_collapsed(0, self.diff.collapsed(g) && big);
         }
         self.board.single = Some(sub);
         self.board.pick = pick;
@@ -722,8 +713,6 @@ impl App {
         }
     }
 
-    // ----- jump history -----
-
     /// Remembers the reader's file before a jump to another place.
     pub(crate) fn record_jump(&mut self) {
         let Some(k) = self.current_key() else { return };
@@ -735,6 +724,12 @@ impl App {
             self.board.back.remove(0);
         }
         self.board.forward.clear();
+    }
+
+    /// The file the last jump left, where `Alt+←` goes; none when it is the reader's own.
+    pub(crate) fn previous_file(&self) -> Option<usize> {
+        let g = self.index_of(self.board.back.last()?)?;
+        (self.current() != Some(g)).then_some(g)
     }
 
     /// `Alt+←`/`Alt+→`: back or forward through the files jumped between.

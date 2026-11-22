@@ -49,7 +49,7 @@ Repeat 5–8 until `review get` shows a round with the verdict you need.
 | `<target>` / `<base>` | a commit-ish, or `.` (all uncommitted), `working` (unstaged), `staged`; base defaults to the target's parent (`HEAD` for `.`/`staged`) |
 | `--merge-base` | diff against `git merge-base <target> <base>` |
 | `--repo <dir>` | a repository to show; repeat for one window over several repos (default: the current folder) |
-| `--session <id>` | session name; threads, viewed state and the reading place persist in `%LOCALAPPDATA%\Rain\sessions\<id>.json`. Default `<repo folder>-<branch or target>`, then `-uncommitted`/`-working`/`-staged` for those targets, then `-<8 hex>` when the base, `--merge-base`, `--include-untracked` or extra `--repo`s differ from a plain `rain open <target>`, so a different diff never reuses a window. Pass `--session` to choose the name yourself (it is used as given) |
+| `--session <id>` | session name; threads, viewed state and the reading place persist in `%LOCALAPPDATA%\Rain\sessions\<id>.json`. Default `<repo folder>-<branch or target>`, then `-uncommitted`/`-working`/`-staged` for those targets, then `-<16 hex>` from the repo paths as they are on disk (so another case, a trailing separator or a link to the same checkout gives the same name), target, base, `--merge-base` and `--include-untracked`; a different checkout or diff never reuses a window. `--ignore-whitespace` and `--context` are not part of the name: they reopen the same review. Fixtures use `fixture-<stem>-<16 hex>` from the patch's path. A session saved by an older Rain under the name without `-<16 hex>` (`<repo folder>-<branch or target>…`, `fixture-<stem>`) keeps that name while no session of the new name is saved and it was last opened on the same checkout or patch. Pass `--session` to choose the name yourself (it is used as given) |
 | `--last` | reopen the most recently saved session as it was opened |
 | `--background` | start detached, print the handshake and exit; while the window has no brief, one `next: send a brief …` line follows on stderr (stdout is the handshake alone) |
 | `--port <n>` | preferred port (the next free one is used when taken) |
@@ -69,6 +69,8 @@ Repeat 5–8 until `review get` shows a round with the verdict you need.
   when another window already holds the session (two opens raced): that window serves the session
   but refuses every change with **423** and a message naming the window that holds it, and the CLI
   warns on stderr. Use `--session <id>` (which finds the holder through the lock), not that port.
+  A window whose session lock could not be taken (an I/O error on the lock file) opens the same
+  way: read-only, `"readOnly":true`, with the cause on its stderr, in its status line and in the 423.
 - **By session.** Every client subcommand takes `--session <id>` instead of `--port <port>`: the
   port comes from the lock file `%LOCALAPPDATA%\Rain\sessions\<id>.lock`
   (`{"port","pid","startedAt"}`, written while the window runs, removed when it closes). Both given:
@@ -111,7 +113,8 @@ Repeat 5–8 until `review get` shows a round with the verdict you need.
   that a new reviewer question (or an `answer` set to `queued`) does not start the window's
   answerer: the thread is kept and waits for the user's Ask. Reads need no token.
 - **Read-only window** (`"readOnly":true` in the handshake): every route that changes the session
-  answers **423** `This window is read-only: another Rain window (pid N, port P) holds session <id>…`;
+  answers **423** `This window is read-only: another Rain window (pid N, port P) holds session <id>…`
+  (or `… its session lock <path> could not be taken (<cause>).`);
   reads, `reload`, `close`, `presence`, `goto` and `highlight` still work.
 - **CLI errors** print `Error: <text>` on stderr and exit 1; connection failures print
   `Error: Cannot connect to Rain server on port <port>. Is the server running?`.
@@ -260,6 +263,9 @@ never come back through comment readback.
   Conversation). Position defaults to line 1 for both.
 - Flag form (one thread): `--body` with `--file` + `--line`/`--lines` [`--side`], or `--file
   --file-level`, or `--pr-level`.
+- A `filePath` / `--file` is `<repo>/<path>`, or `<path>` with `--repo <repo>` (or `"repo"` in the
+  JSON); with one repo open the bare `<path>` works too. With a repo named, the path is taken as
+  written.
 - `--author` (default `claude`) fills every thread or reply that names none, in both forms. An
   empty author (`--author=`) means the reviewer: a reviewer's `kind: question` starts the window's
   answerer (over HTTP only with the window's token, §2).
@@ -292,7 +298,8 @@ readers see a thread on a strange path; Rain and agents read `target`.
 ```
 HTTP: `GET /api/comments-json[?repo=][&all=1]` → `{"version":3,"threads":[…]}` (difit's shape,
 byte-compatible for threads without round-3 data), `GET /api/comments-output[?repo=][&all=1]` →
-the prompt text. Without `all` only **open** threads are listed. Round-3 fields on a thread (each
+the prompt text. Without `all` only **open** threads are listed. With one repo open, `--repo`
+with its id lists every thread, also those made in the window (their `repo` is empty). Round-3 fields on a thread (each
 only when set): `kind`, `blocking`, `state` (`open|addressed|resolved|dismissed`), `stateSha`,
 `stateAt`, `dismissReason`, `anchorState` (`placed|moved|outdated|orphaned`), `anchorHow`
 (`exact|fuzzy|renamed|section-id|node-id|label`), `orphan` (`{"reason","lastSeenSha","snapshot","at"}`;
@@ -316,7 +323,9 @@ then the fenced snapshot (`>` marks the anchored lines), or `Code:` with the sna
 & $r comment reply --session review-ACME-1 --file server/src/VoucherService.cs --lines 27-31 --side new --body 'Reworked.'
 ```
 By id, or by the exact line (`--line`) or range (`--lines`) a thread hangs on (`--side old` for
-deleted lines; `--repo` makes `--file` repo-relative). HTTP: `POST /api/comment-imports` with
+deleted lines). `--file` is `<repo>/<path>`, or `<path>` with `--repo <repo>`; with one repo open
+the bare `<path>` works too. A path found as written wins over reading its first folder as a repo
+id. HTTP: `POST /api/comment-imports` with
 `{"type":"reply","threadId":"k3x9f2","body":"…","author":"claude"}`. No match: the reply JSON, then
 `Error: No thread with id k3x9f2.` and exit 3. Your reply on a **question** marks its answer
 `answered`.
@@ -339,7 +348,8 @@ deleted lines; `--repo` makes `--file` repo-relative). HTTP: `POST /api/comment-
 - `comment resolve` (alias `remove`) = state `resolved`. **Changed from difit:**
   `DELETE /api/comments/<id>` no longer deletes; it resolves and keeps the history (same reply
   `{"success":true,"threadId","version"}`, 404 unchanged). The thread leaves the default readback;
-  `--all` / `?all=1` still shows it. `--file … --line N` resolves every thread covering that line.
+  `--all` / `?all=1` still shows it. `--file … --line N` resolves every thread covering that line
+  (`--file` in the forms of §5.4).
   Prints `{"success":true,"resolved":["k3x9f2"],"notFound":[],"errors":[]}`.
 
 ### 5.6 How threads survive new code
@@ -372,7 +382,7 @@ Map threads follow the node id, then its label (`moved(label)`); note threads fo
   `"changed":false`; keep its `seq`); exit 1 on errors.
 - HTTP: `GET /api/events?kinds=reply,ask[&since=<seq>][&for=agent][&author=claude][&timeout=]` →
   `{"version","seq","changed","gap","events":[{"seq","at","kind","author"?,"thread"?,"data"?}],"presence"}`.
-  `"gap":true` means events after `since` fell off the ring: re-read `comment get` before going on.
+  `"gap":true` means events after `since` fell off the ring: run `rain next` (§6.4) before going on.
   `--format text`: `seq N: K event(s)`, then `#<seq> <kind> <thread> by <author> <data>` per line.
 
 Loop:
@@ -471,6 +481,50 @@ States `idle|working|blocked|done|failed|offline`. HTTP: `POST /api/presence`
 `kinds`) is kept: it waits for any session change and prints every open thread and note
 (`{"version","changed","threads","notes"}`); exit 0 / 2 as above. `--since` here is the session
 `version` (from `health`), not an event `seq`.
+
+### 6.4 What is waiting on you — `rain next`
+```powershell
+& $r next --session review-ACME-1                 # text; exit 0 with something waiting, 2 with nothing
+& $r next --session review-ACME-1 --format json   # GET /api/next
+```
+One call that lists everything the agent owes the reviewer, in the order to take it up. Call it
+first: when you attach, after your context was compacted, after a `"gap":true`, and before you say
+you are done. It only reads: it claims nothing, changes nothing, is no heartbeat, and works in a
+read-only window. Nothing is stored for it; every item comes from the threads, rounds and brief.
+
+| `kind` | Waiting because | Do |
+|---|---|---|
+| `question` | a question is queued for you (`answer.status: queued`), or its answer `failed` / `timeout` and the reviewer still has the last word | `rain comment claim --thread <threadId>`, then `rain comment reply --thread <threadId>` (§6.1) |
+| `reply` | the reviewer had the last word on a thread that is `open`, or `addressed` and they wrote after that | `rain comment reply --thread <threadId>`, or fix and `rain comment set-state <threadId> addressed --sha <sha>` |
+| `claimed` | you claimed a question and have not replied (`answer.startedAt` is when) | `rain comment reply --thread <threadId>`, or `rain comment claim --thread <threadId> --release` |
+| `verdict` | the last finished round (any verdict) has had no answer from you: no reply or `addressed` after it and no other sha loaded | `rain review get`, then act on it |
+| `brief` | `reason: missing` (no brief is set) or `stale` (written against another sha than the one loaded) | `rain brief set`, then `rain brief check` (§4) |
+
+Items come in that order, and oldest first within a kind. Left out: `resolved` and `dismissed`
+threads, threads where you had the last word, and questions the launcher holds (`answer.by:
+launcher` while pending).
+
+`GET /api/next` → `{"waiting":2,"round":1,"seq":41,"items":[…]}`. `waiting` is `items.length`;
+`seq` is the newest event at the time of the read, so `rain watch --since <seq>` misses nothing that
+happens after it. A thread item is `{"kind","threadId","filePath","repo"?,"position","span"?,
+"where","threadKind","blocking"?,"state","target"?,"answer"?,"text","at"}`: `position`, `target` and
+`answer` as on a thread (§5.3), `where` the location line of `comment get`, `text` the reviewer's
+last message cut to 400 characters (`comment get` has the whole thread) and `at` when they wrote it.
+The others: `{"kind":"verdict","round","verdict","text","at"}` (`text` is the round's summary) and
+`{"kind":"brief","reason"}`.
+
+`--format text` (the default):
+```
+3 waiting · round 1 · seq 41
+1. question [id k3x9f2] question · server/src/Api/VouchersController.cs:L22 · answer: queued
+   Is a voucher of 0 rejected too?
+2. reply [id a81bc0] issue (blocking) · server/src/Services/VoucherService.cs:L27-L31
+   This still double-counts when the voucher is edited.
+3. brief missing
+   No brief is set: write one, `rain brief set` it, then `rain brief check`.
+```
+With nothing waiting it prints `nothing waiting · round 1 · seq 41` (JSON: `"waiting":0,"items":[]`)
+and exits **2**, so a script can loop on the exit code; errors exit 1.
 
 ## 7. Notes (context for the reviewer, not comments)
 
@@ -599,6 +653,9 @@ only (difit's `baseVersion`); `notesVersion` = notes; `version` in `/api/overvie
   until it prints `nothing to fix`. The story note becomes the Brief.
 - Findings: `--kind issue|suggestion|nit|question|praise` (or the `F1 issue (blocking):` prefix);
   `--file-level` and `--pr-level` for findings that are not about a line.
+- `rain next` first, whenever you are unsure what you owe the reviewer (on attaching, after a
+  compaction or a `"gap":true`, before you say you are done): one call instead of `comment get` +
+  `review get` + `brief get` (§6.4). Then `rain watch --since <its seq>`.
 - Replace the `comment wait` loop with `rain watch --for agent --kinds reply,ask,state,disposition,submitted`
   held in the background for the whole review; answer every `ask` with `comment reply --thread`
   at once (§6.1) and set presence while working.

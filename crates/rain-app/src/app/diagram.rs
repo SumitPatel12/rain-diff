@@ -61,7 +61,6 @@ pub enum MapTab {
 }
 
 impl App {
-    /// Whether the session has a diagram to show.
     pub fn has_map(&self) -> bool {
         !self.diagram.lab_styles.is_empty() || self.layouts.iter().any(Option::is_some)
     }
@@ -73,7 +72,6 @@ impl App {
         labs.chain(views).collect()
     }
 
-    /// The tab showing.
     pub fn map_tab(&self) -> MapTab {
         match &self.diagram.lab {
             Some(l) if self.diagram.lab_on => MapTab::Lab(l.style_index()),

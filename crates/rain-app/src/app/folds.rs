@@ -5,9 +5,14 @@ use rain_core::FileDiff;
 use super::App;
 use crate::load::LARGE_FILE_LINES;
 
+/// Whether `f` holds a line wider than the diff draws whole: a minified or data file.
+pub(super) fn wide(f: &FileDiff) -> bool {
+    f.max_columns as usize > rain_diffview::LINE_CAP
+}
+
 /// Whether `f` is too large to open with the rest: a load leaves it folded.
 pub(super) fn large(f: &FileDiff) -> bool {
-    f.lines.len() > LARGE_FILE_LINES || (f.generated && f.lines.len() > 2_000)
+    f.lines.len() > LARGE_FILE_LINES || (f.generated && f.lines.len() > 2_000) || wide(f)
 }
 
 impl App {

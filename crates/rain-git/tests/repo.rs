@@ -3,8 +3,8 @@ use std::process::Command;
 
 use rain_core::{FileDiff, FileStatus, LineKind, RepoLaunch, Side};
 use rain_git::{
-    DiffOpts, GitError, Resolved, TargetKind, blob, changed_paths, diff, diff_patch, formatting_only, git_dirs, head_sha, line_map,
-    line_maps, parse_str, repository_id, resolve, side_commit, target_moved, toplevel,
+    DiffOpts, GitError, Resolved, TargetKind, blob, changed_paths, diff, diff_patch, edit_mark, formatting_only, git_dirs, head_sha,
+    line_map, line_maps, parse_str, repository_id, resolve, side_commit, target_moved, toplevel,
 };
 
 struct Scratch(PathBuf);
@@ -394,6 +394,56 @@ fn git_dirs_point_at_the_repository_folder() {
 }
 
 #[test]
+fn the_edit_mark_follows_what_each_target_shows() {
+    let s = scratch("edit-mark");
+    let r = s.0.as_path();
+    write(r, ".gitignore", b"*.log\n");
+    git(r, &["add", ".gitignore"]);
+    git(r, &["commit", "-q", "-m", "ignore logs"]);
+    let range = resolve(r, &launch("HEAD~1", "HEAD", false)).unwrap();
+    assert_eq!(edit_mark(r, &range, true).unwrap(), None, "a commit range has nothing to notice");
+    let of = |target: &str| resolve(r, &launch("HEAD", target, false)).unwrap();
+    let (all, unstaged, staged) = (of("."), of("working"), of("staged"));
+    let marks = |untracked| [&all, &unstaged, &staged].map(|t| edit_mark(r, t, untracked).unwrap().expect("a mark"));
+    let clean = marks(false);
+    assert_eq!(marks(false), clean, "nothing changed");
+
+    write(r, "build.log", b"noise\n");
+    assert_eq!(marks(true), marks(false), "an ignored file is in no diff");
+    assert_eq!(marks(false), clean);
+
+    write(r, "src/ws.cs", b"class W {\n    int x = 2;\n}\n");
+    let edited = marks(false);
+    assert_ne!(edited[0], clean[0], "all uncommitted changes");
+    assert_ne!(edited[1], clean[1], "unstaged changes");
+    assert_eq!(edited[2], clean[2], "the index is as it was");
+
+    write(r, "src/ws.cs", b"class W {\n    int x = 2222;\n}\n");
+    let again = marks(false);
+    assert_ne!(again[0], edited[0], "a second edit to a file already in the diff");
+    assert_ne!(again[1], edited[1]);
+
+    git(r, &["add", "src/ws.cs"]);
+    let added = marks(false);
+    assert_eq!(added[0], again[0], "staging leaves the whole uncommitted diff alone");
+    assert_ne!(added[1], again[1], "and empties the unstaged one");
+    assert_ne!(added[2], clean[2], "and fills the staged one");
+
+    write(r, "src/new.cs", b"class N {}\n");
+    assert_eq!(marks(false), added, "untracked files count only when the diff lists them");
+    let with_new = marks(true);
+    assert_ne!(with_new[0], added[0]);
+    assert_eq!(with_new[2], added[2], "never for the index");
+    std::fs::remove_file(r.join("src/new.cs")).unwrap();
+    let back = marks(true);
+    assert_eq!(
+        (back[0], back[1]),
+        (added[0], added[1]),
+        "taking the file away again restores the mark"
+    );
+}
+
+#[test]
 fn the_watch_fires_on_a_commit_within_two_seconds() {
     use std::sync::mpsc::channel;
     use std::time::{Duration, Instant};
@@ -579,4 +629,174 @@ fn repository_id_matches_difit() {
         );
     }
     assert_eq!(id.len(), 64);
+}
+
+const ALGO_OLD: &str = r#"#include <stdio.h>
+
+// Frobs foo heartily
+int frobnitz(int foo)
+{
+    int i;
+    for(i = 0; i < 10; i++)
+    {
+        printf("Your answer is: ");
+        printf("%d\n", foo);
+    }
+}
+
+int fact(int n)
+{
+    if(n > 1)
+    {
+        return fact(n-1) * n;
+    }
+    return 1;
+}
+
+int main(int argc, char **argv)
+{
+    frobnitz(fact(10));
+}
+"#;
+
+const ALGO_NEW: &str = r#"#include <stdio.h>
+
+int fib(int n)
+{
+    if(n > 2)
+    {
+        return fib(n-1) + fib(n-2);
+    }
+    return 1;
+}
+
+// Frobs foo heartily
+int frobnitz(int foo)
+{
+    int i;
+    for(i = 0; i < 10; i++)
+    {
+        printf("%d\n", foo);
+    }
+}
+
+int main(int argc, char **argv)
+{
+    frobnitz(fib(10));
+}
+"#;
+
+/// [`scratch`] with two more commits on main that rewrite `algo.c`, a file myers and histogram
+/// split differently, and an uncommitted edit of it.
+fn algo_scratch(name: &str) -> Scratch {
+    let s = scratch(name);
+    let r = s.0.as_path();
+    write(r, "algo.c", ALGO_OLD.as_bytes());
+    git(r, &["add", "-A"]);
+    git(r, &["commit", "-q", "-m", "algo old"]);
+    write(r, "algo.c", ALGO_NEW.as_bytes());
+    git(r, &["add", "-A"]);
+    git(r, &["commit", "-q", "-m", "algo new"]);
+    write(r, "algo.c", ALGO_OLD.as_bytes());
+    s
+}
+
+/// A value for every setting that changes `git diff` output when left to the user's config.
+fn hostile_config(r: &Path) {
+    std::fs::create_dir_all(r.join(".git/info")).unwrap();
+    std::fs::write(r.join(".git/order"), "*.txt\n*.c\nsrc/*\n").unwrap();
+    std::fs::write(r.join(".git/info/attributes"), "*.c diff=odd\n*.cs diff=odd\n*.ts diff=odd\n").unwrap();
+    for (k, v) in [
+        ("diff.algorithm", "myers"),
+        ("diff.indentHeuristic", "false"),
+        ("diff.context", "9"),
+        ("diff.interHunkContext", "20"),
+        ("diff.renames", "false"),
+        ("diff.renameLimit", "1"),
+        ("diff.noprefix", "true"),
+        ("diff.mnemonicPrefix", "true"),
+        ("diff.srcPrefix", "x/"),
+        ("diff.dstPrefix", "y/"),
+        ("diff.relative", "true"),
+        ("diff.orderFile", ".git/order"),
+        ("diff.submodule", "log"),
+        ("diff.suppressBlankEmpty", "true"),
+        ("diff.autoRefreshIndex", "false"),
+        ("diff.external", "false"),
+        ("diff.wsErrorHighlight", "all"),
+        ("diff.colorMoved", "zebra"),
+        ("diff.odd.algorithm", "myers"),
+        ("diff.odd.textconv", "false"),
+        ("diff.odd.command", "false"),
+        ("color.ui", "always"),
+        ("color.diff", "always"),
+        ("core.quotePath", "false"),
+        ("core.bigFileThreshold", "1"),
+    ] {
+        git(r, &["config", k, v]);
+    }
+}
+
+/// Everything rain-git reads from `git diff`, for two commit ranges and the working tree.
+fn everything(repo: &Path) -> Vec<String> {
+    let mut out = Vec::new();
+    for (base, target) in [("HEAD~3", "HEAD~2"), ("HEAD~1", "HEAD"), ("HEAD", ".")] {
+        let r = resolve(repo, &launch(base, target, false)).unwrap();
+        for (ignore_whitespace, jobs) in [(false, 1), (false, 4), (true, 1)] {
+            let opts = DiffOpts {
+                ignore_whitespace,
+                jobs,
+                ..DiffOpts::default()
+            };
+            let patch = diff_patch(repo, 0, &r, &opts).unwrap();
+            out.extend(patch.files.iter().map(|f| format!("{} generated={}", fingerprint(f), f.generated)));
+            out.push(format!("{:?}", patch.formatting_only));
+        }
+        out.push(format!("{:?}", changed_paths(repo, &r).unwrap()));
+        let paths = ["algo.c", "src/a.cs", "src/moved/ren.ts", "sp ace/礼券.json"];
+        let from = git(repo, &["rev-parse", base]);
+        out.push(format!("{:?}", line_maps(repo, &r, Side::New, from.trim(), &paths).unwrap()));
+        for p in paths {
+            out.push(format!("{:?}", line_map(repo, &r, Side::New, from.trim(), p).unwrap()));
+        }
+        out.push(format!("{:?}", formatting_only(repo, &r, &["src/ws.cs", "src/a.cs"]).unwrap()));
+    }
+    out
+}
+
+#[test]
+fn diffs_use_the_histogram_algorithm() {
+    let s = algo_scratch("histogram");
+    let raw = |algo: &str| {
+        let text = git(&s.0, &["diff", "--no-color", algo, "HEAD~1", "HEAD", "--", "algo.c"]);
+        fingerprint(&parse_str(&text, 0).files[0])
+    };
+    let (myers, histogram) = (raw("--diff-algorithm=myers"), raw("--diff-algorithm=histogram"));
+    assert_ne!(myers, histogram, "the fixture must tell the two apart");
+    let r = resolve(&s.0, &launch("HEAD~1", "HEAD", false)).unwrap();
+    let files = diff(&s.0, 0, &r, &DiffOpts::default()).unwrap();
+    assert_eq!(fingerprint(find(&files, "algo.c")), histogram);
+}
+
+#[test]
+fn hostile_git_config_does_not_change_what_rain_reads() {
+    let s = algo_scratch("hostile");
+    let plain = || {
+        let out = Command::new("git")
+            .arg("-C")
+            .arg(&s.0)
+            .args(["diff", "HEAD~3", "HEAD~2"])
+            .output()
+            .unwrap();
+        (out.status.success(), out.stdout)
+    };
+    let clean = everything(&s.0);
+    let plain_before = plain();
+    hostile_config(&s.0);
+    assert_ne!(plain(), plain_before, "the config must change a plain git diff");
+    let hostile = everything(&s.0);
+    assert_eq!(clean.len(), hostile.len());
+    for (a, b) in clean.iter().zip(&hostile) {
+        assert_eq!(a, b);
+    }
 }

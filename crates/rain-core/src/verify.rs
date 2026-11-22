@@ -40,7 +40,6 @@ pub fn checklist_items(md: &str) -> Vec<String> {
         .collect()
 }
 
-/// The Brief's own Verify items, in order.
 pub fn brief_items(doc: Option<&BriefDoc>) -> Vec<String> {
     doc.and_then(|b| b.verify.as_ref())
         .map(|v| checklist_items(&v.text))
@@ -191,7 +190,6 @@ impl Session {
         self.verify_items().iter().any(|i| i.text == text && Some(&i.of) != except)
     }
 
-    /// Appends the reviewer's own item.
     pub fn add_verify(&mut self, text: &str) -> Result<(), VerifyRefusal> {
         let text = text.trim();
         if text.is_empty() {

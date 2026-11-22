@@ -196,14 +196,17 @@ impl App {
 
     /// One step of the state machine at `now`; true when anything visible changed.
     pub(crate) fn ask_tick_at(&mut self, now: Instant) -> bool {
-        if self.ask.spawner.is_none() {
+        if rune::is_headless() || self.ask.spawner.is_none() {
             return false;
         }
         let mut changed = false;
         if !self.ask.started {
             self.ask.started = true;
-            changed |= self.fail_orphaned_runs();
-            changed |= self.resume_waiting(now);
+            // What the session held at start-up is the owning window's to fail or ask again.
+            if !self.launch.read_only {
+                changed |= self.fail_orphaned_runs();
+                changed |= self.resume_waiting(now);
+            }
         }
         // Head first, then the events up to it, then the session: imports change the session
         // before they push their events, so every thread an event names is in the mirror.

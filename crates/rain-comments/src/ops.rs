@@ -110,6 +110,20 @@ pub fn split_known_repo(s: &Session, path: &str) -> (String, String) {
     }
 }
 
+/// The id of the session's repo when it has exactly one.
+pub fn sole_repo(s: &Session) -> Option<&str> {
+    match s.repos.as_slice() {
+        [only] => Some(&only.id),
+        _ => None,
+    }
+}
+
+/// Whether two thread repos are the same one: in a session of one repo (`sole`), a thread's repo
+/// is that repo's id or left empty.
+pub fn same_repo(sole: Option<&str>, a: &str, b: &str) -> bool {
+    a == b || sole.is_some_and(|id| [a, b].iter().all(|r| r.is_empty() || *r == id))
+}
+
 fn thread_mut<'a>(s: &'a mut Session, id: &str) -> Option<&'a mut Thread> {
     s.threads.iter_mut().find(|t| t.id == id)
 }
@@ -668,7 +682,6 @@ struct Spot<'a> {
 
 #[derive(Debug, PartialEq)]
 enum Step {
-    /// Leave everything as it is.
     Keep,
     /// First sight of its lines: take the snapshot.
     Snapshot(CodeSnapshot, Option<String>),
@@ -1435,7 +1448,50 @@ pub fn waiting_on_user(t: &Thread, me: &str) -> bool {
             .is_some_and(|a| !a.is_empty() && !a.eq_ignore_ascii_case(me))
 }
 
-/// How many threads wait on the user.
 pub fn waiting_count(s: &Session, me: &str) -> usize {
     s.threads.iter().filter(|t| waiting_on_user(t, me)).count()
+}
+
+/// What a thread waits on the agent for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum Owed {
+    /// A question nobody holds, or one whose answer failed or timed out.
+    Question,
+    /// The user had the last word.
+    Reply,
+    /// The attached agent claimed the question and has not replied.
+    Claimed,
+}
+
+/// The user wrote `m`: no author, as difit and the window write theirs, or `me`.
+pub fn from_user(m: &Message, me: &str) -> bool {
+    m.author
+        .as_deref()
+        .map(str::trim)
+        .is_none_or(|a| a.is_empty() || a.eq_ignore_ascii_case(me))
+}
+
+/// The other side of [`waiting_on_user`]: a pending question the launcher does not hold, or a
+/// thread still in play whose last word is the user's (said after the agent marked it addressed,
+/// when it did).
+pub fn waiting_on_agent(t: &Thread, me: &str) -> Option<Owed> {
+    if matches!(t.state, ThreadState::Resolved | ThreadState::Dismissed) {
+        return None;
+    }
+    if let Some(a) = t.answer.as_ref().filter(|a| a.status.pending()) {
+        if claimed(t) {
+            return Some(Owed::Claimed);
+        }
+        return (a.by.as_deref() != Some("launcher")).then_some(Owed::Question);
+    }
+    let last = t.messages.last().filter(|m| from_user(m, me))?;
+    let addressed_since = t.state == ThreadState::Addressed && t.state_at.as_deref().is_some_and(|at| last.created_at.as_str() <= at);
+    if addressed_since {
+        return None;
+    }
+    let unanswered = t
+        .answer
+        .as_ref()
+        .is_some_and(|a| matches!(a.status, AnswerStatus::Failed | AnswerStatus::Timeout));
+    Some(if unanswered { Owed::Question } else { Owed::Reply })
 }

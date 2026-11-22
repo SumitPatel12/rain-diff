@@ -1,7 +1,11 @@
 //! `Ctrl+P`: the picker. Fuzzy over the one ordered list (files, groups) plus the Brief's
 //! sections, the Map's nodes, the tour's steps and the threads waiting on you.
 
+use std::collections::HashSet;
+use std::ops::Range;
+
 use rain_comments::ops;
+use rain_core::fuzzy::{Fit, Matcher, Query};
 use rain_triage::Group;
 use rune::{Key, KeyEvent, TextEdit, Tx};
 
@@ -26,6 +30,7 @@ pub struct PickerState {
     pub drag_from: Option<(f32, f32)>,
     /// Normal mode's first `g` of `gg`.
     pub pending_g: bool,
+    pub cache: std::cell::RefCell<Cache>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -48,39 +53,167 @@ pub struct Entry {
     pub target: Target,
 }
 
-/// How well `query` matches `hay` as a subsequence, higher is better; `None` when it doesn't.
-/// Word starts (after `/ . _ - ` or a lower→upper step) and runs of adjacent letters score.
+/// How well `query` fits `hay`, all of it a name, higher is better; `None` when it doesn't.
+#[cfg(test)]
 pub fn fuzzy(query: &str, hay: &str) -> Option<i32> {
-    let q: Vec<char> = query.chars().filter(|c| !c.is_whitespace()).flat_map(char::to_lowercase).collect();
-    if q.is_empty() {
-        return Some(0);
+    Matcher::default().fit(&Query::new(query), hay, 0).score()
+}
+
+/// The file the reader is on gives up one part in this many of its score. fff takes a quarter;
+/// an eighth still lets a clearly better fit lead when it is the file you are on.
+const CURRENT_FILE: i32 = 8;
+
+/// What orders rows of one score, least first: a file not yet viewed, then one with an open
+/// thread, then the one with more changed lines. The text alone decides between scores.
+type Tie = (bool, bool, std::cmp::Reverse<u32>);
+
+/// What the entries and their order read, so they are rebuilt only when it changes.
+type Source = (u64, u32, u64, rain_tree::TreeFilter, Option<usize>);
+
+/// The entries with the text each is matched on, kept while what they show stands; and the
+/// last query's rows, so a redraw or a move of the selection matches nothing again.
+#[derive(Default)]
+pub struct Cache {
+    source: Option<Source>,
+    entries: Vec<Entry>,
+    /// The rows of an empty query, and whether the first is the file the last jump left.
+    blank: (Vec<u32>, bool),
+    /// `detail/label` per entry, and where the label starts: made at the first query, so
+    /// opening the picker costs no more than listing its entries.
+    hay: Vec<(String, usize)>,
+    /// Per entry, what orders equal scores: made at the first query, as `hay` is.
+    ties: Vec<Tie>,
+    query: Option<String>,
+    /// The entries holding all the query's letters: all that a query typed on from it can
+    /// match. `None` is every entry.
+    held: Option<Vec<u32>>,
+    rows: Vec<u32>,
+    /// Per row, the byte ranges of its label the query matched.
+    marks: Vec<Vec<Range<usize>>>,
+    /// Per file row, the byte ranges of its folder the query matched.
+    folder_marks: Vec<Vec<Range<usize>>>,
+    matcher: Matcher,
+    /// Passes over the entries so far.
+    pub scans: u32,
+    /// Rows whose matched letters were looked up so far.
+    pub marked: u32,
+}
+
+impl Cache {
+    fn refresh(&mut self, s: &App) {
+        let source = (
+            s.seen_version,
+            s.reloader.installs(),
+            s.seen_overview_version,
+            s.tree.filter.clone(),
+            s.current(),
+        );
+        if self.source.as_ref() == Some(&source) {
+            return;
+        }
+        self.entries = s.picker_entries();
+        self.blank = s.picker_blank(&self.entries);
+        self.hay.clear();
+        self.ties.clear();
+        self.source = Some(source);
+        self.query = None;
     }
-    let h: Vec<char> = hay.chars().collect();
-    let mut score = 0;
-    let mut qi = 0;
-    let mut last: Option<usize> = None;
-    for (i, &c) in h.iter().enumerate() {
-        if qi == q.len() {
-            break;
+
+    fn fill_hay(&mut self) {
+        if self.hay.len() == self.entries.len() {
+            return;
         }
-        if c.to_lowercase().next() != Some(q[qi]) {
-            continue;
-        }
-        let prev = i.checked_sub(1).map(|p| h[p]);
-        let start = prev.is_none_or(|p| matches!(p, '/' | '.' | '_' | '-' | ' ') || (p.is_lowercase() && c.is_uppercase()));
-        score += 1;
-        if start {
-            score += 3;
-        }
-        match last {
-            Some(l) if l + 1 == i => score += 4,
-            Some(l) => score -= ((i - l - 1) as i32).min(4),
-            None => score -= (i as i32).min(4),
-        }
-        last = Some(i);
-        qi += 1;
+        self.hay = self
+            .entries
+            .iter()
+            .map(|e| {
+                let mut text = String::with_capacity(e.detail.len() + 1 + e.label.len());
+                text.push_str(&e.detail);
+                text.push('/');
+                text.push_str(&e.label);
+                (text, e.detail.len() + 1)
+            })
+            .collect();
     }
-    (qi == q.len()).then_some(score * 4 - h.len() as i32 / 8)
+
+    /// One pass of `query` over the entries `from` (all of them for `None`): those holding all
+    /// its letters, and the score of each that fits.
+    fn scan(&mut self, query: &Query, from: Option<Vec<u32>>) -> (Vec<u32>, Vec<(i32, u32)>) {
+        self.scans += 1;
+        self.fill_hay();
+        let from = from.unwrap_or_else(|| (0..self.entries.len() as u32).collect());
+        let here = self.source.as_ref().and_then(|s| s.4);
+        let (mut held, mut scored) = (Vec::new(), Vec::new());
+        for i in from {
+            let (hay, name_at) = &self.hay[i as usize];
+            let fit = self.matcher.fit(query, hay, *name_at);
+            if fit != Fit::Miss {
+                held.push(i);
+            }
+            if let Fit::Hit(sc) = fit {
+                let current = here.is_some_and(|g| self.entries[i as usize].target == Target::File(g));
+                scored.push((if current { sc - sc / CURRENT_FILE } else { sc }, i));
+            }
+        }
+        (held, scored)
+    }
+
+    /// Puts the entries matching `q` in `rows`, best first (by [`Tie`], then list order, on
+    /// ties), `PICKER_ROWS` at most.
+    fn find(&mut self, s: &App, q: &str) {
+        if self.query.as_deref() == Some(q) {
+            return;
+        }
+        let from = match &self.query {
+            Some(last) if q.starts_with(last.as_str()) => self.held.take(),
+            _ => None,
+        };
+        self.query = Some(q.to_owned());
+        self.marks.clear();
+        self.folder_marks.clear();
+        if q.is_empty() {
+            self.rows.clone_from(&self.blank.0);
+            self.held = None;
+            return;
+        }
+        let mut query = Query::new(q);
+        let (held, mut scored) = self.scan(&query, from);
+        // Nothing fits as typed: once more over everything, forgiving a typo.
+        if scored.is_empty()
+            && let Some(loose) = query.loosened()
+        {
+            scored = self.scan(&loose, None).1;
+            query = loose;
+        }
+        if self.ties.len() != self.entries.len() {
+            self.ties = s.picker_ties(&self.entries);
+        }
+        let ties = &self.ties;
+        let best_first = |a: &(i32, u32), b: &(i32, u32)| {
+            let tie = || ties[a.1 as usize].cmp(&ties[b.1 as usize]);
+            b.0.cmp(&a.0).then_with(tie).then(a.1.cmp(&b.1))
+        };
+        if scored.len() > PICKER_ROWS {
+            scored.select_nth_unstable_by(PICKER_ROWS, best_first);
+            scored.truncate(PICKER_ROWS);
+        }
+        scored.sort_unstable_by(best_first);
+        self.held = Some(held);
+        self.rows = scored.into_iter().map(|(_, i)| i).collect();
+        let mut found = Vec::new();
+        for &i in &self.rows {
+            let (hay, name_at) = &self.hay[i as usize];
+            self.matcher.marks(&query, hay, *name_at, &mut found);
+            self.marked += 1;
+            let in_label = found.iter().filter(|r| r.end > *name_at);
+            self.marks
+                .push(in_label.map(|r| r.start.max(*name_at) - name_at..r.end - name_at).collect());
+            let folder = name_at - 1;
+            let drawn = matches!(self.entries[i as usize].target, Target::File(_));
+            let in_folder = found.iter().filter(|r| drawn && r.start < folder);
+            self.folder_marks.push(in_folder.map(|r| r.start..r.end.min(folder)).collect());
+        }
+    }
 }
 
 impl App {
@@ -89,7 +222,6 @@ impl App {
         self.show_picker("");
     }
 
-    /// Opens the picker on `query`.
     pub fn show_picker(&mut self, query: &str) {
         self.picker.edit = TextEdit::default();
         self.picker.edit.text = query.to_owned();
@@ -97,6 +229,8 @@ impl App {
         self.picker.edit.focused = true;
         self.picker.sel = 0;
         self.picker.pending_g = false;
+        // Rebuilt on opening, for whatever changed while it was closed.
+        *self.picker.cache.borrow_mut() = Cache::default();
         self.open_overlay(Overlay::Picker);
     }
 
@@ -172,24 +306,82 @@ impl App {
         out
     }
 
-    /// The entries matching the picker's text, best first (list order on ties).
-    pub fn picker_rows(&self) -> Vec<Entry> {
-        let q = self.picker.edit.text.trim().to_owned();
-        let all = self.picker_entries();
-        if q.is_empty() {
-            return all.into_iter().take(PICKER_ROWS).collect();
+    /// The rows of an empty query, each group in list order: the file the last jump left, the
+    /// files not yet viewed, those viewed with an open thread, the other files, then the rest;
+    /// and whether the first row is that left file.
+    fn picker_blank(&self, entries: &[Entry]) -> (Vec<u32>, bool) {
+        let mut threads = vec![false; self.keys.len()];
+        for t in self.mirror.threads.iter().filter(|t| t.is_open()) {
+            if let Some(g) = self.file_of_thread(t) {
+                threads[g] = true;
+            }
         }
-        let mut scored: Vec<(i32, usize, Entry)> = all
-            .into_iter()
-            .enumerate()
-            .filter_map(|(i, e)| {
-                let name = fuzzy(&q, &e.label).map(|s| s + 8);
-                let full = fuzzy(&q, &format!("{}/{}", e.detail, e.label));
-                name.max(full).map(|s| (s, i, e))
+        let left = self.previous_file();
+        let rank = |i: &u32| match entries[*i as usize].target {
+            Target::File(g) if Some(g) == left => 0,
+            Target::File(g) if !self.is_viewed(g) => 1,
+            Target::File(g) if threads[g] => 2,
+            Target::File(_) => 3,
+            _ => 4,
+        };
+        let mut rows: Vec<u32> = (0..entries.len() as u32).collect();
+        rows.sort_by_key(rank);
+        rows.truncate(PICKER_ROWS);
+        let leads = rows.first().is_some_and(|i| rank(i) == 0);
+        (rows, leads)
+    }
+
+    /// Whether the first row is the file the last jump left: only with no query.
+    pub fn picker_leads_with_previous(&self) -> bool {
+        let cache = self.picker_cache();
+        cache.blank.1 && cache.query.as_deref() == Some("")
+    }
+
+    /// Each entry's [`Tie`]; an entry that is no file comes after the files it ties with.
+    fn picker_ties(&self, entries: &[Entry]) -> Vec<Tie> {
+        let open = self.mirror.threads.iter().filter(|t| t.is_open());
+        let threads: HashSet<usize> = open.filter_map(|t| self.file_of_thread(t)).collect();
+        entries
+            .iter()
+            .map(|e| match e.target {
+                Target::File(g) => {
+                    let f = &self.diff.files()[g];
+                    let changed = f.additions.saturating_add(f.deletions);
+                    (self.is_viewed(g), !threads.contains(&g), std::cmp::Reverse(changed))
+                }
+                _ => (true, true, std::cmp::Reverse(0)),
             })
-            .collect();
-        scored.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
-        scored.into_iter().take(PICKER_ROWS).map(|(_, _, e)| e).collect()
+            .collect()
+    }
+
+    /// The entries matching the picker's text, best first ([`Tie`], then list order, on ties).
+    pub fn picker_rows(&self) -> Vec<Entry> {
+        let cache = self.picker_cache();
+        cache.rows.iter().map(|&i| cache.entries[i as usize].clone()).collect()
+    }
+
+    /// Per row of [`App::picker_rows`], the byte ranges of its label the query matched; none
+    /// without a query.
+    pub fn picker_marks(&self) -> Vec<Vec<Range<usize>>> {
+        self.picker_cache().marks.clone()
+    }
+
+    /// Per row of [`App::picker_rows`], the byte ranges of its folder (a file's `detail`) the
+    /// query matched; none without a query.
+    pub fn picker_folder_marks(&self) -> Vec<Vec<Range<usize>>> {
+        self.picker_cache().folder_marks.clone()
+    }
+
+    pub fn picker_len(&self) -> usize {
+        self.picker_cache().rows.len()
+    }
+
+    /// The cache, holding the rows for the picker's text as things stand.
+    fn picker_cache(&self) -> std::cell::RefMut<'_, Cache> {
+        let mut cache = self.picker.cache.borrow_mut();
+        cache.refresh(self);
+        cache.find(self, self.picker.edit.text.trim());
+        cache
     }
 
     pub fn picker_move(&mut self, down: bool, tx: &mut Tx) {
@@ -203,7 +395,7 @@ impl App {
 
     /// Selects row `i` (clamped to the last) and scrolls the list just enough to show it.
     pub fn picker_select(&mut self, i: usize, tx: &mut Tx) {
-        self.picker.sel = i.min(self.picker_rows().len().saturating_sub(1));
+        self.picker.sel = i.min(self.picker_len().saturating_sub(1));
         tx.scroll_into_view_in("picker-list", format!("pick-{}", self.picker.sel));
     }
 

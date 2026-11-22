@@ -33,7 +33,8 @@ pub struct OpenArgs {
     #[arg(long = "repo", value_name = "DIR")]
     pub repos: Vec<PathBuf>,
     /// Session name; its threads and viewed state persist in `%LOCALAPPDATA%\Rain\sessions\<name>.json`.
-    /// Default: `<repo folder>-<branch or target>`. A window already serving it is reused.
+    /// Default: `<repo folder>-<branch or target>-<hash>`, one per checkout and diff (a session saved
+    /// under the older name without the hash is kept). A window already serving it is reused.
     #[arg(long)]
     pub session: Option<String>,
     /// Reopen the most recently used session with the repos and revisions it was opened with.
@@ -158,6 +159,14 @@ pub enum Sub {
     /// Wait for typed session events (replies, questions to answer, state changes…); exit 2 when
     /// the timeout passes with none.
     Watch(WatchArgs),
+    /// Print what waits on the agent, in the order to take it up (questions, replies, claimed
+    /// questions, the last verdict, the brief); changes nothing; exit 2 when nothing waits.
+    Next {
+        #[arg(long, value_enum, default_value_t = Format::Text)]
+        format: Format,
+        #[command(flatten)]
+        conn: Conn,
+    },
     /// Print the triage: groups, reasons, facts and the one reading order.
     Triage {
         #[arg(long, value_enum, default_value_t = Format::Text)]
@@ -924,6 +933,19 @@ mod tests {
             parse(&["triage", "--format", "json"]).command,
             Some(Sub::Triage { format: Format::Json, .. })
         ));
+    }
+
+    #[test]
+    fn next_takes_a_format_and_a_window() {
+        assert!(matches!(
+            parse(&["next", "--session", "review-ACME-1"]).command,
+            Some(Sub::Next { format: Format::Text, ref conn }) if conn.session.as_deref() == Some("review-ACME-1")
+        ));
+        assert!(matches!(
+            parse(&["next", "--format", "json", "--port", "5"]).command,
+            Some(Sub::Next { format: Format::Json, ref conn }) if *conn == port(5)
+        ));
+        assert!(fails(&["next", "k3"]), "it names no thread: it reads");
     }
 
     fn fails(args: &[&str]) -> bool {

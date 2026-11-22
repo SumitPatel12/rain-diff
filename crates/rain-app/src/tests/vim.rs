@@ -30,7 +30,7 @@ fn vim_patch(n: usize) -> PathBuf {
     path
 }
 
-fn vim_rt(n: usize) -> Runtime<App> {
+pub(super) fn vim_rt(n: usize) -> Runtime<App> {
     let mut rt = runtime(app(vim_patch(n), false));
     rt.update(|s, _| s.set_layout(ViewLayout::Unified));
     settle(&mut rt);
@@ -52,7 +52,7 @@ fn ctrl_shift() -> Mods {
     Mods { shift: true, ..ctrl() }
 }
 
-fn at(rt: &Runtime<App>) -> (u32, usize) {
+pub(super) fn at(rt: &Runtime<App>) -> (u32, usize) {
     let a = rt.state.active();
     (a.cursor().unwrap().1.line, a.cursor_byte().unwrap())
 }

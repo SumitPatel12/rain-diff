@@ -118,6 +118,9 @@ pub struct Settings {
     /// The `Ctrl+P` picker's panel, as last dragged.
     #[serde(deserialize_with = "or_default")]
     pub picker_size: (f32, f32),
+    /// Find in the diff matches fuzzily, not the text as typed.
+    #[serde(deserialize_with = "or_default")]
+    pub find_fuzzy: bool,
     /// Open-in-editor command with `{path}` and `{line}`; `None` runs [`DEFAULT_EDITOR`].
     #[serde(skip_serializing_if = "Option::is_none")]
     pub editor: Option<String>,
@@ -133,7 +136,6 @@ pub struct Settings {
     pub migrated: bool,
 }
 
-/// The picker panel's smallest size.
 pub const PICKER_MIN: (f32, f32) = (560.0, 300.0);
 
 pub const DEFAULT_EDITOR: &str = r#"code --goto "{path}:{line}""#;
@@ -153,6 +155,7 @@ impl Default for Settings {
             list_open: true,
             sidebar_sections: 0,
             picker_size: (940.0, 520.0),
+            find_fuzzy: false,
             editor: None,
             ask: AskSettings::default(),
             break_reminder: BreakSettings::default(),
@@ -162,7 +165,8 @@ impl Default for Settings {
     }
 }
 
-/// `keymap: { profile: "vim" | "vscode" | "jetbrains", overrides: { "<command id>": ["Ctrl+K"] | [] } }`.
+/// `keymap: { profile: "vim" | "vscode" | "jetbrains", overrides: { "<command id>": ["Ctrl+K", "g d"] | [] } }`,
+/// a key being one chord or two with a space between; `timeoutMs` is optional.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct KeymapSettings {
@@ -171,9 +175,19 @@ pub struct KeymapSettings {
     /// As written: entries that aren't a list of key names are reported and ignored.
     #[serde(deserialize_with = "or_default", skip_serializing_if = "BTreeMap::is_empty")]
     pub overrides: BTreeMap<String, serde_json::Value>,
+    /// How long a key that acts alone and also starts a two-key shortcut waits for the second.
+    #[serde(deserialize_with = "or_default", skip_serializing_if = "Option::is_none")]
+    pub timeout_ms: Option<u32>,
 }
 
+/// Vim's `timeoutlen`.
+const KEY_TIMEOUT_MS: u32 = 1000;
+
 impl KeymapSettings {
+    pub fn timeout(&self) -> std::time::Duration {
+        std::time::Duration::from_millis(self.timeout_ms.unwrap_or(KEY_TIMEOUT_MS).into())
+    }
+
     /// The overrides that are lists of strings, and a line for each entry that isn't.
     pub fn overrides(&self) -> (BTreeMap<String, Vec<String>>, Vec<String>) {
         let mut ok = BTreeMap::new();
@@ -332,19 +346,24 @@ impl Settings {
     }
 
     /// Writes only what changed since `base` (what this window last loaded or saved) over the
-    /// file as it is now, so another window's changes to other keys survive. A missing or
-    /// unparseable file gets every key.
+    /// file as it is now, so another window's changes to other keys survive. A missing file gets
+    /// every key; a malformed hand edit is reported and left untouched.
     pub fn save_merged(&self, base: &Settings, path: &Path) -> std::io::Result<()> {
         let mine = serde_json::to_value(self).map_err(std::io::Error::other)?;
         let was = serde_json::to_value(base).map_err(std::io::Error::other)?;
         let mut disk = match std::fs::read(path) {
-            Ok(b) => serde_json::from_slice::<serde_json::Value>(&b)
-                .ok()
-                .filter(serde_json::Value::is_object)
-                .unwrap_or_else(|| mine.clone()),
+            Ok(b) => {
+                serde_json::from_slice::<serde_json::Value>(&b).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?
+            }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => mine.clone(),
             Err(e) => return Err(e),
         };
+        if !disk.is_object() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "settings must be a JSON object",
+            ));
+        }
         merge_changes(&mut disk, &was, &mine);
         let bytes = serde_json::to_vec_pretty(&disk).map_err(std::io::Error::other)?;
         rain_comments::store::write_atomic(path, &bytes)
@@ -415,6 +434,14 @@ mod tests {
         let text = std::fs::read_to_string(&path).unwrap();
         assert!(text.contains("fromANewerBuild") && text.contains(r#""theme": "dark""#), "{text}");
         assert_eq!(Settings::load(&path).code_size, CodeSize::S);
+        for invalid in [r#"{"editor":"my-editor",}"#, "[]", "null"] {
+            std::fs::write(&path, invalid).unwrap();
+            let error = c
+                .save_merged(&back, &path)
+                .expect_err("a broken hand edit must survive a later save");
+            assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), invalid);
+        }
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -557,6 +584,34 @@ mod tests {
         assert_eq!(Theme::GruvboxMedium.scheme(false), Scheme::GruvboxMedium);
         assert_eq!(Theme::from_flag("gruvbox-hard"), Some(Theme::GruvboxHard));
         assert_eq!(Theme::from_flag("dark"), None, "Rune's own --theme values stay Rune's");
+    }
+
+    #[test]
+    fn two_key_shortcuts_and_the_timeout_round_trip_and_old_files_read_as_before() {
+        use rain_core::Command;
+        let old = Settings::parse(br#"{"keymap": {"profile": "vim", "overrides": {"comment": ["Ctrl+M"]}}}"#).unwrap();
+        assert_eq!(old.keymap.timeout_ms, None);
+        assert_eq!(old.keymap.timeout(), std::time::Duration::from_millis(1000), "Vim's timeoutlen");
+        let text = serde_json::to_string(&old).unwrap();
+        assert!(!text.contains("timeoutMs"), "an unset timeout is never written: {text}");
+        let (km, problems) = old.keymap.build();
+        assert!(problems.is_empty() && km.waiting_chord().is_none());
+        assert_eq!(km.hint(Command::Comment), "Ctrl+M");
+
+        let new = Settings::parse(br#"{"keymap": {"timeoutMs": 400, "overrides": {"reload": ["R", "g r"]}}}"#).unwrap();
+        assert_eq!(new.keymap.timeout(), std::time::Duration::from_millis(400));
+        let (km, problems) = new.keymap.build();
+        assert!(problems.is_empty(), "{problems:?}");
+        assert_eq!(
+            km.chords(Command::Reload).iter().map(|k| k.display()).collect::<Vec<_>>(),
+            ["R", "g r"]
+        );
+        let back = Settings::parse(serde_json::to_string(&new).unwrap().as_bytes()).unwrap();
+        assert_eq!(back.keymap, new.keymap);
+
+        let junk = Settings::parse(br#"{"keymap": {"timeoutMs": "soon", "overrides": {"reload": ["g r x"]}}}"#).unwrap();
+        assert_eq!(junk.keymap.timeout_ms, None, "a bad timeout is the default");
+        assert_eq!(junk.keymap.build().1.len(), 1);
     }
 
     #[test]

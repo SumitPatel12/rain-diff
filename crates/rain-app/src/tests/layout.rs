@@ -307,7 +307,7 @@ fn the_status_line_says_overview_on_that_tab() {
 /// A patch adding one file under a very long path.
 fn long_path_patch() -> std::path::PathBuf {
     let path = format!(
-        "src/Acme.Shop.IntegrationSpecs/Acme.Shop.Api/Features/StorefrontTheme/{}/GetStorefrontThemeStylesControllerSpecs.cs",
+        "src/Acme.Shop.IntegrationTests/Acme.Shop.Api/Features/StorefrontTheme/{}/GetStorefrontThemeStylesControllerTests.cs",
         "Nested/Deeper/StillDeeper/GetStorefrontThemeStyles"
     );
     let p = format!("diff --git a/{path} b/{path}\nnew file mode 100644\n--- /dev/null\n+++ b/{path}\n@@ -0,0 +1,2 @@\n+one\n+two\n");

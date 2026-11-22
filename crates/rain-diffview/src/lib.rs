@@ -10,10 +10,12 @@
 #[cfg(test)]
 extern crate self as rain_diffview;
 
+mod lex;
 mod model;
 mod motion;
 #[doc(hidden)]
 pub mod myers;
+mod pairing;
 mod state;
 mod view;
 
@@ -21,9 +23,10 @@ mod view;
 #[path = "../tests/common/patch.rs"]
 mod testing;
 
+pub use lex::{Carry, Lexer};
 pub use model::{hunk_header, language};
 pub use state::{
-    Align, Annotation, Caret, DiffMode, DiffState, EXPAND_STEP, Expand, Layout, LineRange, LineRef, Metrics, Opened, SpanSelection, Spot,
-    Vim, VimKey, Visual,
+    Align, Annotation, Caret, DiffMode, DiffState, EXPAND_STEP, Expand, FileTexts, LINE_CAP, Layout, LineRange, LineRef, Metrics, Moved,
+    Opened, SpanSelection, Spot, Vim, VimKey, Visual, drawn_part, layout_builds, rekeys, row_keys_built, word_diffs,
 };
-pub use view::{DiffColors, DiffView, SCROLL_KEY, fold_builds, line_builds};
+pub use view::{DiffColors, DiffView, SCROLL_KEY, fold_builds, line_builds, line_bytes};

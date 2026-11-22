@@ -66,6 +66,125 @@ fn collapse_and_expand_all_files_from_the_more_menu() {
     assert_eq!(rt.state.status, "Files expanded; 1 large file stays collapsed");
 }
 
+/// A patch adding a small file and a file that is one 2 MB line ending in `needle`.
+fn wide_patch() -> PathBuf {
+    let line = format!("{} needle", "var a=b.c(d,e)+f[g];".repeat(100_000));
+    let p = format!(
+        "diff --git a/a.rs b/a.rs\nnew file mode 100644\n--- /dev/null\n+++ b/a.rs\n@@ -0,0 +1,2 @@\n+one\n+two\n\
+         diff --git a/min.js b/min.js\nnew file mode 100644\n--- /dev/null\n+++ b/min.js\n@@ -0,0 +1 @@\n+{line}\n"
+    );
+    let d = temp_dir();
+    std::fs::create_dir_all(&d).unwrap();
+    let path = d.join("wide.patch");
+    std::fs::write(&path, p).unwrap();
+    path
+}
+
+#[test]
+fn a_file_that_is_one_enormous_line_starts_folded_and_find_still_reaches_into_it() {
+    let mut rt = runtime(app(wide_patch(), false));
+    let min = rt.state.keys.iter().position(|k| k.ends_with("min.js")).unwrap();
+    let mut want = vec![false; 2];
+    want[min] = true;
+    assert_eq!(collapsed(&rt), want, "the load folds only the one-line file");
+    rt.update(|s, _| s.expand_all_files());
+    assert_eq!(collapsed(&rt), want, "and Expand all leaves it folded");
+
+    rt.update(|s, tx| {
+        s.find.edit.text = "needle".into();
+        s.find_step(true, tx);
+    });
+    settle(&mut rt);
+    assert_eq!(rt.state.find.hits, vec![(min, 0)], "the match past the cut counts");
+    assert_eq!(rt.state.status, "Match 1 of 1 · in the part of a long line that isn't drawn");
+    assert!(!rt.state.active().collapsed(min), "going to it opens the file");
+    let at = rain_diffview::LineRef::new(rain_core::diff::Side::New, 1);
+    assert_eq!(rt.state.active().cursor(), Some((min, at)), "and lands on the line");
+    let line = rt.state.active().copy_text().expect("the cursor's line");
+    assert!(
+        line.len() > 2_000_000 && line.ends_with("needle"),
+        "copying it takes the whole line"
+    );
+
+    rt.update(|s, tx| {
+        s.find.edit.text = "var".into();
+        s.find_step(true, tx);
+    });
+    assert_eq!(rt.state.status, "Match 1 of 1", "a match in the drawn part needs no note");
+}
+
+/// A patch changing one word of a file that is a single line of `chars` characters.
+fn one_line_patch(chars: usize) -> PathBuf {
+    let mut new = "var a=b.c(d,e)+f[g];".repeat(chars / 20 + 1);
+    new.truncate(chars);
+    let old = new.replacen("var a", "let a", 1);
+    let d = temp_dir();
+    std::fs::create_dir_all(&d).unwrap();
+    let path = d.join("one-line.patch");
+    std::fs::write(
+        &path,
+        format!("diff --git a/web/app.js b/web/app.js\nindex 1111111..2222222 100644\n--- a/web/app.js\n+++ b/web/app.js\n@@ -1 +1 @@\n-{old}\n+{new}\n"),
+    )
+    .unwrap();
+    path
+}
+
+#[test]
+fn a_one_line_file_that_is_the_whole_diff_starts_folded() {
+    let a = app(one_line_patch(200_000), false);
+    assert!(a.diff.collapsed(0), "the load folds it");
+    let mut rt = runtime(a);
+    assert_eq!(collapsed(&rt), [true], "opening at the first file leaves it folded");
+    assert_eq!(rt.state.active().row_count(), 1, "the header alone");
+
+    rt.update(|s, tx| s.toggle_reader_mode(tx));
+    settle(&mut rt);
+    assert!(rt.state.single_mode());
+    assert_eq!(collapsed(&rt), [true], "and so does showing it alone");
+    rt.update(|s, tx| s.toggle_reader_mode(tx));
+    settle(&mut rt);
+    assert_eq!(collapsed(&rt), [true], "and going back to the stream");
+
+    rt.update(|s, _| s.active_mut().set_collapsed(0, false));
+    settle(&mut rt);
+    assert!(rt.state.active().row_count() > 1, "it opens from its header");
+}
+
+/// `cargo test -p rain-app --release --lib -- --ignored --nocapture one_line_file_of_two_megabytes`
+#[test]
+#[ignore]
+fn a_one_line_file_of_two_megabytes_loads_and_installs() {
+    let launch = Launch {
+        session: "t".into(),
+        fixture: Some(one_line_patch(2_000_000)),
+        ..Launch::default()
+    };
+    let dir = temp_dir();
+    let mut a = App::new(
+        launch.clone(),
+        Arc::new(Shared::default()),
+        Some(dir.join("sessions")),
+        Some(dir.join("settings.json")),
+    );
+    let ms = |t: std::time::Instant| t.elapsed().as_secs_f64() * 1e3;
+    let t = std::time::Instant::now();
+    let data = crate::load::load(&launch, &a.shared, &|_| {}).expect("the patch loads");
+    let load_ms = ms(t);
+    let t = std::time::Instant::now();
+    a.install(data);
+    let install_ms = ms(t);
+    let t = std::time::Instant::now();
+    let rt = runtime(a);
+    println!(
+        "PERF one_line_app chars=2000000 load_ms={load_ms:.1} install_ms={install_ms:.1} first_frames_ms={:.1} folded={} rows={}",
+        ms(t),
+        rt.state.diff.collapsed(0),
+        rt.state.diff.row_count()
+    );
+    assert!(rt.state.diff.collapsed(0));
+    assert!(install_ms < 1000.0, "install took {install_ms:.0} ms");
+}
+
 /// The key the `⋯` menu shows on the item `label`, which it opens.
 fn menu_shortcut(rt: &mut Runtime<App>, label: &str) -> Option<String> {
     rt.update(|s, _| s.menus.more = true);

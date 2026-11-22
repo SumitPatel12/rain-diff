@@ -214,6 +214,85 @@ fn jumping_to_a_file_the_filter_hides_clears_it() {
     assert!(rt.state.status.starts_with("Filter cleared to show"), "{}", rt.state.status);
 }
 
+/// Whether full-list file `g` is folded in the diff on screen.
+fn folded(rt: &Runtime<App>, g: usize) -> bool {
+    rt.state.active().collapsed(rt.state.local(g).expect("the file is on screen"))
+}
+
+/// The server repo's files, narrowed to those whose path holds `text`.
+fn server(text: &str) -> TreeFilter {
+    TreeFilter {
+        repos: [1].into(),
+        text: text.into(),
+        ..TreeFilter::default()
+    }
+}
+
+/// A viewed file, folded under the server filter and opened again there; and a second server
+/// file to mark viewed later.
+fn viewed_and_reopened() -> (Runtime<App>, usize, usize) {
+    let mut rt = m();
+    let mut files = (0..40).filter(|&g| repo_of(&rt.state, g) == "server");
+    let (open, other) = (files.nth(1).unwrap(), files.nth(1).unwrap());
+    rt.update(move |s, _| s.set_viewed(open, true));
+    apply(&mut rt, server(""));
+    assert!(folded(&rt, open), "marked viewed, it is folded under the filter too");
+    rt.update(move |s, _| {
+        let l = s.local(open).unwrap();
+        s.active_mut().set_collapsed(l, false);
+    });
+    settle(&mut rt);
+    (rt, open, other)
+}
+
+#[test]
+fn a_viewed_file_opened_under_a_filter_stays_open_as_the_filter_is_typed_and_cleared() {
+    let (mut rt, open, other) = viewed_and_reopened();
+    let before = rt.state.active().files().len();
+    let name = rt.state.keys[open].rsplit('/').next().unwrap().to_owned();
+    apply(&mut rt, server(&name));
+    assert!(rt.state.active().files().len() < before, "the filter narrowed to another subset");
+    assert!(!folded(&rt, open), "typing in the filter folds no file for being viewed");
+    apply(&mut rt, server(""));
+    assert!(!folded(&rt, open), "nor does widening it");
+
+    rt.update(move |s, _| s.set_viewed(other, true));
+    settle(&mut rt);
+    assert!(folded(&rt, other), "marking a file viewed is what folds it");
+    press(&mut rt, Key::Escape, Mods::default());
+    assert!(rt.state.filter.subset.is_none());
+    assert!(rt.state.is_viewed(open) && !folded(&rt, open), "clearing the filter keeps it open");
+    assert!(folded(&rt, other), "and the file marked under the filter folded");
+}
+
+#[test]
+fn a_viewed_file_opened_under_a_filter_stays_open_through_the_picker_and_a_jump_out_of_the_filter() {
+    let (mut rt, open, other) = viewed_and_reopened();
+    press(&mut rt, Key::Command('p'), ctrl());
+    let name = rt.state.keys[other].rsplit('/').next().unwrap().to_lowercase();
+    typed(&mut rt, &name[..1]);
+    assert!(!folded(&rt, open), "searching in the picker folds nothing");
+    let at = rt
+        .state
+        .picker_rows()
+        .iter()
+        .position(|e| e.target == crate::app::picker::Target::File(other));
+    rt.update(move |s, tx| s.picker_select(at.expect("the file is listed"), tx));
+    press(&mut rt, Key::Enter, Mods::default());
+    assert_eq!(rt.state.current(), Some(other));
+    assert!(!folded(&rt, open), "nor does picking another file of the filter");
+
+    let client = (0..40).find(|&g| repo_of(&rt.state, g) == "app").unwrap();
+    rt.update(move |s, tx| s.goto_file(client, tx));
+    settle(&mut rt);
+    assert!(rt.state.filter.subset.is_none(), "the jump left the filter");
+    assert_eq!(rt.state.current(), Some(client));
+    assert!(
+        rt.state.is_viewed(open) && !folded(&rt, open),
+        "the file opened under the filter is still open"
+    );
+}
+
 #[test]
 fn ctrl_l_opens_the_list_and_its_files_section_and_zoomed_an_overlay() {
     let mut rt = runtime(app(story(), true));

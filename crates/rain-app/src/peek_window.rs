@@ -36,7 +36,6 @@ pub(crate) fn show(content: PeekContent, scheme: Scheme) -> bool {
     true
 }
 
-/// Registers the hidden peek window on `app`.
 pub(crate) fn register<S: 'static>(app: &mut rune::App<S>) {
     let (fonts, families) = crate::fonts();
     let spec = AppSpec {

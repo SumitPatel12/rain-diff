@@ -131,7 +131,7 @@ fn replace_swaps_only_the_same_authors_notes_of_that_kind_and_file() {
         &mut s,
         vec![
             note(NoteKind::File, "a.ts", "old claude", "claude"),
-            note(NoteKind::File, "a.ts", "mine", "sumit"),
+            note(NoteKind::File, "a.ts", "mine", "reviewer"),
             note(NoteKind::File, "b.ts", "other file", "claude"),
             note(NoteKind::Story, "", "story", "claude"),
         ],
@@ -331,7 +331,7 @@ fn reply_by_thread_id_appends_or_warns() {
             end: 5,
         },
         "why?",
-        Some("sumit"),
+        Some("reviewer"),
         None,
     );
     let reply = format!(r#"{{"type":"reply","threadId":"{id}","body":" because ","author":"claude"}}"#);

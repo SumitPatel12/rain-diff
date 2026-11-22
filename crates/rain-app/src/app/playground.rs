@@ -14,7 +14,6 @@ use super::App;
 pub struct PlaygroundState {
     pub open: bool,
     pub lab: Lab,
-    /// The canvas as last laid out.
     pub size: [f32; 2],
 }
 

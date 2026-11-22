@@ -206,6 +206,33 @@ fn import_warnings_and_bad_payloads() {
 }
 
 #[test]
+fn a_reply_by_file_reaches_the_thread_with_a_repo_prefix_a_repo_query_or_neither() {
+    let t = serve(ServerOptions::default());
+    t.shared.lock().repos = vec![rain_core::SessionRepo {
+        id: "acme-shop".into(),
+        ..rain_core::SessionRepo::default()
+    }];
+    let thread = r#"[{"type":"thread","filePath":"api/src/Api/TipsController.cs","position":{"side":"new","line":10},"body":"F1 question: should 0 be refused too?"}]"#;
+    t.send("POST", "/api/comment-imports?repo=acme-shop", thread);
+    let reply = |path: &str, body: &str| {
+        json!({ "type": "reply", "filePath": path, "position": { "side": "new", "line": 10 }, "body": body, "author": "claude" })
+            .to_string()
+    };
+    for (query, path, body) in [
+        ("", "acme-shop/api/src/Api/TipsController.cs", "By prefix."),
+        ("?repo=acme-shop", "api/src/Api/TipsController.cs", "By repo."),
+        ("", "api/src/Api/TipsController.cs", "By path."),
+    ] {
+        let (status, r) = t.send("POST", &format!("/api/comment-imports{query}"), &reply(path, body));
+        assert_eq!(status, 200);
+        assert_eq!((&r["changed"], &r["warnings"]), (&json!(true), &json!([])), "{body}");
+    }
+    let s = t.shared.lock();
+    assert_eq!(s.threads.len(), 1);
+    assert_eq!(s.threads[0].messages.len(), 4);
+}
+
+#[test]
 fn repo_query_scopes_imports_and_reads() {
     let t = serve(ServerOptions::default());
     let one = r#"{"type":"thread","filePath":"a.cs","position":{"side":"new","line":1},"body":"in server"}"#;

@@ -1110,6 +1110,18 @@ fn resizing_while_wrapping_rebuilds_only_the_cursor_row() {
     );
 }
 
+#[test]
+fn a_split_row_compares_its_pair_once_for_both_sides() {
+    let mut d = DiffState::new(vec![from_texts("a.rs", "let a = 1;\nlet b = 2;\n", "let a = 10;\nlet b = 20;\n")]);
+    d.set_mode(DiffMode::Split);
+    let (lines, words) = (rain_diffview::line_builds(), rain_diffview::word_diffs());
+    let rt = runtime(d, (900.0, 600.0));
+    let (lines, words) = (rain_diffview::line_builds() - lines, rain_diffview::word_diffs() - words);
+    assert!(lines >= 2, "both rows were built");
+    assert_eq!(words, lines, "every row is a pair: one comparison each, shared by its two sides");
+    assert!(has(&rt, "df0.o1/old/code") && has(&rt, "df0.o1/new/code"));
+}
+
 /// A live-only event that changes nothing, checked at moments a person makes: while hovers fade
 /// across the lines, a scroll glides or a text selection is held. The view built before and
 /// after it must match.
@@ -1212,6 +1224,108 @@ fn calm_added_files_keep_the_bar_and_drop_the_wash() {
         "a short added file keeps its wash; a long one is calm"
     );
     assert_eq!(fill("df1.n1"), fill("df1.n2"));
+}
+
+#[test]
+fn formatting_only_lines_drop_the_wash_keep_their_sign_and_say_so() {
+    let old = "fn ship() {\n    let order = Order::new(customer, items, shipping);\n    audit(order);\n    order.total = 1;\n}\n";
+    let new = "fn ship() {\n    let order = Order::new(\n        customer,\n        items,\n        shipping,\n    );\n    audit(order);\n    order.total = 2;\n}\n";
+    for mode in [DiffMode::Unified, DiffMode::Split] {
+        let mut d = DiffState::new(vec![from_texts("src/shop.rs", old, new)]);
+        d.set_mode(mode);
+        let rt = runtime(d, (900.0, 600.0));
+        let [wrapped, real, plain] = match mode {
+            DiffMode::Unified => ["df0.o2", "df0.o4", "df0.c3"],
+            DiffMode::Split => ["df0.o2/old", "df0.o4/old", "df0.c3/old"],
+        }
+        .map(|end| find(&rt, end));
+        assert_eq!(wrapped.fill, plain.fill, "{mode:?}: no wash on a re-wrapped line");
+        assert_ne!(real.fill, plain.fill, "{mode:?}: a real change keeps its wash");
+        assert_eq!(
+            wrapped.label.as_deref(),
+            Some("removed line 2, formatting only:     let order = Order::new(customer, items, shipping);")
+        );
+        let minus = rt
+            .elements()
+            .into_iter()
+            .any(|e| e.text.as_deref() == Some("\u{2212}") && e.path.contains("/df0.o2/") && !e.exiting);
+        assert!(minus, "{mode:?}: the minus sign stays");
+    }
+}
+
+#[test]
+fn moved_lines_take_their_own_wash_keep_their_sign_and_say_where_they_went() {
+    let block = "fn tax_for(order: &Order, region: &Region) -> Money {\n    let rate = region.tax_rate(order.placed_on);\n    order.subtotal() * rate\n}\n";
+    let indented: String = block.lines().map(|l| format!("    {l}\n")).collect();
+    let files = vec![
+        from_texts(
+            "src/a.rs",
+            &format!("fn keep() {{}}\n{block}fn tail() {{}}\n"),
+            "fn keep() {}\nfn tail() {}\n",
+        ),
+        from_texts("src/b.rs", "mod b;\n", &format!("mod b;\n{indented}fn real() {{}}\n")),
+    ];
+    let moves = std::sync::Arc::new(rain_core::moves::detect(&files));
+    assert_eq!(moves.moves.len(), 1);
+    for mode in [DiffMode::Unified, DiffMode::Split] {
+        let mut d = DiffState::new(files.clone());
+        let rows_before = dump(&d);
+        d.set_moves(moves.clone(), vec![0, 1]);
+        assert_eq!(dump(&d), rows_before, "{mode:?}: lines, numbers and word changes are as they were");
+        d.set_mode(mode);
+        let rt = runtime(d, (900.0, 600.0));
+        let side = |end: &str, half: &str| match mode {
+            DiffMode::Unified => end.to_owned(),
+            DiffMode::Split => format!("{end}/{half}"),
+        };
+        let [first, second, plain] = ["df0.o2", "df0.o3", "df0.c1"].map(|end| find(&rt, &side(end, "old")));
+        let [arrived, real] = ["df1.n2", "df1.n6"].map(|end| find(&rt, &side(end, "new")));
+        assert_ne!(first.fill, plain.fill, "{mode:?}: a moved line has a wash");
+        assert_ne!(arrived.fill, real.fill, "{mode:?}: which is not an added line's");
+        assert_eq!(first.fill, arrived.fill, "{mode:?}: the same wash on both sides of the move");
+        assert_eq!(first.fill, second.fill);
+        assert_eq!(first.rect[3], second.rect[3], "{mode:?}: the label adds no height");
+        assert_eq!(
+            first.label.as_deref(),
+            Some("removed line 2, moved to src/b.rs:2: fn tax_for(order: &Order, region: &Region) -> Money {")
+        );
+        assert_eq!(
+            second.label.as_deref(),
+            Some("removed line 3, moved:     let rate = region.tax_rate(order.placed_on);")
+        );
+        assert!(
+            arrived
+                .label
+                .as_deref()
+                .unwrap()
+                .starts_with("added line 2, moved from src/a.rs:2: ")
+        );
+        assert!(real.label.as_deref().unwrap().starts_with("added line 6: "));
+        let texts = |row: &str| -> Vec<String> {
+            let all = rt.elements().into_iter();
+            all.filter(|e| e.path.contains(&format!("/{row}/")) && !e.exiting)
+                .filter_map(|e| e.text)
+                .collect()
+        };
+        assert!(
+            texts("df0.o2").contains(&"moved to src/b.rs:2".to_owned()),
+            "{mode:?}: {:?}",
+            texts("df0.o2")
+        );
+        assert!(texts("df0.o2").contains(&"\u{2212}".to_owned()), "{mode:?}: the minus sign stays");
+        assert!(texts("df1.n2").contains(&"moved from src/a.rs:2".to_owned()), "{mode:?}");
+        assert!(
+            !has(&rt, &format!("{}/moved", side("df0.o3", "old"))),
+            "{mode:?}: only the first line is labelled"
+        );
+        let chip = find(&rt, &format!("{}/moved", side("df0.o2", "old")));
+        assert_ne!(chip.fill, first.fill, "{mode:?}: the label is a pill on the wash");
+        assert_eq!(chip.radius, 4.0);
+        assert!(
+            chip.rect[1] > first.rect[1] && chip.rect[1] + chip.rect[3] < first.rect[1] + first.rect[3],
+            "{mode:?}: inside its line"
+        );
+    }
 }
 
 // ---- one-sided files, the spotlight, hunk ids ----

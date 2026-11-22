@@ -161,7 +161,6 @@ pub struct Reason {
     pub text: String,
 }
 
-/// One entry of the ordered review list.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Item {

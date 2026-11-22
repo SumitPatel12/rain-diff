@@ -209,6 +209,9 @@ pub struct Input<'a> {
     pub similarity: &'a [Option<u8>],
     /// Keys whose every change vanishes under `git diff -w`.
     pub formatting_only: Option<&'a BTreeSet<String>>,
+    /// Keys whose every changed line is part of a block moved unchanged (see
+    /// [`rain_core::moves`]).
+    pub moved_only: Option<&'a BTreeSet<String>>,
     /// The overview's reading order by key; its presence also makes `Facts::uncited` known.
     pub rated: Option<&'a BTreeMap<String, Rated>>,
     /// Keys the overview's ignore globs cover.
@@ -224,6 +227,13 @@ struct Decided {
     real_line: Option<u32>,
     moved_from: Option<(String, u32)>,
 }
+
+/// A file whose changes are whitespace and re-wrapped code: a reading of the lines, not a fact
+/// git gives, so the reason is not trusted.
+const REWRAPPED: &str = "formatting-only (re-wrapped)";
+
+/// A file whose changes are all blocks found again elsewhere: matched text, so not trusted.
+const MOVED_BLOCKS: &str = "moved blocks (same lines elsewhere)";
 
 fn reason(group: Group, trusted: bool, text: impl Into<String>) -> Reason {
     Reason {
@@ -308,6 +318,8 @@ fn decide(f: &FileDiff, key: &str, similarity: Option<u8>, input: &Input, is_tes
     let w = analyse(f);
     let formatting = if input.formatting_only.is_some_and(|s| s.contains(key)) && !ws::indent_sensitive(&f.path) {
         Some("formatting-only (-w empty)")
+    } else if w.changed > 0 && w.real == 0 && w.rewrapped > 0 {
+        Some(REWRAPPED)
     } else if w.changed > 0 && w.real == 0 {
         Some("formatting-only (whitespace)")
     } else {
@@ -316,13 +328,21 @@ fn decide(f: &FileDiff, key: &str, similarity: Option<u8>, input: &Input, is_tes
     for (skip, group) in [
         (formatting, Group::FormattingOnly),
         (
+            input.moved_only.is_some_and(|s| s.contains(key)).then_some(MOVED_BLOCKS),
+            Group::Moves,
+        ),
+        (
             input.ignored.is_some_and(|s| s.contains(key)).then_some("ignored (overview)"),
             Group::Ignored,
         ),
     ] {
         match skip {
             Some(why) if risky => overridden = overridden.or(Some(why.into())),
-            Some(why) => return grouped(group, why),
+            Some(why) => {
+                let mut d = grouped(group, why);
+                d.reason.trusted = why != REWRAPPED && why != MOVED_BLOCKS;
+                return d;
+            }
             None => {}
         }
     }
@@ -333,7 +353,7 @@ fn decide(f: &FileDiff, key: &str, similarity: Option<u8>, input: &Input, is_tes
     if changes > CHURN_LINES {
         found.push((RiskLevel::Medium, format!("heuristic: churn ({changes} lines)")));
     }
-    let real_line = (w.real == 1 && w.matched > 0).then_some(w.real_line).flatten();
+    let real_line = (w.real == 1 && w.matched + w.rewrapped > 0).then_some(w.real_line).flatten();
     let moved_from = renamed.then(|| (sibling_key(key, f, f.old_path.as_deref().unwrap_or_default()), changes));
     let mut notes: Vec<String> = found.iter().skip(1).map(|(_, t)| t.clone()).collect();
     notes.extend(overridden);

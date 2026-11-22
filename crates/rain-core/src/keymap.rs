@@ -1,16 +1,16 @@
 //! Key chords, the three built-in shortcut profiles and the keymap in force: a profile's
 //! defaults with the user's overrides over them. The window installs it with [`set_active`];
-//! a key press is one hash lookup, every hint reads the same map.
+//! a key press is one hash lookup, every hint reads the same map. A shortcut may be two chords
+//! pressed in turn; a second lookup happens only while such a shortcut exists.
 
 use std::cell::RefCell;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::rc::Rc;
 
 use serde::{Deserialize, Serialize};
 
 use crate::command::Command;
 
-/// A key as a chord names it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ChordKey {
     /// A character as typed: letters lowercase, punctuation as it arrives (`?`, `]`).
@@ -235,6 +235,45 @@ impl Chord {
     }
 }
 
+/// What a command is bound to: one chord, or two pressed in turn (`g d`, `Ctrl+K Ctrl+S`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Shortcut {
+    pub first: Chord,
+    pub then: Option<Chord>,
+}
+
+impl From<Chord> for Shortcut {
+    fn from(first: Chord) -> Shortcut {
+        Shortcut { first, then: None }
+    }
+}
+
+impl Shortcut {
+    /// A chord as [`Chord::parse`] reads it, or two of them with a space between.
+    pub fn parse(s: &str) -> Option<Shortcut> {
+        if let Some(c) = Chord::parse(s) {
+            return Some(c.into());
+        }
+        let mut parts = s.split_whitespace();
+        let (first, then) = (parts.next()?, parts.next()?);
+        if parts.next().is_some() {
+            return None;
+        }
+        Some(Shortcut {
+            first: Chord::parse(first)?,
+            then: Some(Chord::parse(then)?),
+        })
+    }
+
+    /// As every hint shows it: the chord, or both with a space between (`g d`).
+    pub fn display(&self) -> String {
+        match self.then {
+            Some(then) => format!("{} {}", self.first.display(), then.display()),
+            None => self.first.display(),
+        }
+    }
+}
+
 /// The universal keys as the shortcuts screen and the docs list them.
 pub const UNIVERSAL: [(&str, &str); 11] = [
     ("Up / Down", "Move the cursor by line, keeping its column"),
@@ -431,7 +470,10 @@ static JETBRAINS: [(&str, Command); 32] = [
 pub struct Keymap {
     profile: Profile,
     by_chord: HashMap<Chord, Command>,
-    by_cmd: HashMap<Command, Vec<Chord>>,
+    /// Two-key shortcuts, and the chords that start one.
+    by_pair: HashMap<(Chord, Chord), Command>,
+    starts: HashSet<Chord>,
+    by_cmd: HashMap<Command, Vec<Shortcut>>,
 }
 
 impl Keymap {
@@ -439,22 +481,25 @@ impl Keymap {
         Keymap::with_overrides(profile, &BTreeMap::new()).0
     }
 
-    /// The profile's chords with `overrides` (command id to chords; empty unbinds) over them,
+    /// The profile's chords with `overrides` (command id to keys; empty unbinds) over them,
     /// and a line for each entry it ignored: an unknown command or key, a key already taken by
-    /// another override, or a universal key named for another command.
+    /// another override, a universal key named for another command or used in a two-key
+    /// shortcut.
     pub fn with_overrides(profile: Profile, overrides: &BTreeMap<String, Vec<String>>) -> (Keymap, Vec<String>) {
         let mut problems = Vec::new();
         let mut km = Keymap {
             profile,
             by_chord: HashMap::new(),
+            by_pair: HashMap::new(),
+            starts: HashSet::new(),
             by_cmd: HashMap::new(),
         };
         for (spec, cmd) in profile.defaults() {
             if let Some(ch) = Chord::parse(spec) {
-                km.bind(ch, *cmd);
+                km.bind(ch.into(), *cmd);
             }
         }
-        let mut claimed: HashMap<Chord, Command> = HashMap::new();
+        let mut claimed: HashMap<Shortcut, Command> = HashMap::new();
         for (id, specs) in overrides {
             let Some(cmd) = Command::from_id(id) else {
                 problems.push(format!("unknown command `{id}`"));
@@ -462,47 +507,60 @@ impl Keymap {
             };
             km.unbind_all(cmd);
             for spec in specs {
-                let Some(ch) = Chord::parse(spec) else {
+                let Some(keys) = Shortcut::parse(spec) else {
                     problems.push(format!("`{spec}` for {id} is not a key"));
                     continue;
                 };
-                if ch.universal().is_some() && ch.universal_command() != Some(cmd) {
-                    problems.push(format!("{} is a universal key; not bound to {id}", ch.display()));
+                let universal = match keys.then {
+                    Some(then) => [keys.first, then].into_iter().find(|c| c.universal().is_some()),
+                    None => Some(keys.first).filter(|c| c.universal().is_some() && c.universal_command() != Some(cmd)),
+                };
+                if let Some(ch) = universal {
+                    let pair = keys.then.map(|_| format!("{} ", keys.display())).unwrap_or_default();
+                    problems.push(format!("{} is a universal key; {pair}not bound to {id}", ch.display()));
                     continue;
                 }
-                if let Some(other) = claimed.get(&ch).filter(|o| **o != cmd) {
-                    problems.push(format!("{} is already bound to {}; not bound to {id}", ch.display(), other.id()));
+                if let Some(other) = claimed.get(&keys).filter(|o| **o != cmd) {
+                    problems.push(format!("{} is already bound to {}; not bound to {id}", keys.display(), other.id()));
                     continue;
                 }
-                claimed.insert(ch, cmd);
-                km.bind(ch, cmd);
+                claimed.insert(keys, cmd);
+                km.bind(keys, cmd);
             }
         }
         // A universal key keeps its command's hint even when an override emptied it.
         for (spec, cmd) in profile.defaults() {
             if let Some(ch) = Chord::parse(spec).filter(|c| c.universal_command() == Some(*cmd)) {
-                km.bind(ch, *cmd);
+                km.bind(ch.into(), *cmd);
             }
         }
+        km.starts = km.by_pair.keys().map(|(first, _)| *first).collect();
         (km, problems)
     }
 
-    /// Binds `chord` to `cmd`, taking it from whatever had it.
-    fn bind(&mut self, chord: Chord, cmd: Command) {
-        if let Some(old) = self.by_chord.insert(chord, cmd)
+    /// Binds `keys` to `cmd`, taking them from whatever had them.
+    fn bind(&mut self, keys: Shortcut, cmd: Command) {
+        let old = match keys.then {
+            Some(then) => self.by_pair.insert((keys.first, then), cmd),
+            None => self.by_chord.insert(keys.first, cmd),
+        };
+        if let Some(old) = old
             && let Some(v) = self.by_cmd.get_mut(&old)
         {
-            v.retain(|c| *c != chord);
+            v.retain(|c| *c != keys);
         }
         let v = self.by_cmd.entry(cmd).or_default();
-        if !v.contains(&chord) {
-            v.push(chord);
+        if !v.contains(&keys) {
+            v.push(keys);
         }
     }
 
     fn unbind_all(&mut self, cmd: Command) {
-        for ch in self.by_cmd.remove(&cmd).unwrap_or_default() {
-            self.by_chord.remove(&ch);
+        for keys in self.by_cmd.remove(&cmd).unwrap_or_default() {
+            match keys.then {
+                Some(then) => self.by_pair.remove(&(keys.first, then)),
+                None => self.by_chord.remove(&keys.first),
+            };
         }
     }
 
@@ -514,15 +572,31 @@ impl Keymap {
         self.by_chord.get(chord).copied()
     }
 
-    pub fn chords(&self, cmd: Command) -> &[Chord] {
+    /// Whether `chord` is the first key of a two-key shortcut; no probe when there are none.
+    pub fn starts_pair(&self, chord: &Chord) -> bool {
+        !self.starts.is_empty() && self.starts.contains(chord)
+    }
+
+    /// The command the two-key shortcut `first` then `then` runs.
+    pub fn pair(&self, first: &Chord, then: &Chord) -> Option<Command> {
+        self.by_pair.get(&(*first, *then)).copied()
+    }
+
+    /// A chord that runs a command alone and also starts a two-key shortcut, so it waits; the
+    /// first in display order.
+    pub fn waiting_chord(&self) -> Option<(Chord, Command)> {
+        let both = self.starts.iter().filter_map(|c| Some((*c, self.lookup(c)?)));
+        both.min_by_key(|(c, _)| c.display())
+    }
+
+    pub fn chords(&self, cmd: Command) -> &[Shortcut] {
         self.by_cmd.get(&cmd).map_or(&[], Vec::as_slice)
     }
 
-    pub fn chord(&self, cmd: Command) -> Option<Chord> {
+    pub fn chord(&self, cmd: Command) -> Option<Shortcut> {
         self.chords(cmd).first().copied()
     }
 
-    /// The first chord's display, empty when the command has none.
     pub fn hint(&self, cmd: Command) -> String {
         self.chord(cmd).map(|c| c.display()).unwrap_or_default()
     }
@@ -682,6 +756,98 @@ mod tests {
         assert!(problems.iter().any(|p| p.contains("already bound")));
         assert!(problems.iter().any(|p| p.contains("not a key")));
         assert!(problems.iter().any(|p| p.contains("no-such-thing")));
+    }
+
+    fn keys(s: &str) -> Shortcut {
+        Shortcut::parse(s).unwrap_or_else(|| panic!("{s} parses"))
+    }
+
+    #[test]
+    fn two_key_shortcuts_parse_and_display_and_one_key_reads_as_before() {
+        assert_eq!(
+            keys("g d"),
+            Shortcut {
+                first: ch("g"),
+                then: Some(ch("d"))
+            }
+        );
+        assert_eq!(keys("g d").display(), "g d");
+        assert_eq!(keys("  ctrl+k   ctrl+shift+s ").display(), "Ctrl+K Ctrl+Shift+S");
+        assert_eq!(keys("Space G").display(), "Space G");
+        assert_eq!(keys("Ctrl + K"), ch("Ctrl+K").into(), "spaces around + are still one chord");
+        for s in ["g d", "Ctrl+K Ctrl+S", "F2 ?", "Space Space"] {
+            assert_eq!(Shortcut::parse(&keys(s).display()), Some(keys(s)), "{s} round-trips");
+        }
+        for bad in ["", "g d x", "g Nope", "Hyper+K d", "ab c"] {
+            assert_eq!(Shortcut::parse(bad), None, "{bad}");
+        }
+        for p in Profile::ALL {
+            for (spec, _) in p.defaults() {
+                assert_eq!(Shortcut::parse(spec), Some(ch(spec).into()), "{p:?}: {spec}");
+            }
+        }
+    }
+
+    #[test]
+    fn two_key_overrides_sit_beside_every_default_and_report_what_they_refuse() {
+        for p in Profile::ALL {
+            let plain = Keymap::defaults(p);
+            assert!(plain.waiting_chord().is_none());
+            let mut o = BTreeMap::new();
+            o.insert("reload".to_owned(), vec!["q r".to_owned(), "Ctrl+Q Ctrl+R".to_owned()]);
+            let (km, problems) = Keymap::with_overrides(p, &o);
+            assert!(problems.is_empty(), "{p:?}: {problems:?}");
+            assert_eq!(km.pair(&ch("q"), &ch("r")), Some(Command::Reload));
+            assert_eq!(km.pair(&ch("Ctrl+Q"), &ch("Ctrl+R")), Some(Command::Reload));
+            assert_eq!(km.hint(Command::Reload), "q r");
+            assert!(km.starts_pair(&ch("q")) && km.starts_pair(&ch("Ctrl+Q")) && !km.starts_pair(&ch("r")));
+            assert_eq!(km.lookup(&ch("q")), None, "a first key is no command by itself");
+            assert!(km.waiting_chord().is_none(), "{p:?}: no default key waits");
+            for (chord, cmd) in plain.bindings().filter(|(_, c)| **c != Command::Reload) {
+                assert_eq!(km.lookup(chord), Some(*cmd), "{p:?}: {}", chord.display());
+                assert!(!km.starts_pair(chord) && !plain.starts_pair(chord), "{p:?}: {}", chord.display());
+            }
+        }
+
+        let mut o = BTreeMap::new();
+        o.insert("ask".to_owned(), vec!["c a".to_owned()]);
+        o.insert("defer".to_owned(), vec!["c a".to_owned(), "Up x".to_owned(), "q Escape".to_owned()]);
+        o.insert("reply".to_owned(), vec!["g d x".to_owned(), "z z".to_owned()]);
+        let (km, problems) = Keymap::with_overrides(Profile::Vim, &o);
+        assert_eq!(km.pair(&ch("c"), &ch("a")), Some(Command::Ask), "the first to claim it keeps it");
+        assert_eq!(
+            km.lookup(&ch("c")),
+            Some(Command::Comment),
+            "the key that also starts it keeps its command"
+        );
+        assert_eq!(km.waiting_chord(), Some((ch("c"), Command::Comment)), "and is the one that waits");
+        assert!(km.chords(Command::Defer).is_empty());
+        assert_eq!(km.chords(Command::Reply), [keys("z z")]);
+        assert_eq!(km.pair(&ch("z"), &ch("z")), Some(Command::Reply));
+        assert!(
+            !km.starts_pair(&ch("Up")) && !km.starts_pair(&ch("q")),
+            "no universal key waits or ends a wait"
+        );
+        assert_eq!(problems.len(), 4, "{problems:?}");
+        assert!(
+            problems.iter().any(|p| p == "c a is already bound to ask; not bound to defer"),
+            "{problems:?}"
+        );
+        assert!(
+            problems.iter().any(|p| p == "Up is a universal key; Up x not bound to defer"),
+            "{problems:?}"
+        );
+        assert!(
+            problems
+                .iter()
+                .any(|p| p == "Escape is a universal key; q Escape not bound to defer"),
+            "{problems:?}"
+        );
+        assert!(problems.iter().any(|p| p == "`g d x` for reply is not a key"), "{problems:?}");
+
+        o.insert("ask".to_owned(), vec![]);
+        let (km, _) = Keymap::with_overrides(Profile::Vim, &o);
+        assert_eq!(km.pair(&ch("c"), &ch("a")), Some(Command::Defer), "freed, the next claim gets it");
     }
 
     #[test]

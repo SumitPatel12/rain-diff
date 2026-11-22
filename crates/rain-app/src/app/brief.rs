@@ -449,12 +449,10 @@ impl App {
         self.artifact_threads(|t| t.kind == TargetKind::Brief && t.section.as_deref() == Some(id))
     }
 
-    /// Threads on Map node `node`.
     pub fn node_threads(&self, node: &str) -> Vec<&Thread> {
         self.artifact_threads(|t| t.kind == TargetKind::Node && t.node.as_deref() == Some(node))
     }
 
-    /// Threads on note `id`.
     pub fn note_threads(&self, id: &str) -> Vec<&Thread> {
         self.artifact_threads(|t| t.kind == TargetKind::Note && t.note.as_deref() == Some(id))
     }

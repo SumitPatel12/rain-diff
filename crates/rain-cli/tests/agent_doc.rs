@@ -74,6 +74,7 @@ fn agent_doc_names_every_route() {
         "PUT /api/brief",
         "GET /api/triage",
         "GET /api/review",
+        "GET /api/next",
         "POST /api/review",
         "GET /api/lock",
     ] {

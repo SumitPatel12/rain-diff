@@ -1,8 +1,8 @@
 //! Reload keeping the reading place, what a reload changed (anchors, hunks since viewed), and
-//! the HEAD watch with its banner.
+//! the HEAD and edit watches with their banner.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::channel;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -10,9 +10,10 @@ use std::time::{Duration, Instant};
 use rain_comments::ops;
 use rain_core::{AnchorState, HunkViewed, Side, ViewedRecord, short_sha};
 use rain_diffview::LineRef;
-use rain_git::{GitWatch, TargetKind};
+use rain_git::{GitWatch, Resolved, TargetKind};
 use rune::Tx;
 
+use super::edits::{Gate, Poller};
 use super::place::Captured;
 use super::{App, Overlay, Phase};
 use crate::load;
@@ -20,22 +21,31 @@ use crate::load;
 /// How long the "Reloaded" message stays.
 pub const TOAST_FOR: Duration = Duration::from_secs(8);
 
-/// New commits under the open window.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Stale {
-    pub repo: String,
-    pub branch: String,
-    pub commits: Option<u32>,
-    pub sha: String,
+pub enum Stale {
+    Commits {
+        repo: String,
+        branch: String,
+        commits: Option<u32>,
+        sha: String,
+    },
+    /// Files of a working-tree or index diff; `repo` is named when the window has several.
+    Edits { repo: Option<String> },
 }
 
 impl Stale {
     pub fn message(&self) -> String {
-        let short = short_sha(&self.sha);
-        match self.commits {
-            Some(1) => format!("1 new commit on {} ({short})", self.branch),
-            Some(n) => format!("{n} new commits on {} ({short})", self.branch),
-            None => format!("{} moved to {short} (history rewritten)", self.branch),
+        match self {
+            Stale::Commits { branch, commits, sha, .. } => {
+                let short = short_sha(sha);
+                match commits {
+                    Some(1) => format!("1 new commit on {branch} ({short})"),
+                    Some(n) => format!("{n} new commits on {branch} ({short})"),
+                    None => format!("{branch} moved to {short} (history rewritten)"),
+                }
+            }
+            Stale::Edits { repo: Some(repo) } => format!("Files in {repo} changed since this diff loaded"),
+            Stale::Edits { repo: None } => "Files changed since this diff loaded".into(),
         }
     }
 }
@@ -48,6 +58,15 @@ struct Watched {
     target: String,
     loaded: String,
     head: String,
+    edits: Option<EditSpec>,
+}
+
+/// A working-tree or index diff as loaded, for noticing edits under it.
+#[derive(Clone, Debug)]
+struct EditSpec {
+    resolved: Resolved,
+    untracked: bool,
+    mark: u64,
 }
 
 /// What a reload changed, for its message.
@@ -94,6 +113,11 @@ pub struct ReloadState {
     found: Arc<Mutex<Option<Option<Stale>>>>,
     /// Each repo's last check since the last install, by folder: a watch checks its own repo.
     checked: Arc<Mutex<HashMap<PathBuf, Option<Stale>>>>,
+    /// The repos whose diff no longer matches the mark taken when it loaded.
+    edited: Arc<Mutex<HashSet<PathBuf>>>,
+    /// Each repo's edit mark from the load being installed, in repo order.
+    pub(crate) edit_marks: Vec<Option<u64>>,
+    gate: Gate,
     pub banner: Option<Stale>,
     pub toast: Option<(String, Instant)>,
     pub counts: Option<ReloadCounts>,
@@ -253,28 +277,27 @@ impl App {
     }
 
     /// Watches each repo's `.git` for new commits, starting on a thread (the watcher scans
-    /// `refs/`); the banner appears on the frame after a check finds one.
+    /// `refs/`), and each working-tree or index diff for edits; the banner appears on the frame
+    /// after a check finds either.
     pub fn start_head_watch(&mut self, wake: Arc<dyn Fn() + Send + Sync>) {
         if self.reloader.watch_started {
             return;
         }
         self.reloader.watch_started = true;
-        let watched = self.reloader.watched.clone();
-        let found = self.reloader.found.clone();
-        let checked = self.reloader.checked.clone();
+        let check = self.check();
+        for p in self.edit_pollers(Instant::now()) {
+            let (check, wake) = (check.clone(), wake.clone());
+            self.reloader.gate.spawn(p, move |dir| check.edits(dir), move || wake());
+        }
         let watches = self.reloader.watches.clone();
-        let dirs: Vec<PathBuf> = watched
+        let dirs: Vec<PathBuf> = check
+            .watched
             .lock()
             .map(|w| w.iter().map(|r| r.dir.clone()).collect())
             .unwrap_or_default();
         let _ = std::thread::Builder::new().name("rain-watch-start".into()).spawn(move || {
             for dir in dirs {
-                let check = Check {
-                    watched: watched.clone(),
-                    found: found.clone(),
-                    checked: checked.clone(),
-                };
-                if let Some(w) = watch_repo(&dir, check, wake.clone())
+                if let Some(w) = watch_repo(&dir, check.clone(), wake.clone())
                     && let Ok(mut all) = watches.lock()
                 {
                     all.push(w);
@@ -283,12 +306,46 @@ impl App {
         });
     }
 
+    pub(crate) fn check(&self) -> Check {
+        Check {
+            watched: self.reloader.watched.clone(),
+            found: self.reloader.found.clone(),
+            checked: self.reloader.checked.clone(),
+            edited: self.reloader.edited.clone(),
+        }
+    }
+
+    /// One poller per repo whose diff reads the working tree or the index; none for commits.
+    pub(crate) fn edit_pollers(&self, now: Instant) -> Vec<Poller> {
+        let watched = self.reloader.watched.lock().map(|w| w.clone()).unwrap_or_default();
+        let mut dirs: Vec<PathBuf> = Vec::new();
+        for r in watched.into_iter().filter(|r| r.edits.is_some()) {
+            if !dirs.contains(&r.dir) {
+                dirs.push(r.dir);
+            }
+        }
+        dirs.into_iter().map(|d| Poller::new(d, now)).collect()
+    }
+
+    /// The window gained or lost the focus: edits are looked for only with it, and at once
+    /// when it returns.
+    pub fn window_focus(&mut self, focused: bool) {
+        self.reloader.gate.set_focus(focused);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn edit_focus(&self) -> (bool, u64) {
+        self.reloader.gate.focus()
+    }
+
     fn update_watched(&mut self) {
+        let marks = std::mem::take(&mut self.reloader.edit_marks);
         let list: Vec<Watched> = self
             .repos
             .iter()
             .zip(&self.resolved)
-            .filter_map(|(r, res)| {
+            .enumerate()
+            .filter_map(|(i, (r, res))| {
                 let res = res.as_ref()?;
                 let head = match res.kind {
                     TargetKind::Commit => String::new(),
@@ -300,6 +357,11 @@ impl App {
                     target: r.target.clone(),
                     loaded: res.target.clone(),
                     head,
+                    edits: marks.get(i).copied().flatten().map(|mark| EditSpec {
+                        resolved: res.clone(),
+                        untracked: self.launch.repos.get(i).is_some_and(|l| l.include_untracked),
+                        mark,
+                    }),
                 })
             })
             .collect();
@@ -308,6 +370,9 @@ impl App {
         }
         if let Ok(mut c) = self.reloader.checked.lock() {
             c.clear();
+        }
+        if let Ok(mut e) = self.reloader.edited.lock() {
+            e.clear();
         }
     }
 
@@ -354,31 +419,77 @@ impl App {
     }
 }
 
-/// What a repo's watch reads and writes.
+/// What a repo's watches read and write.
 #[derive(Clone)]
-struct Check {
+pub(crate) struct Check {
     watched: Arc<Mutex<Vec<Watched>>>,
     found: Arc<Mutex<Option<Option<Stale>>>>,
     checked: Arc<Mutex<HashMap<PathBuf, Option<Stale>>>>,
+    edited: Arc<Mutex<HashSet<PathBuf>>>,
 }
 
 impl Check {
-    /// Compares `dir`'s targets with what was loaded, then reports the first stale repo of every
-    /// repo's last check, in the watched order.
-    fn run(&self, dir: &std::path::Path) {
+    /// Compares `dir`'s targets with what was loaded, then reports.
+    fn run(&self, dir: &Path) {
         let list = self.watched.lock().map(|w| w.clone()).unwrap_or_default();
         let mine = list.iter().filter(|r| r.dir == dir).find_map(|r| {
             let m = rain_git::target_moved(&r.dir, &r.target, &r.loaded, &r.head).ok()??;
-            Some(Stale {
+            Some(Stale::Commits {
                 repo: r.id.clone(),
                 branch: m.branch,
                 commits: m.commits,
                 sha: m.to,
             })
         });
-        let Ok(mut checked) = self.checked.lock() else { return };
-        checked.insert(dir.to_owned(), mine);
-        let stale = list.iter().find_map(|r| checked.get(&r.dir).cloned().flatten());
+        if let Ok(mut checked) = self.checked.lock() {
+            checked.insert(dir.to_owned(), mine);
+        }
+        self.report(&list);
+    }
+
+    /// Compares `dir`'s diff with the mark taken when it loaded; true when that turned the
+    /// repo edited, or back to as loaded, and so was reported.
+    pub(crate) fn edits(&self, dir: &Path) -> bool {
+        let spec = |list: &[Watched]| list.iter().filter(|r| r.dir == dir).find_map(|r| r.edits.clone());
+        let Some(spec) = self.watched.lock().ok().and_then(|w| spec(&w)) else {
+            return false;
+        };
+        let Ok(Some(now)) = rain_git::edit_mark(dir, &spec.resolved, spec.untracked) else {
+            return false;
+        };
+        let list = self.watched.lock().map(|w| w.clone()).unwrap_or_default();
+        // A reload that finished meanwhile took a newer mark; this one compares with nothing.
+        if list.iter().filter(|r| r.dir == dir).find_map(|r| r.edits.as_ref()).map(|e| e.mark) != Some(spec.mark) {
+            return false;
+        }
+        let Ok(mut edited) = self.edited.lock() else { return false };
+        let changed = if now == spec.mark {
+            edited.remove(dir)
+        } else {
+            edited.insert(dir.to_owned())
+        };
+        drop(edited);
+        if changed {
+            self.report(&list);
+        }
+        changed
+    }
+
+    /// Reports the first repo with new commits in every repo's last check, else the first with
+    /// edits, in the watched order.
+    fn report(&self, list: &[Watched]) {
+        let commits = self
+            .checked
+            .lock()
+            .ok()
+            .and_then(|c| list.iter().find_map(|r| c.get(&r.dir).cloned().flatten()));
+        let stale = commits.or_else(|| {
+            let edited = self.edited.lock().ok()?;
+            let r = list.iter().find(|r| edited.contains(&r.dir))?;
+            Some(Stale::Edits {
+                repo: (list.len() > 1).then(|| r.id.clone()),
+            })
+        });
         if let Ok(mut f) = self.found.lock() {
             *f = Some(stale);
         }
@@ -386,7 +497,7 @@ impl Check {
 }
 
 /// One repo's watch; its check looks at that repo only.
-fn watch_repo(dir: &std::path::Path, check: Check, wake: Arc<dyn Fn() + Send + Sync>) -> Option<GitWatch> {
+fn watch_repo(dir: &Path, check: Check, wake: Arc<dyn Fn() + Send + Sync>) -> Option<GitWatch> {
     let own = dir.to_owned();
     let check = move || {
         check.run(&own);
@@ -434,8 +545,6 @@ fn reload_counts(
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
-
     use super::*;
 
     fn watched(id: &str, dir: &str) -> Watched {
@@ -445,6 +554,7 @@ mod tests {
             target: "HEAD".into(),
             loaded: "0".repeat(40),
             head: String::new(),
+            edits: None,
         }
     }
 
@@ -457,8 +567,9 @@ mod tests {
             watched: Arc::new(Mutex::new(vec![watched("a", &a), watched("b", &b)])),
             found: Arc::default(),
             checked: Arc::default(),
+            edited: Arc::default(),
         };
-        let stale_b = Stale {
+        let stale_b = Stale::Commits {
             repo: "b".into(),
             branch: "main".into(),
             commits: Some(2),

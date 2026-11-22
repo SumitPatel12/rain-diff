@@ -14,7 +14,6 @@ use crate::theme::{TYPE, radius};
 const CARD_W: f32 = 440.0;
 /// Room at the right for the diff's overview ruler.
 const RULER_CLEAR: f32 = 30.0;
-/// The status line under the reader.
 const STATUS_H: f32 = STATUS_HEIGHT;
 
 /// The card, with the reader's toasts stacked above it so neither covers the other.
@@ -383,9 +382,12 @@ fn end(s: &App, k: &Kit) -> El {
                 |s, tx| s.tour_prev(tx),
             ))
             .child(el().grow(1.0))
-            .child(button("Close", "tour-close", ButtonVariant::Contrast, k, |s, _| {
-                s.leave_tour();
-            })),
+            .child(
+                button("Close", "tour-close", ButtonVariant::Contrast, k, |s, _| {
+                    s.leave_tour();
+                })
+                .help(crate::keys::tip("Close the tour", rain_core::Command::NextHunk)),
+            ),
     )
 }
 

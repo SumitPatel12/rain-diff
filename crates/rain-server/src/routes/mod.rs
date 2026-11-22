@@ -5,6 +5,7 @@ pub(crate) mod compat;
 pub(crate) mod events;
 pub(crate) mod lifecycle;
 pub(crate) mod lock;
+pub(crate) mod next;
 pub(crate) mod notes;
 pub(crate) mod overview;
 pub(crate) mod presence;
@@ -18,7 +19,7 @@ use crate::{Ctx, Reply, Req, error};
 
 type Route = fn(&Ctx, &Req) -> Option<Reply>;
 
-const ROUTES: [Route; 11] = [
+const ROUTES: [Route; 12] = [
     lifecycle::route,
     compat::route,
     notes::route,
@@ -29,6 +30,7 @@ const ROUTES: [Route; 11] = [
     brief::route,
     triage::route,
     review::route,
+    next::route,
     lock::route,
 ];
 

@@ -7,7 +7,7 @@ use rain_core::{Anchor, Answer, CodeSnapshot, CommentImport, ImportBody, Message
 use serde_json::Value;
 
 use crate::clock::{new_id, now_iso};
-use crate::ops::{artifact_snapshot, record_answer, split_known_repo, target_from_path};
+use crate::ops::{artifact_snapshot, record_answer, same_repo, sole_repo, target_from_path};
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ImportResult {
@@ -178,13 +178,33 @@ fn max_ts(a: &str, b: &str) -> String {
     if a >= b { a.to_owned() } else { b.to_owned() }
 }
 
+/// The `(repo, path)` pairs an import's file can mean, in the order to look for it, and the one
+/// to use when it is found at none: the path as written in the `named` repo, and, when it starts
+/// with a session repo's id that is `named` or nothing is, the rest of the path in that repo.
+/// Unnamed, the prefix is the default reading, and the only real one among several repos.
+fn places(s: &Session, named: Option<&str>, path: &str) -> (Vec<(String, String)>, usize) {
+    let literal = (named.unwrap_or_default().to_owned(), path.to_owned());
+    let (head, rest) = rain_core::paths::split_repo_path(path);
+    let prefixed = !head.is_empty() && !rest.is_empty() && named.is_none_or(|r| r == head) && s.repos.iter().any(|r| r.id == head);
+    if !prefixed {
+        return (vec![literal], 0);
+    }
+    let split = (head.to_owned(), rest.to_owned());
+    match named {
+        None if s.repos.len() > 1 => (vec![split, literal], 0),
+        None => (vec![literal, split], 1),
+        Some(_) => (vec![literal, split], 0),
+    }
+}
+
 /// `(repo, path, anchor)` → the anchored text of the loaded diff ([`rain_core::Shared::excerpt`]).
 pub type Excerpt<'a> = &'a dyn Fn(&str, &str, &Anchor) -> Option<CodeSnapshot>;
 
 /// Applies imports in order: a thread is skipped when one with its id, or with its file,
 /// position and first-message body, exists; a reply joins the newest thread at its file and
 /// position unless a matching message is already there, and warns when there is none. Threads
-/// land in `repo` unless the import names one. Bumps `version` once when anything changed.
+/// land in `repo` unless the import names one; a `<repo>/` prefix on the path is read as
+/// [`places`] says. Bumps `version` once when anything changed.
 /// Nothing is snapshotted: see [`apply_with_excerpts`] for imports against a loaded diff.
 pub fn apply(s: &mut Session, imports: Vec<CommentImport>, repo: &str) -> ImportResult {
     apply_inner(s, imports, repo, None)
@@ -204,17 +224,14 @@ fn apply_inner(s: &mut Session, imports: Vec<CommentImport>, repo: &str, excerpt
     let count = imports.len();
     let mut warnings = Vec::new();
     let mut changed = false;
+    let sole = sole_repo(s).map(str::to_owned);
     for mut imp in imports {
         let now = now_iso();
         let is_thread = matches!(imp, CommentImport::Thread(_));
         let b = body_mut(&mut imp);
         b.body = b.body.trim().to_owned();
-        let (repo, file_path) = match &b.repo {
-            Some(r) => (r.clone(), b.file_path.clone()),
-            None if repo.is_empty() => split_known_repo(s, &b.file_path),
-            None => (repo.to_owned(), b.file_path.clone()),
-        };
-        b.file_path = file_path;
+        let named = Some(b.repo.as_deref().unwrap_or(repo)).filter(|r| !r.is_empty());
+        let (places, fallback) = places(s, named, &b.file_path);
         let created = b.created_at.clone().unwrap_or(now);
         let updated = b.updated_at.clone().unwrap_or_else(|| created.clone());
         if !is_thread && let Some(id) = b.thread_id.clone() {
@@ -226,19 +243,36 @@ fn apply_inner(s: &mut Session, imports: Vec<CommentImport>, repo: &str, excerpt
             continue;
         }
         let Some(anchor) = b.anchor else {
-            warnings.push(format!("Skipped comment import for {} because it has no position.", b.file_path));
+            warnings.push(format!(
+                "Skipped comment import for {} because it has no position.",
+                places[fallback].1
+            ));
             continue;
         };
+        let sole = sole.as_deref();
         if is_thread {
             let dup = s.threads.iter().any(|t| {
                 b.id.as_deref().is_some_and(|id| id == t.id)
-                    || (t.repo == repo
-                        && t.messages.first().map_or("", |m| m.body.as_str()) == b.body
-                        && at_position(t, &b.file_path, &anchor))
+                    || (t.messages.first().map_or("", |m| m.body.as_str()) == b.body
+                        && places
+                            .iter()
+                            .any(|(r, p)| same_repo(sole, &t.repo, r) && at_position(t, p, &anchor)))
             });
             if dup {
                 continue;
             }
+            let mut probed = None;
+            let probe = excerpt.filter(|_| places.len() > 1);
+            let place = probe
+                .and_then(|get| {
+                    places.iter().position(|(r, p)| {
+                        probed = get(r, p, &anchor);
+                        probed.is_some()
+                    })
+                })
+                .unwrap_or(fallback);
+            let (repo, file_path) = places[place].clone();
+            b.file_path = file_path;
             let id = b.id.clone().unwrap_or_else(new_id);
             let target = b.target.clone().or_else(|| target_from_path(&b.file_path));
             let mut snapshot = b.code_snapshot.clone();
@@ -251,7 +285,11 @@ fn apply_inner(s: &mut Session, imports: Vec<CommentImport>, repo: &str, excerpt
                 && snapshot.is_none()
                 && target.as_ref().is_none_or(|t| t.kind == TargetKind::Line)
             {
-                snapshot = get(&repo, &b.file_path, &anchor);
+                snapshot = if probe.is_some() {
+                    probed
+                } else {
+                    get(&repo, &b.file_path, &anchor)
+                };
             }
             let asks = b.kind == Some(ThreadKind::Question) && b.author.as_deref().is_none_or(|a| a.trim().is_empty());
             s.threads.push(Thread {
@@ -279,21 +317,24 @@ fn apply_inner(s: &mut Session, imports: Vec<CommentImport>, repo: &str, excerpt
             changed = true;
             continue;
         }
-        let target = s
-            .threads
-            .iter_mut()
-            .filter(|t| t.repo == repo && at_position(t, &b.file_path, &anchor))
-            .rev()
-            .max_by(|x, y| x.updated_at.cmp(&y.updated_at));
-        let Some(t) = target else {
+        let target = places.iter().find_map(|(r, p)| {
+            s.threads
+                .iter()
+                .enumerate()
+                .filter(|(_, t)| same_repo(sole, &t.repo, r) && at_position(t, p, &anchor))
+                .rev()
+                .max_by(|x, y| x.1.updated_at.cmp(&y.1.updated_at))
+                .map(|(i, _)| i)
+        });
+        let Some(i) = target else {
             warnings.push(format!(
                 "Skipped reply import for {}:{} because no matching thread was found.",
-                b.file_path,
+                places[fallback].1,
                 difit_position_key(&anchor)
             ));
             continue;
         };
-        changed |= append_reply(t, b, created, updated);
+        changed |= append_reply(&mut s.threads[i], b, created, updated);
     }
     if changed {
         s.bump_comments();

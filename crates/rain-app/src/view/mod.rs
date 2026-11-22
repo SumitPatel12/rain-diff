@@ -49,6 +49,8 @@ pub(crate) fn toolbar_title(s: &App) -> String {
 }
 
 #[cfg(test)]
+pub(crate) use board::file_row_builds;
+#[cfg(test)]
 pub(crate) use overview::{cite_target, demote_headings, inline_cites, link_cites, parse_cite};
 pub(crate) use peek::code as peek_code;
 #[cfg(test)]
@@ -278,8 +280,6 @@ fn side_panel(o: Overlay, content: El, width: f32, look: &Look) -> El {
 fn muted(t: impl Into<String>, k: &Kit) -> El {
     text(t.into()).font(k.ty.small).color(k.c.text_muted)
 }
-
-// ----- the reader -----
 
 /// The reader: the tab strip, banners, then the Overview or the find bar, filter and diff.
 fn reader(s: &App, look: &Look, cx: &mut Cx<App>) -> El {

@@ -12,7 +12,6 @@ use clap::{CommandFactory, Parser};
 
 pub use args::{Cli, CommentCmd, Conn, Format, NoteAdd, NoteCmd, OpenArgs, OverviewCmd, SideArg, Sub};
 
-/// The `rain` binary's entry point.
 pub fn main() {
     let argv: Vec<String> = std::env::args_os().map(|a| a.to_string_lossy().into_owned()).collect();
     std::process::exit(run(argv));

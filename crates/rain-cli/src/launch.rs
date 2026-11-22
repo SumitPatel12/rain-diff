@@ -54,32 +54,77 @@ fn current_branch(dir: &Path) -> Option<String> {
     (!branch.is_empty()).then_some(branch)
 }
 
+/// One spelling per checkout or patch: the path on disk (its real case, links followed), or the
+/// absolute path when nothing is there.
+fn canonical(path: &Path) -> String {
+    match std::fs::canonicalize(path) {
+        Ok(p) => p.to_string_lossy().trim_start_matches(r"\\?\").to_owned(),
+        Err(_) => absolute(path).to_string_lossy().into_owned(),
+    }
+}
+
 /// `<repo folder>-<branch>` (or `-<target>` when the target names a revision other than HEAD), so
 /// two repos, or two stories in one repo, never share a session file by accident. What else picks
 /// the diff follows, so a different diff never reuses a window: `-uncommitted`, `-working` or
-/// `-staged` for those targets, then `-<hash>` of the base, `--merge-base`,
-/// `--include-untracked` and the other repos when any differs from a plain `rain open <target>`.
+/// `-staged` for those targets, then a stable hash of the checkout paths, revisions,
+/// `--merge-base` and `--include-untracked`. Whitespace and context only change how the same
+/// diff is shown, so they stay out of the name.
 pub fn default_session(o: &OpenArgs, dirs: &[PathBuf], target: &str, base: &str) -> String {
+    if let Some(f) = o.fixture.as_deref() {
+        let path = canonical(f);
+        let stem = Path::new(&path)
+            .file_stem()
+            .map_or_else(|| "fixture".into(), |s| s.to_string_lossy().into_owned());
+        return sanitize(&format!("fixture-{stem}-{:016x}", fnv1a(path.as_bytes())));
+    }
+    let dir = dirs.first().map_or(Path::new("."), PathBuf::as_path);
+    let paths: Vec<String> = dirs.iter().map(|d| canonical(d)).collect();
+    let folder = paths
+        .first()
+        .and_then(|p| Path::new(p).file_name())
+        .map_or_else(|| "rain".into(), |n| n.to_string_lossy().into_owned());
+    let mut id = format!("{folder}-{}", revision_label(dir, target));
+    id.push_str(&format!("-{:016x}", identity(o, target, base, &paths)));
+    sanitize(&id)
+}
+
+/// `<branch or target>`, then `-uncommitted`, `-working` or `-staged` for those targets.
+fn revision_label(dir: &Path, target: &str) -> String {
+    let mut label = if target.eq_ignore_ascii_case("HEAD") || is_special(target) {
+        current_branch(dir).unwrap_or_else(|| "HEAD".into())
+    } else {
+        target.to_owned()
+    };
+    if is_special(target) {
+        label.push('-');
+        label.push_str(match target.to_ascii_lowercase().as_str() {
+            "working" => "working",
+            "staged" => "staged",
+            _ => "uncommitted",
+        });
+    }
+    label
+}
+
+/// The hash in an automatic session name. Changing what goes in renames every automatic session.
+fn identity(o: &OpenArgs, target: &str, base: &str, paths: &[String]) -> u64 {
+    let mut spec = format!("{target}\0{base}\0{}\0{}", o.merge_base, o.include_untracked);
+    for p in paths {
+        spec.push('\0');
+        spec.push_str(p);
+    }
+    fnv1a(spec.as_bytes())
+}
+
+/// The automatic name before it carried the checkout hash.
+fn legacy_default_session(o: &OpenArgs, dirs: &[PathBuf], target: &str, base: &str) -> String {
     if let Some(f) = o.fixture.as_deref() {
         let stem = f.file_stem().map_or_else(|| "fixture".into(), |s| s.to_string_lossy().into_owned());
         return sanitize(&format!("fixture-{stem}"));
     }
     let dir = dirs.first().map_or(Path::new("."), PathBuf::as_path);
     let folder = folder_name(dir).unwrap_or_else(|| "rain".into());
-    let label = if target.eq_ignore_ascii_case("HEAD") || is_special(target) {
-        current_branch(dir).unwrap_or_else(|| "HEAD".into())
-    } else {
-        target.to_owned()
-    };
-    let mut id = format!("{folder}-{label}");
-    if is_special(target) {
-        id.push('-');
-        id.push_str(match target.to_ascii_lowercase().as_str() {
-            "working" => "working",
-            "staged" => "staged",
-            _ => "uncommitted",
-        });
-    }
+    let mut id = format!("{folder}-{}", revision_label(dir, target));
     let plain = base == default_base(target) && !o.merge_base && !o.include_untracked && dirs.len() == 1;
     if !plain {
         let mut spec = format!("{base}\0{}\0{}", o.merge_base, o.include_untracked);
@@ -92,6 +137,33 @@ pub fn default_session(o: &OpenArgs, dirs: &[PathBuf], target: &str, base: &str)
     sanitize(&id)
 }
 
+/// The session a launch without `--session` uses: [`default_session`], or the older name when
+/// only that one is saved and it was last opened on this checkout, so an upgrade keeps its review.
+fn automatic_session(o: &OpenArgs, dirs: &[PathBuf], target: &str, base: &str, data_dir: &Path) -> String {
+    let new = default_session(o, dirs, target, base);
+    let old = legacy_default_session(o, dirs, target, base);
+    let saved = |id: &str| SessionFile::path_in(&data_dir.join("sessions"), id).exists();
+    if !saved(&new) && saved(&old) && opened_here(data_dir, &old, o, dirs) {
+        old
+    } else {
+        new
+    }
+}
+
+/// Whether `session`'s launch record names this fixture or these checkouts. A session with no
+/// readable record predates them and counts as this one.
+fn opened_here(data_dir: &Path, session: &str, o: &OpenArgs, dirs: &[PathBuf]) -> bool {
+    let record = std::fs::read_to_string(crate::sessions::record_path(data_dir, session))
+        .ok()
+        .and_then(|text| serde_json::from_str::<crate::sessions::LaunchRecord>(&text).ok());
+    let Some(record) = record else { return true };
+    match (&record.fixture, &o.fixture) {
+        (Some(theirs), Some(ours)) => canonical(theirs) == canonical(ours),
+        (None, None) => record.repos.iter().map(|d| canonical(d)).eq(dirs.iter().map(|d| canonical(d))),
+        _ => false,
+    }
+}
+
 /// FNV-1a: a stable hash, the same in every build.
 fn fnv1a(bytes: &[u8]) -> u64 {
     bytes
@@ -100,6 +172,10 @@ fn fnv1a(bytes: &[u8]) -> u64 {
 }
 
 pub fn build_launch(o: &OpenArgs) -> Launch {
+    build_launch_in(o, &rain_comments::store::data_dir())
+}
+
+fn build_launch_in(o: &OpenArgs, data_dir: &Path) -> Launch {
     let target = o.target.clone().unwrap_or_else(|| "HEAD".into());
     let base = o.base.clone().unwrap_or_else(|| default_base(&target));
     let dirs: Vec<PathBuf> = if o.repos.is_empty() {
@@ -117,7 +193,10 @@ pub fn build_launch(o: &OpenArgs) -> Launch {
             include_untracked: o.include_untracked,
         })
         .collect();
-    let session = o.session.clone().unwrap_or_else(|| default_session(o, &dirs, &target, &base));
+    let session = o
+        .session
+        .clone()
+        .unwrap_or_else(|| automatic_session(o, &dirs, &target, &base, data_dir));
     Launch {
         session,
         repos,
@@ -130,6 +209,8 @@ pub fn build_launch(o: &OpenArgs) -> Launch {
         fixture: o.fixture.as_deref().map(absolute),
         context: Some(o.context),
         read_only: false,
+        read_only_reason: None,
+        session_notice: None,
     }
 }
 
@@ -274,6 +355,25 @@ pub fn open(o: OpenArgs, rune: &RuneArgs) -> i32 {
     }
 }
 
+/// The saved session, and whether it is the backup of a file that could not be read.
+fn load_saved(file: &Path, clean: bool) -> Result<(Session, bool), String> {
+    if clean {
+        return Ok((Session::default(), false));
+    }
+    SessionFile::load_or_backup(file).map_err(|e| format!("cannot read session {}: {e}", file.display()))
+}
+
+/// For the window that owns the session: moves the unreadable file out of the way of the next
+/// save, and says what happened.
+fn set_unreadable_aside(file: &Path) -> String {
+    let kept = SessionFile::set_aside(file)
+        .inspect_err(|e| eprintln!("Rain: {} could not be moved aside: {e}", file.display()))
+        .ok();
+    let notice = SessionFile::backup_notice(file, kept.as_deref());
+    eprintln!("Rain: {notice}");
+    notice
+}
+
 fn open_window(o: &OpenArgs, rune: &RuneArgs) -> Result<(), String> {
     let launch = build_launch(o);
     let file = SessionFile::path(&launch.session);
@@ -282,11 +382,8 @@ fn open_window(o: &OpenArgs, rune: &RuneArgs) -> Result<(), String> {
     if live {
         rain_app::warm_gpu();
     }
-    let saved = if launch.clean {
-        Session::default()
-    } else {
-        SessionFile::load(&file).map_err(|e| format!("cannot read session {}: {e}", file.display()))?
-    };
+    let (saved, from_backup) = load_saved(&file, launch.clean)?;
+    let mut session_notice = from_backup.then(|| SessionFile::backup_notice(&file, None));
     let loaded_version = saved.version;
     let session = prepare_session(o, &launch, saved)?;
     let changed = launch.clean || session.version != loaded_version;
@@ -306,11 +403,17 @@ fn open_window(o: &OpenArgs, rune: &RuneArgs) -> Result<(), String> {
         };
         let handle = start_with(shared.clone(), opts).map_err(|e| format!("cannot start the comment server: {e}"))?;
         if handle.read_only {
-            if !background::is_child() {
+            // The server has already said why the lock could not be taken.
+            if !background::is_child() && handle.lock_error.is_none() {
                 eprintln!("{}", background::READ_ONLY_WARNING);
             }
-        } else if changed {
-            save();
+        } else {
+            if from_backup {
+                session_notice = Some(set_unreadable_aside(&file));
+            }
+            if changed || from_backup {
+                save();
+            }
         }
         crate::sessions::write_record(&rain_comments::store::data_dir(), &launch);
         let line = background::handshake_line(handle.port, &handle.url, std::process::id());
@@ -331,6 +434,11 @@ fn open_window(o: &OpenArgs, rune: &RuneArgs) -> Result<(), String> {
         comments: Vec::new(),
         port: server.as_ref().map(|h| h.port).or(launch.port),
         read_only: server.as_ref().is_some_and(|h| h.read_only),
+        read_only_reason: server
+            .as_ref()
+            .and_then(|h| h.lock_error.as_ref())
+            .map(|e| format!("The session lock could not be taken ({e})")),
+        session_notice,
         ..launch
     };
     let read_only = launch.read_only;
@@ -357,6 +465,18 @@ fn open_window(o: &OpenArgs, rune: &RuneArgs) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// [`super::build_launch`] with no data folder, so no saved session can change a name.
+    fn build_launch(o: &OpenArgs) -> Launch {
+        build_launch_in(o, Path::new("no-data-folder"))
+    }
+
+    fn temp(name: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("rain-cli-launch-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(d.join("sessions")).unwrap();
+        d
+    }
 
     /// What `rain open --background` writes for `line` from a window that has, or has no, brief.
     fn opened(has: bool) -> (String, String) {
@@ -385,6 +505,44 @@ mod tests {
         );
         let (_, err) = opened(true);
         assert_eq!(err, "", "no hint once a brief is set");
+    }
+
+    #[test]
+    fn an_unreadable_session_opens_from_its_backup_and_the_owner_moves_it_aside() {
+        let data = temp("backup");
+        let file = SessionFile::path_in(&data.join("sessions"), "s");
+        let saved = Session {
+            id: "s".into(),
+            version: 4,
+            ..Session::default()
+        };
+        SessionFile::save(&file, &saved).unwrap();
+        SessionFile::save(&file, &saved).unwrap();
+        assert_eq!(load_saved(&file, false).unwrap(), (saved.clone(), false));
+
+        std::fs::write(&file, b"{\"threads\": [").unwrap();
+        assert_eq!(load_saved(&file, false).unwrap(), (saved.clone(), true));
+        assert_eq!(
+            load_saved(&file, true).unwrap(),
+            (Session::default(), false),
+            "--clean reads nothing"
+        );
+        assert!(file.exists(), "a window that may be read-only moves nothing");
+
+        let notice = set_unreadable_aside(&file);
+        assert_eq!(
+            notice,
+            "s.json was unreadable: opened the save before it; the unreadable file is kept as s.json.corrupt"
+        );
+        assert_eq!(std::fs::read(file.with_extension("json.corrupt")).unwrap(), b"{\"threads\": [");
+        SessionFile::save(&file, &saved).unwrap();
+        assert_eq!(load_saved(&file, false).unwrap(), (saved, false), "the owner's save puts it back");
+
+        std::fs::write(&file, b"bad").unwrap();
+        std::fs::write(SessionFile::backup_path(&file), b"bad too").unwrap();
+        let e = load_saved(&file, false).unwrap_err();
+        assert!(e.starts_with("cannot read session "), "both unreadable fails as before: {e}");
+        let _ = std::fs::remove_dir_all(data);
     }
 
     #[test]
@@ -425,12 +583,12 @@ mod tests {
         let server = [PathBuf::from("C:/src/acme-server")];
         let plain = OpenArgs::default();
         let s = default_session(&plain, &server, "feature/ACME-1", "feature/ACME-1^");
-        assert_eq!(s, "acme-server-feature_ACME-1");
+        assert!(s.starts_with("acme-server-feature_ACME-1-"));
         let fixture = OpenArgs {
             fixture: Some("fixtures/m.patch".into()),
             ..OpenArgs::default()
         };
-        assert_eq!(default_session(&fixture, &[PathBuf::from(".")], "HEAD", "HEAD^"), "fixture-m");
+        assert!(default_session(&fixture, &[PathBuf::from(".")], "HEAD", "HEAD^").starts_with("fixture-m-"));
     }
 
     #[test]
@@ -451,7 +609,7 @@ mod tests {
             build_launch(&o).session
         };
         let feature = id(&["feature/x"]);
-        assert_eq!(feature, "acme-server-feature_x", "a plain open keeps its name");
+        assert!(feature.starts_with("acme-server-feature_x-"), "the name stays readable");
         assert_eq!(id(&["feature/x", "feature/x^"]), feature, "the default base spelled out");
         let all = [
             feature,
@@ -470,8 +628,181 @@ mod tests {
                 assert_ne!(a, b);
             }
         }
-        assert!(all[7].ends_with("-uncommitted"), "{}", all[7]);
+        assert!(all[7].contains("-uncommitted-"), "{}", all[7]);
         assert_eq!(id(&["feature/x", "origin/development", "--merge-base"]), all[2], "stable");
+    }
+
+    #[test]
+    fn automatic_sessions_follow_the_checkout_and_the_diff_not_how_it_is_shown() {
+        let plain = OpenArgs {
+            repos: vec![PathBuf::from("/one/repo")],
+            target: Some("feature".into()),
+            ..OpenArgs::default()
+        };
+        let mut variants = vec![plain.clone(); 3];
+        variants[1].repos = vec![PathBuf::from("/two/repo")];
+        variants[2].target = Some("feature/other".into());
+        let ids: Vec<_> = variants.iter().map(|o| build_launch(o).session).collect();
+        for (i, id) in ids.iter().enumerate() {
+            for other in &ids[i + 1..] {
+                assert_ne!(id, other, "different launch inputs must not silently reuse a window");
+            }
+        }
+        let shown = OpenArgs {
+            ignore_whitespace: true,
+            context: plain.context + 7,
+            ..plain.clone()
+        };
+        assert_eq!(
+            build_launch(&shown).session,
+            ids[0],
+            "-w and --context reopen the review they are set on"
+        );
+        let fixture = |path: &str| {
+            build_launch(&OpenArgs {
+                fixture: Some(path.into()),
+                ..OpenArgs::default()
+            })
+            .session
+        };
+        assert_ne!(fixture("/one/review.patch"), fixture("/two/review.patch"));
+        let explicit = OpenArgs {
+            session: Some("chosen".into()),
+            ..plain
+        };
+        assert_eq!(build_launch(&explicit).session, "chosen");
+    }
+
+    #[test]
+    fn one_checkout_spelled_differently_is_one_session() {
+        let root = temp("spelling");
+        let dir = root.join("Acme-Server");
+        std::fs::create_dir_all(&dir).unwrap();
+        let patch = root.join("Review.patch");
+        std::fs::write(&patch, "").unwrap();
+        let repo = |d: PathBuf| default_session(&OpenArgs::default(), &[d], "feature/x", "feature/x^");
+        let fixture = |f: PathBuf| {
+            let o = OpenArgs {
+                fixture: Some(f),
+                ..OpenArgs::default()
+            };
+            default_session(&o, &[PathBuf::from(".")], "HEAD", "HEAD^")
+        };
+        let name = repo(dir.clone());
+        assert!(name.starts_with("Acme-Server-feature_x-"), "{name}");
+        let mut trailing = dir.clone().into_os_string();
+        trailing.push(std::path::MAIN_SEPARATOR_STR);
+        assert_eq!(repo(trailing.into()), name, "a trailing separator");
+        assert_eq!(repo(dir.join("..").join("Acme-Server")), name, "a detour");
+        if cfg!(windows) {
+            let upper = |p: &Path| PathBuf::from(p.to_string_lossy().to_uppercase());
+            assert_eq!(repo(upper(&dir)), name, "another case");
+            assert_eq!(fixture(upper(&patch)), fixture(patch.clone()), "another case");
+        }
+        assert_ne!(repo(root.join("missing")), name);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_session_saved_under_the_older_name_is_kept_on_its_checkout() {
+        let data = temp("legacy");
+        let o = OpenArgs {
+            repos: vec![PathBuf::from("C:/src/acme-server")],
+            target: Some("feature/x".into()),
+            ..OpenArgs::default()
+        };
+        let named = |o: &OpenArgs| build_launch_in(o, &data).session;
+        let new = named(&o);
+        assert!(new.starts_with("acme-server-feature_x-"), "{new}");
+
+        let old = SessionFile::path_in(&data.join("sessions"), "acme-server-feature_x");
+        std::fs::write(&old, "{}").unwrap();
+        assert_eq!(named(&o), "acme-server-feature_x", "saved before launch records");
+        let record = |dir: &str| {
+            let launch = Launch {
+                session: "acme-server-feature_x".into(),
+                repos: vec![RepoLaunch {
+                    dir: PathBuf::from(dir),
+                    ..RepoLaunch::default()
+                }],
+                ..Launch::default()
+            };
+            crate::sessions::write_record(&data, &launch);
+        };
+        record("C:/src/acme-server");
+        assert_eq!(named(&o), "acme-server-feature_x", "last opened on this checkout");
+        record("D:/play/acme-server");
+        assert_eq!(named(&o), new, "another checkout's session of the same name is not taken");
+
+        record("C:/src/acme-server");
+        let explicit = OpenArgs {
+            session: Some("chosen".into()),
+            ..o.clone()
+        };
+        assert_eq!(named(&explicit), "chosen");
+        let other_diff = OpenArgs {
+            base: Some("origin/main".into()),
+            ..o.clone()
+        };
+        assert!(named(&other_diff).starts_with("acme-server-feature_x-"), "its older name differs");
+        std::fs::write(SessionFile::path_in(&data.join("sessions"), &new), "{}").unwrap();
+        assert_eq!(named(&o), new, "once the new name is saved it wins");
+        let _ = std::fs::remove_dir_all(data);
+    }
+
+    #[test]
+    fn a_fixture_session_saved_under_the_older_name_is_kept_for_that_patch() {
+        let data = temp("legacy-fixture");
+        let o = OpenArgs {
+            fixture: Some("C:/patches/review.patch".into()),
+            ..OpenArgs::default()
+        };
+        let new = build_launch_in(&o, &data).session;
+        std::fs::write(SessionFile::path_in(&data.join("sessions"), "fixture-review"), "{}").unwrap();
+        let record = |patch: &str| {
+            let launch = Launch {
+                session: "fixture-review".into(),
+                fixture: Some(patch.into()),
+                ..Launch::default()
+            };
+            crate::sessions::write_record(&data, &launch);
+        };
+        record("C:/patches/review.patch");
+        assert_eq!(build_launch_in(&o, &data).session, "fixture-review");
+        record("D:/other/review.patch");
+        assert_eq!(build_launch_in(&o, &data).session, new);
+        let _ = std::fs::remove_dir_all(data);
+    }
+
+    #[test]
+    fn the_automatic_session_hash_is_pinned() {
+        let o = OpenArgs {
+            merge_base: true,
+            ..OpenArgs::default()
+        };
+        let paths = ["/src/acme-server".to_owned(), "/src/acme-app".to_owned()];
+        let hash = identity(&o, "feature/x", "origin/main", &paths);
+        assert_eq!(
+            format!("{hash:016x}"),
+            "6a919c187c64d793",
+            "changing this renames every saved automatic session"
+        );
+        assert_eq!(format!("{:016x}", fnv1a(b"/fixtures/m.patch")), "c6810be004a5d6a0");
+
+        let dirs = [PathBuf::from("C:/src/acme-server"), PathBuf::from("C:/src/acme-app")];
+        let spelled: Vec<String> = dirs.iter().map(|d| canonical(d)).collect();
+        assert_eq!(
+            default_session(&o, &dirs, "feature/x", "origin/main"),
+            format!("acme-server-feature_x-{:016x}", identity(&o, "feature/x", "origin/main", &spelled))
+        );
+        let fixture = OpenArgs {
+            fixture: Some("C:/patches/m.patch".into()),
+            ..OpenArgs::default()
+        };
+        assert_eq!(
+            default_session(&fixture, &[PathBuf::from(".")], "HEAD", "HEAD^"),
+            format!("fixture-m-{:016x}", fnv1a(canonical(Path::new("C:/patches/m.patch")).as_bytes()))
+        );
     }
 
     #[test]

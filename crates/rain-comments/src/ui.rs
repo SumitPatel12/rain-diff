@@ -14,7 +14,6 @@ use crate::export::suggestions;
 use crate::label;
 use crate::ops;
 
-/// What the user asked a thread card to do.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CardAction {
     Toggle,
@@ -385,7 +384,6 @@ impl<'t, S: 'static> ThreadCard<'t, S> {
         self
     }
 
-    /// Shows the dismiss reasons.
     pub fn dismissing(mut self, d: bool) -> Self {
         self.dismissing = d;
         self
@@ -1309,7 +1307,6 @@ impl<S: 'static> Composer<S> {
         self
     }
 
-    /// The card's fill, ring and shadow.
     pub fn look(mut self, l: CardLook) -> Self {
         self.look = Some(l);
         self

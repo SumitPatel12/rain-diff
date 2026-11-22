@@ -139,6 +139,45 @@ pub fn scss(code: &str) -> Vec<Highlight> {
     out
 }
 
+/// Languages whose only strings over a line end are backtick templates, in pieces around `${}`.
+pub(crate) fn has_templates(key: &str) -> bool {
+    matches!(
+        key.to_ascii_lowercase().as_str(),
+        "js" | "javascript" | "jsx" | "mjs" | "cjs" | "ts" | "typescript" | "mts" | "cts" | "tsx"
+    )
+}
+
+/// The delimiter of the comment or string `code` (whole lines) ends inside, going by the
+/// scanner's own last range: one that runs over the final line end never closed. Scanning the
+/// lines after it behind that delimiter puts the scanner back inside.
+pub(crate) fn left_open<'a>(code: &'a str, hl: &[Highlight], templates: bool) -> Option<&'a str> {
+    let (r, p) = hl.last()?;
+    if r.end != code.len() || !code.ends_with('\n') {
+        return None;
+    }
+    let t = &code[r.start..];
+    match p {
+        Paint::Kind(Syntax::Comment) => ["/*", "<!--"].into_iter().find(|o| t.starts_with(o)),
+        Paint::Kind(Syntax::String) if templates => Some("`"),
+        Paint::Kind(Syntax::String) => {
+            let b = t.as_bytes();
+            let lead = b
+                .iter()
+                .take(8)
+                .take_while(|c| c.is_ascii_alphabetic() || matches!(c, b'#' | b'$' | b'@'))
+                .count();
+            match b.get(lead) {
+                Some(&q @ (b'"' | b'\'' | b'`')) => {
+                    let triple = b.get(lead + 1) == Some(&q) && b.get(lead + 2) == Some(&q);
+                    Some(&t[..lead + if triple { 3 } else { 1 }])
+                }
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
 pub fn csharp(code: &str) -> Vec<Highlight> {
     let base = builtin(Some("ts"), code);
     let b = code.as_bytes();

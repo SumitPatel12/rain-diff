@@ -2,7 +2,7 @@
 Wait on a Rain session as the attached agent until something needs the agent, then print it and exit.
 Run it in the background while the user reviews; one wake per actionable event.
   exit 0 : events printed as JSON ({"seq","gap","events":[…]}); handle them, then rerun with -Since <seq>.
-           "gap":true means events were lost off the ring: re-read the threads (rain-story -Mode get) first.
+           "gap":true means events were lost off the ring: run `rain next --session <s>` first.
   exit 3 : the window closed (or the session has no window)
 Kinds: ask (answer now), submitted (the user pressed Finish review), brief-missing (set a brief), plus any -Kinds given.
 Rain binary: $env:RAIN_EXE, else the per-OS install path of install-rain.ps1, else Rain on PATH.

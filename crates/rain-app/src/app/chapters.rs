@@ -19,16 +19,17 @@ pub struct Subset {
 
 impl Subset {
     /// The files' diff with the app's repo ids, highlighter and mode; files over
-    /// `LARGE_FILE_LINES` lines start collapsed. Whole files and opened ranges carry over from
+    /// `LARGE_FILE_LINES` lines or with a very wide line start collapsed. Whole files and opened ranges carry over from
     /// `prev` for the files it held, else from the full diff.
     pub fn new(app: &App, files: Vec<usize>, prev: Option<&Subset>) -> Subset {
         let mut diff = DiffState::new(files.iter().map(|&g| Arc::clone(&app.diff.files()[g])).collect());
         diff.set_repo_ids(app.repos.iter().map(|r| r.id.clone()).collect());
+        diff.set_moves(app.moves.clone(), files.iter().map(|&g| g as u32).collect());
         if let Some(palette) = app.hl_palette {
-            diff.set_highlighter(rain_syntax::highlighter(palette));
+            diff.set_lexer(crate::theme::lexer(palette), app.wake.clone());
         }
         diff.set_mode(app.diff.mode());
-        diff.set_collapsed_where(true, |f| f.lines.len() > LARGE_FILE_LINES);
+        diff.set_collapsed_where(true, |f| f.lines.len() > LARGE_FILE_LINES || super::folds::wide(f));
         let mut in_prev: HashMap<usize, usize> = HashMap::new();
         for (pl, &g) in prev.map_or(&[][..], |p| &p.files).iter().enumerate() {
             in_prev.entry(g).or_insert(pl);
@@ -42,12 +43,10 @@ impl Subset {
 }
 
 impl App {
-    /// Chapters no longer narrow the reader; kept for callers that refresh one.
     pub(crate) fn in_chapter(&self) -> bool {
         false
     }
 
-    /// Makes chapter `i` the current one.
     pub fn enter_chapter(&mut self, i: usize) {
         self.chapter = i.min(self.chapters.chapters.len().saturating_sub(1));
     }
@@ -65,7 +64,6 @@ impl App {
         files
     }
 
-    /// Jumps to chapter `i`'s first file in the diff.
     pub fn goto_chapter(&mut self, i: usize, tx: &mut Tx) {
         self.enter_chapter(i);
         match self.chapter_files(self.chapter).first() {

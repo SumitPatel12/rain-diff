@@ -47,7 +47,6 @@ impl Slot {
         if size[0] >= 1.0 { size } else { FIRST_SIZE }
     }
 
-    /// Runs `f` on this slot's lab, if it has one.
     fn with(self, s: &mut App, f: impl FnOnce(&mut Lab)) {
         let lab = match self {
             Slot::Playground => Some(&mut s.playground.lab),
@@ -75,7 +74,6 @@ fn short(id: SchemaId) -> &'static str {
     }
 }
 
-/// The timeline controls over the canvas.
 fn controls(lab: &Lab, slot: Slot, k: &Kit, surf: &Surfaces, r: &Roles) -> El {
     let style = lab.style();
     let mut bar = row()

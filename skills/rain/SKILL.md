@@ -11,6 +11,8 @@ Rain is a desktop diff reviewer. A flow hands it a diff plus comment drafts, the
 
 Never hand over a bare diff: in order, `open` → `brief set` (intent, how, a tour; docs §4) → `brief check` until it exits 0 (fix and set again) → `overview validate` until it exits 0 (then pass it with `-Overview` or `overview set`) → the watcher below. While the window has no brief, `rain open --background` prints `next: send a brief …` on stderr; a `brief-missing` event means the same.
 
+**Unsure what you owe the reviewer? Run `& $r next --session <s>` first.** One read-only call lists everything waiting on you, in the order to take it up: `question` (claim it, then answer), `reply` (the reviewer had the last word), `claimed` (you claimed it and never replied), `verdict` (a finished round you have not answered), `brief` (missing or stale). Each thread line carries `[id <threadId>]` for `comment claim` / `comment reply` / `comment set-state`, where it sits and the reviewer's last text. Exit 0 = something waits, exit 2 = `nothing waiting`. Use it when you attach to a session that already has history, after your context was compacted, after a `"gap": true`, and before you tell the user you are done. `--format json` gives the same list plus `seq`, the value to pass to the watcher as `-Since` (docs §6.4).
+
 ## Configuration
 
 - **`RAIN_EXE`** — path to the Rain binary. Default on Windows: `%LOCALAPPDATA%\Programs\Rain\Rain.exe` (where `install-rain.ps1` puts it). On macOS/Linux set `RAIN_EXE` (the installer's default there is `~/.local/bin/Rain`, which the scripts also try). Below, `$r` is that path.
@@ -63,23 +65,24 @@ It holds `rain watch --for agent`, so the window shows the agent as attached, an
 - **exit 0** — JSON events. For each:
   - `ask` (`data.threadId`, `data.question`, `data.filePath`, `data.excerpt`): the user asked a question and expects an answer now.
     - **Claim it at once**, before reading any code: `& $r comment claim --session <s> --thread <threadId>`. A claimed question is yours: `claude -p` stays off it until you reply (up to `ask.timeoutSec`, 120 s), even while your watcher is down. For the one you answer yourself, also `& $r presence working --on <threadId> --session <s>`.
-    - Main thread free: answer it. Read the code it points at, then `& $r comment reply --session <s> --thread <threadId> --body '…'` — ≤150 words, cite `path:line`, say when the answer isn't in the code you read. Don't edit files to answer.
+    - Main thread free: answer it. Read the code it points at, then `& $r comment reply --session <s> --thread <threadId> --body '…'` — ≤150 words, cite `path:line`, say when the answer isn't in the code you read. Don't edit files to answer. Without an id, `comment reply` and `comment resolve` take `--file <repo>/<path> --line N` (or `--lines a-b`), or `--file <path> --repo <id>`; in a one-repo session the bare `<path>` works too (docs §5.4).
     - Main thread busy with another question, or several asks in one batch: spawn one helper agent per extra question, in the background, with a self-contained brief: the question, `threadId`, file and excerpt, the session name, the review's intent, and a summary of anything already discussed. Each helper claims its thread, reads the code and replies with `comment reply --thread <id>`.
     - Restart the watcher straight away, so you never stop listening. `& $r presence idle --session <s>` once every answer is posted.
     - `claude -p` is only the fallback, for a question nobody claims within `ask.handoffSec` (20 s) or nobody answers within `ask.timeoutSec`. If you answer one it is running, it stops and your answer stands. If the thread already shows `answer.by: launcher` with a status other than `failed`, skip it.
-    - No `threadId` and `data.request: "brief"`: the user pressed *Ask the agent to write one* on the Overview. Write the Brief (Intent, How, Verify as above; docs §4) and `& $r brief set '<abs path>' --session <s>`; no reply.
+    - No `threadId` and `data.request: "brief"`: the user pressed *Ask the agent to write one* on the Overview. Write the Brief (Intent, How, Verify as above; docs §4; "How it works" needs `### Step` headings or `brief set` rejects it) and `& $r brief set '<abs path>' --session <s>`; no reply.
   - `brief-missing`: you have been attached about 2 minutes and no brief is set (sent once). Write the Brief now and `& $r brief set '<abs path>' --session <s>`, then `brief check` until clean; no reply.
   - `submitted` (`data.verdict`): the user pressed Finish review. Treat it as "done" — go to readback.
-  - `"gap": true`: events fell off Rain's ring while you weren't watching; re-read the threads (`-Mode get`) before going on.
+  - `"gap": true`: events fell off Rain's ring while you weren't watching; run `& $r next --session <s>` and handle what it lists before going on.
   Then restart the watcher with `-Since <seq>` from the output.
 - **exit 3** — the window closed. Do the readback if you haven't (`get` fails once the window is gone; ask the user to reopen with the same `-Session`, which restores their threads).
 - The user saying "done" in chat also ends the review. Stop the background watcher you started (its shell id) when the loop ends.
+- If the watcher was down for a while (you were busy, or it was never started), `& $r next --session <s>` shows the questions and replies that arrived meanwhile; handle them, then start the watcher again.
 
 If you aren't attached, Rain answers questions itself after 20 s with a local `claude -p` (after the user allows it once), so a gap in the loop is never fatal.
 
 ## Readback — merge into the calling flow's artifact
 
-Read `rain-comments.json` (`{"version","threads":[…]}`). Per thread: `messages[0]` is the original, later messages are replies; `repo` names the repo in a multi-repo window; `filePath` is repo-relative.
+Read `rain-comments.json` (`{"version","threads":[…]}`). Per thread: `messages[0]` is the original, later messages are replies; `repo` names the repo in a multi-repo window; `filePath` is repo-relative. To read one repo's threads yourself, `& $r comment get --session <s> --format json --all --repo <id>`; in a one-repo window that also lists the threads the user started there (their `repo` is empty).
 
 | The user did | Thread shows | Means |
 |---|---|---|

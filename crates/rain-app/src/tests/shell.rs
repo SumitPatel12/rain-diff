@@ -444,14 +444,41 @@ fn a_read_only_window_never_saves_and_says_so() {
         read_only: true,
         ..Launch::default()
     };
-    let mut a = App::new(launch, Arc::new(Shared::default()), Some(dir.clone()), None);
+    let mut a = App::new(launch.clone(), Arc::new(Shared::default()), Some(dir.clone()), None);
     a.load_now();
     assert!(a.autosave.is_none());
     assert!(a.status.contains("won't be saved"), "{}", a.status);
     a.set_viewed(0, true);
     seed_threads(&mut a);
     drop(a);
-    assert!(!rain_comments::SessionFile::path_in(&dir, "held").exists());
+    let file = rain_comments::SessionFile::path_in(&dir, "held");
+    assert!(!file.exists());
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(&file, b"unfinished hand edit").unwrap();
+    let b = App::new(launch, Arc::new(Shared::default()), Some(dir), None);
+    drop(b);
+    assert_eq!(std::fs::read(&file).unwrap(), b"unfinished hand edit");
+    assert!(
+        !file.with_extension("json.corrupt").exists(),
+        "only the owner may recover a session"
+    );
+}
+
+#[test]
+fn a_window_made_read_only_by_its_lock_says_why() {
+    let launch = Launch {
+        session: "unlocked".into(),
+        fixture: Some(story()),
+        read_only: true,
+        read_only_reason: Some("The session lock could not be taken (Access is denied.)".into()),
+        ..Launch::default()
+    };
+    let a = App::new(launch, Arc::new(Shared::default()), Some(temp_dir()), None);
+    assert!(a.autosave.is_none());
+    assert_eq!(
+        a.status,
+        "The session lock could not be taken (Access is denied.): changes here won't be saved"
+    );
 }
 
 #[test]
@@ -508,6 +535,52 @@ fn an_unreadable_session_file_is_kept_aside_not_overwritten() {
 }
 
 #[test]
+fn an_unreadable_session_file_opens_the_save_before_it_and_says_so() {
+    use rain_comments::SessionFile;
+
+    let dir = temp_dir();
+    let file = SessionFile::path_in(&dir, "backed");
+    let mut saved = rain_core::Session::default();
+    let at = Anchor::Line { side: Side::New, line: 1 };
+    rain_comments::ops::add_thread(&mut saved, "", "a.cs", at, "kept", None, None);
+    SessionFile::save(&file, &saved).unwrap();
+    SessionFile::save(&file, &saved).unwrap();
+    std::fs::write(&file, b"{\"threads\": [").unwrap();
+    let launch = Launch {
+        session: "backed".into(),
+        fixture: Some(story()),
+        ..Launch::default()
+    };
+    let shared = Arc::new(Shared::default());
+    let mut a = App::new(launch.clone(), shared.clone(), Some(dir.clone()), None);
+    assert_eq!(shared.lock().threads.len(), 1, "the review comes back from the backup");
+    assert_eq!(
+        a.status,
+        "backed.json was unreadable: opened the save before it; the unreadable file is kept as backed.json.corrupt"
+    );
+    a.load_now();
+    assert!(a.status.contains("opened the save before it"), "{}", a.status);
+    a.autosave.take();
+    assert_eq!(std::fs::read(file.with_extension("json.corrupt")).unwrap(), b"{\"threads\": [");
+    assert_eq!(SessionFile::load(&file).unwrap().threads.len(), 1, "saved back under its own name");
+    assert!(SessionFile::load_backup(&file).is_some(), "the backup is still there");
+
+    std::fs::write(&file, b"again").unwrap();
+    std::fs::write(SessionFile::backup_path(&file), b"both").unwrap();
+    let shared = Arc::new(Shared::default());
+    let mut b = App::new(launch, shared.clone(), Some(dir.clone()), None);
+    b.load_now();
+    b.autosave.take();
+    assert!(shared.lock().threads.is_empty(), "no readable copy: an empty session, as before");
+    assert!(!b.status.contains("opened the save"), "{}", b.status);
+    let aside = std::fs::read_dir(&dir)
+        .unwrap()
+        .filter(|e| e.as_ref().unwrap().path().extension().is_some_and(|x| x == "corrupt"))
+        .count();
+    assert_eq!(aside, 2, "the second unreadable file was moved aside too");
+}
+
+#[test]
 fn a_second_unreadable_session_file_does_not_replace_the_first_backup() {
     let dir = temp_dir();
     std::fs::create_dir_all(&dir).unwrap();
@@ -553,6 +626,22 @@ fn a_failed_settings_save_is_shown_in_the_status_line() {
     std::fs::create_dir_all(&path).unwrap();
     a.settings.theme = crate::settings::Theme::Dark;
     a.save_settings();
+    assert!(a.status.starts_with("settings not saved"), "{}", a.status);
+}
+
+#[test]
+fn a_failed_settings_save_is_not_hidden_by_the_change_that_caused_it() {
+    let dir = temp_dir();
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("settings.json");
+    let mut a = App::new(Launch::default(), Arc::new(Shared::default()), None, Some(path.clone()));
+    std::fs::create_dir_all(&path).unwrap();
+    a.set_layout(ViewLayout::Unified);
+    assert!(a.status.starts_with("settings not saved"), "{}", a.status);
+    a.set_profile(a.settings.keymap.profile);
+    assert!(a.status.starts_with("settings not saved"), "{}", a.status);
+    a.status.clear();
+    a.save_shortcuts();
     assert!(a.status.starts_with("settings not saved"), "{}", a.status);
 }
 

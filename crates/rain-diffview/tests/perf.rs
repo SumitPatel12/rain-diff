@@ -12,6 +12,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicIsize, Ordering};
 use std::time::Instant;
 
+use rain_core::diff::{FileDiff, LineKind};
 use rain_diffview::{DiffMode, DiffState, DiffView};
 use rune::{Cx, El, Env, KeyEvent, Runtime, Tx, col};
 use rune_kit::Kit;
@@ -116,6 +117,106 @@ fn l_spotlight_and_hunk_ids() {
         state.row_count()
     );
     assert!(worst < 2.0, "set_spotlight {worst:.3} ms");
+}
+
+/// The changed runs of `f`: `(first removed, first added, end)` indexes into its lines.
+fn blocks(f: &FileDiff) -> Vec<(u32, u32, u32)> {
+    let mut out = Vec::new();
+    for h in &f.hunks {
+        let (mut i, end) = (h.lines.start as usize, h.lines.end as usize);
+        while i < end {
+            if f.lines[i].kind == LineKind::Context {
+                i += 1;
+                continue;
+            }
+            let d0 = i;
+            let run = |from: usize, kind: LineKind| from + f.lines[from..end].iter().take_while(|l| l.kind == kind).count();
+            let a0 = run(d0, LineKind::Removed);
+            i = run(a0, LineKind::Added);
+            out.push((d0 as u32, a0 as u32, i as u32));
+        }
+    }
+    out
+}
+
+/// What the formatting-only check reads and takes over every changed run of the L and XL
+/// fixtures, beside the first step it had before (a lower-cased copy of the extension, then
+/// every character of both sides counted), and what building the state takes with it. Run:
+/// `cargo test -p rain-diffview --release --test perf -- --ignored --nocapture formatting_check`
+#[test]
+#[ignore]
+fn formatting_check_on_l_and_xl() {
+    for (tier, path) in [("l", l_patch()), ("xl", xl_patch())] {
+        let Some(path) = path else {
+            println!("SKIP {tier}: no patch (cargo xtask fixtures --tier {tier}, or RAIN_L_PATCH / RAIN_XL_PATCH)");
+            continue;
+        };
+        let files = common::patch::parse(&std::fs::read_to_string(&path).unwrap());
+        let cut: Vec<Vec<(u32, u32, u32)>> = files.iter().map(blocks).collect();
+        let lines: usize = files.iter().map(|f| f.lines.len()).sum();
+        let both = |b: &&(u32, u32, u32)| b.0 < b.1 && b.1 < b.2;
+        let two_sided: usize = cut.iter().map(|bs| bs.iter().filter(both).count()).sum();
+
+        let (mut old_ms, mut old_bytes) = (Vec::new(), 0u64);
+        for _ in 0..5 {
+            old_bytes = 0;
+            let t = Instant::now();
+            for (f, bs) in files.iter().zip(&cut) {
+                for &(d0, a0, e) in bs.iter().filter(both) {
+                    let ext = f.path.rsplit('.').next().unwrap_or_default().to_ascii_lowercase();
+                    // The fixtures' only files in a language the check leaves alone.
+                    if ext == "html" {
+                        continue;
+                    }
+                    let mut ink = |lines: std::ops::Range<u32>| -> usize {
+                        lines
+                            .map(|i| {
+                                let text = f.line_text(i);
+                                old_bytes += text.len() as u64;
+                                text.chars().filter(|c| !c.is_whitespace() && *c != ',').count()
+                            })
+                            .sum()
+                    };
+                    std::hint::black_box(ink(d0..a0) == ink(a0..e));
+                }
+            }
+            old_ms.push(ms(t));
+        }
+
+        let (mut now_ms, mut quiet) = (Vec::new(), 0usize);
+        let before = rain_core::formatting::work();
+        for _ in 0..5 {
+            quiet = 0;
+            let t = Instant::now();
+            for (f, bs) in files.iter().zip(&cut) {
+                for &(d0, a0, e) in bs {
+                    quiet += usize::from(rain_core::formatting::formatting_only(f, d0..a0, a0..e));
+                }
+            }
+            now_ms.push(ms(t));
+        }
+        let read = rain_core::formatting::work();
+
+        let shared: Vec<std::sync::Arc<FileDiff>> = files.into_iter().map(std::sync::Arc::new).collect();
+        let mut state_ms = Vec::new();
+        for _ in 0..5 {
+            let input = shared.clone();
+            let t = Instant::now();
+            let state = DiffState::new(input);
+            state_ms.push(ms(t));
+            drop(state);
+        }
+        println!(
+            "PERF formatting_check_{tier} lines={lines} blocks={} two_sided={two_sided} formatting_only={quiet} \
+             old_first_step_ms={:.2} old_bytes_read={old_bytes} check_ms={:.2} ink_compared={} bytes_lexed={} state_new_ms={:.1}",
+            cut.iter().map(Vec::len).sum::<usize>(),
+            pct(&mut old_ms, 0.5),
+            pct(&mut now_ms, 0.5),
+            (read.ink - before.ink) / 5,
+            (read.lexed - before.lexed) / 5,
+            pct(&mut state_ms, 0.5)
+        );
+    }
 }
 
 fn pct(v: &mut [f64], p: f64) -> f64 {
@@ -336,5 +437,65 @@ fn xl_state_and_scroll() {
     assert!(
         set_ms < 200.0 && rebuild_ms < 300.0 && split_ms < 500.0,
         "budgets: set_files {set_ms:.0}, rebuild {rebuild_ms:.0}, split {split_ms:.0}"
+    );
+}
+
+/// What keying the rows costs on the XL fixture with every file open: the first frame, then
+/// folding the big files and opening them again. It prints times, row keys built and live heap,
+/// and holds in a debug build too:
+/// `cargo test -p rain-diffview --test perf xl_row_keys -- --ignored --nocapture`
+#[test]
+#[ignore]
+fn xl_row_keys() {
+    let Some(path) = xl_patch() else {
+        println!("SKIP: no XL patch (cargo xtask fixtures --tier xl, or RAIN_XL_PATCH)");
+        return;
+    };
+    let state = DiffState::new(common::patch::parse(&std::fs::read_to_string(&path).unwrap()));
+    let rows = state.row_count();
+    let keys = rain_diffview::row_keys_built;
+    let live = || LIVE.load(Ordering::Relaxed);
+    let (heap0, keys0) = (live(), keys());
+    PEAK.store(heap0, Ordering::Relaxed);
+    let t = Instant::now();
+    let mut rt = Runtime::new(App { diff: state }, view, (1600.0, 1000.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    let first_ms = ms(t);
+    let first_keys = keys() - keys0;
+    for _ in 0..30 {
+        rt.frame(1.0 / 120.0);
+    }
+    println!(
+        "xl, {rows} rows: first frame {first_ms:.1} ms and {first_keys} row keys; live heap {:.0} MB, {:.0} MB of it since the diff state (peak {:.0} MB)",
+        mb(live()),
+        mb(live() - heap0),
+        mb(PEAK.load(Ordering::Relaxed) - heap0)
+    );
+
+    let mut step = |name: &str, collapsed: bool| {
+        let keys0 = keys();
+        let t = Instant::now();
+        rt.state
+            .diff
+            .set_collapsed_where(collapsed, |f| !collapsed || f.lines.len() > 20_000);
+        let state_ms = ms(t);
+        rt.invalidate();
+        let t = Instant::now();
+        rt.frame(1.0 / 120.0);
+        let frame_ms = ms(t);
+        println!(
+            "{name}: rows rebuilt in {state_ms:.1} ms, the frame after {frame_ms:.1} ms and {} row keys; {} rows, live heap {:.0} MB",
+            keys() - keys0,
+            rt.state.diff.row_count(),
+            mb(live())
+        );
+        keys() - keys0
+    };
+    let folded = step("folding files over 20,000 lines", true);
+    let opened = step("opening them again", false);
+    assert!(first_keys < 2000, "the first frame built {first_keys} row keys");
+    assert!(
+        folded < 2000 && opened < 2000,
+        "a fold built {folded} row keys and an unfold {opened}"
     );
 }

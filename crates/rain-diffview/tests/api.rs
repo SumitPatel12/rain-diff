@@ -340,3 +340,163 @@ fn scroll_live_follows_the_viewport_and_scroll_to_y_moves_it() {
     let [offset, max, ..] = at.get();
     assert_eq!(offset, max, "clamped to the end");
 }
+
+/// Every row's key leads back to the row.
+fn assert_keys_round_trip(s: &DiffState, what: &str) {
+    for r in 0..s.row_count() {
+        let key = s.row_key(r).unwrap();
+        assert_eq!(s.row_of_key(&key), Some(r), "{what}: {key}");
+    }
+}
+
+#[test]
+fn row_of_key_finds_the_row_of_every_key() {
+    for mode in [DiffMode::Unified, DiffMode::Split] {
+        let mut s = m();
+        s.set_mode(mode);
+        assert_keys_round_trip(&s, "fixture m");
+        s.set_collapsed(1, true);
+        assert_keys_round_trip(&s, "a folded file");
+        assert_eq!(s.row_of_key("df1.g0"), None, "a folded file keeps only its header row");
+        assert_eq!(s.row_of_key("df1"), Some(s.file_rows()[1] as usize));
+
+        let (old, new) = texts();
+        let mut s = DiffState::new(vec![from_texts("a.txt", &old, &new), from_texts("b.txt", &old, &new)]);
+        s.set_mode(mode);
+        assert_keys_round_trip(&s, "two files");
+        s.expand(0, 1, rain_diffview::Expand::Up);
+        s.expand(1, 1, rain_diffview::Expand::Down);
+        assert_keys_round_trip(&s, "part of a range opened");
+        s.set_whole(1, true);
+        assert_keys_round_trip(&s, "a whole file");
+    }
+    let s = m();
+    for bad in [
+        "",
+        "df",
+        "dfx",
+        "df0.",
+        "df0.c",
+        "df0.cx",
+        "df0.z1",
+        "df0.note1",
+        "df999999",
+        "df0.o4000000000",
+        "row",
+    ] {
+        assert_eq!(s.row_of_key(bad), None, "{bad:?}");
+    }
+}
+
+/// `files` files that each replace `lines` lines, as a patch.
+fn big_patch(files: usize, lines: usize) -> String {
+    let mut out = String::new();
+    for f in 0..files {
+        out += &format!("diff --git a/src/Acme.Shop/File{f}.cs b/src/Acme.Shop/File{f}.cs\n");
+        out += &format!("--- a/src/Acme.Shop/File{f}.cs\n+++ b/src/Acme.Shop/File{f}.cs\n@@ -1,{lines} +1,{lines} @@\n");
+        for l in 0..lines {
+            out += &format!("-old {f} {l}\n");
+        }
+        for l in 0..lines {
+            out += &format!("+new {f} {l}\n");
+        }
+    }
+    out
+}
+
+// A budget: 60 MB of state for a diff of 1.36 million lines. Raising it needs a reason in the commit.
+const STATE_BYTES_PER_LINE: usize = 44;
+
+fn shown(rt: &Runtime<App>, key: &str) -> bool {
+    rt.elements()
+        .into_iter()
+        .any(|e| e.key.as_deref() == Some(key) && !e.exiting && e.visible[3] > 0.0)
+}
+
+#[test]
+fn the_state_of_a_large_diff_stays_within_its_bytes_per_line() {
+    let files = parse(&big_patch(40, 2500));
+    let lines: usize = files.iter().map(|f| f.lines.len()).sum();
+    assert_eq!(lines, 200_000);
+    let mut s = DiffState::new(files);
+    for mode in [DiffMode::Unified, DiffMode::Split] {
+        s.set_mode(mode);
+        let per_line = s.heap_bytes() as f64 / lines as f64;
+        println!(
+            "{mode:?}: {} rows, {} bytes, {per_line:.1} bytes a diff line",
+            s.row_count(),
+            s.heap_bytes()
+        );
+        assert!(
+            s.heap_bytes() <= STATE_BYTES_PER_LINE * lines,
+            "{mode:?}: {per_line:.1} bytes a diff line, over {STATE_BYTES_PER_LINE}"
+        );
+    }
+}
+
+#[test]
+fn row_keys_are_built_for_the_rows_near_the_viewport_not_for_every_row() {
+    let diff = DiffState::new(parse(&big_patch(40, 2500)));
+    let rows = diff.row_count();
+    assert!(rows >= 200_000, "{rows} rows");
+    let keys = rain_diffview::row_keys_built;
+    let t0 = keys();
+    let at = Live::new([0.0; 4]);
+    let mut rt = Runtime::new(App { diff, at }, view, (800.0, 600.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    let first = keys() - t0;
+    settle(&mut rt);
+    let settled = keys() - t0;
+    println!("{rows} rows: {first} keys in the first frame, {settled} once the overscan filled");
+    assert!(first < 400, "the first frame built {first} keys for {rows} rows");
+    assert!(settled < 1000, "filling the overscan built {settled} keys");
+
+    // Folding a file moves every row below it: the list keys what it shows again, no more.
+    let t0 = keys();
+    rt.update(|s, _| s.diff.set_collapsed(0, true));
+    rt.frame(1.0 / 60.0);
+    settle(&mut rt);
+    let folded = keys() - t0;
+    println!("folding the first file: {folded} keys");
+    assert!(folded < 1500, "a fold built {folded} keys");
+    assert_eq!(rt.state.diff.row_count(), rows - (rows / 40 - 1), "the file keeps its header row");
+    assert!(shown(&rt, "df0") && shown(&rt, "df1"), "the folded header and the next file show");
+
+    // A far row is found by its key without the rows between being keyed.
+    let t0 = keys();
+    let last = rt.state.diff.row_key(rt.state.diff.row_count() - 1).unwrap();
+    let key = last.clone();
+    rt.update(move |_, tx| {
+        tx.instant();
+        tx.scroll_into_view(key.clone());
+    });
+    rt.frame(1.0 / 60.0);
+    assert!(shown(&rt, &last), "the last row shows a frame after it was asked for");
+    settle(&mut rt);
+    let jumped = keys() - t0;
+    println!("jumping to the last row: {jumped} keys");
+    assert!(jumped < 1500, "a jump built {jumped} keys");
+
+    // Opening the file again, far above, keeps the reader's row where it was.
+    let top = |rt: &Runtime<App>| {
+        let row = rt
+            .elements()
+            .into_iter()
+            .find(|e| e.key.as_deref() == Some(last.as_str()) && !e.exiting);
+        row.expect("the last row is mounted").rect[1]
+    };
+    let before = top(&rt);
+    let t0 = keys();
+    rt.update(|s, _| s.diff.set_collapsed(0, false));
+    rt.frame(1.0 / 60.0);
+    settle(&mut rt);
+    let opened = keys() - t0;
+    println!("opening it again: {opened} keys");
+    assert!(opened < 1500, "an unfold built {opened} keys");
+    assert_eq!(rt.state.diff.row_count(), rows);
+    assert!(
+        (top(&rt) - before).abs() < 0.5,
+        "the reader's row stayed put: {before} to {}",
+        top(&rt)
+    );
+}

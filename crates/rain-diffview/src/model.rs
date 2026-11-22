@@ -37,7 +37,6 @@ pub fn hunk_header(f: &FileDiff, h: &Hunk) -> String {
     out
 }
 
-/// A line's number on `side`, `None` when it has none there.
 pub(crate) fn number(f: &FileDiff, i: u32, side: Side) -> Option<u32> {
     let l = &f.lines[i as usize];
     let n = if side == Side::Old { l.old } else { l.new };
@@ -94,6 +93,10 @@ pub(crate) struct Block {
     pub(crate) d0: u32,
     pub(crate) a0: u32,
     pub(crate) e: u32,
+    /// Its lines pair by likeness (see [`crate::pairing`]), not in order.
+    pub(crate) by_text: bool,
+    /// Both runs are the same code laid out differently (see [`rain_core::formatting`]).
+    pub(crate) quiet: bool,
 }
 
 impl Block {
@@ -101,7 +104,7 @@ impl Block {
         (self.a0 - self.d0).min(self.e - self.a0)
     }
 
-    /// The line paired with `i` in this block, if any.
+    /// The line paired with `i` when this block pairs in order, if any.
     pub(crate) fn partner(&self, i: u32) -> Option<u32> {
         if i < self.a0 {
             let k = i - self.d0;
@@ -131,13 +134,18 @@ pub(crate) fn blocks(f: &FileDiff) -> Vec<Block> {
             while i < h.lines.end && f.lines[i as usize].kind == LineKind::Added {
                 i += 1;
             }
-            out.push(Block { d0, a0, e: i });
+            out.push(Block {
+                d0,
+                a0,
+                e: i,
+                by_text: false,
+                quiet: false,
+            });
         }
     }
     out
 }
 
-/// The block holding changed line `i`.
 pub(crate) fn block_of(blocks: &[Block], i: u32) -> Option<&Block> {
     let b = blocks.get(blocks.partition_point(|b| b.e <= i))?;
     (b.d0 <= i).then_some(b)
@@ -166,7 +174,7 @@ mod tests {
         b.push_line(LineKind::Added, 0, 4, "f");
         let f = b.finish();
         let bl = blocks(&f);
-        assert_eq!(bl, vec![Block { d0: 1, a0: 4, e: 5 }, Block { d0: 6, a0: 6, e: 7 }]);
+        assert_eq!(bl.iter().map(|b| (b.d0, b.a0, b.e)).collect::<Vec<_>>(), [(1, 4, 5), (6, 6, 7)]);
         assert_eq!(block_of(&bl, 1).and_then(|b| b.partner(1)), Some(4));
         assert_eq!(block_of(&bl, 4).and_then(|b| b.partner(4)), Some(1));
         assert_eq!(block_of(&bl, 2).and_then(|b| b.partner(2)), None);

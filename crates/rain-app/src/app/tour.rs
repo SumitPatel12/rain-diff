@@ -102,7 +102,6 @@ enum Scroll {
 }
 
 impl Scroll {
-    /// The stronger of two asks.
     fn max(a: Option<Scroll>, b: Scroll) -> Scroll {
         match (a, b) {
             (Some(Scroll::Always), _) | (_, Scroll::Always) => Scroll::Always,
@@ -203,9 +202,15 @@ fn find_run(lines: &[(u32, &str)], text: &[String], near: u32) -> Option<(u32, u
         .min_by_key(|(a, _)| a.abs_diff(near))
 }
 
-impl App {
-    // ----- steps -----
+/// What closes the end card, for the status line: the next-step key when it has one, and `Esc`.
+fn end_closes() -> String {
+    match Command::NextHunk.hint() {
+        next if next.is_empty() => "Esc closes".into(),
+        next => format!("{next} or Esc closes"),
+    }
+}
 
+impl App {
     /// The steps with where each sits in the loaded diff.
     pub fn tour_views(&self) -> Vec<TourView> {
         self.tour_steps()
@@ -306,8 +311,6 @@ impl App {
         }
     }
 
-    // ----- findings -----
-
     /// Line threads on step `i`'s range, open or addressed, oldest first.
     pub fn tour_findings(&self, i: usize) -> Vec<Finding> {
         let at = if self.tour.live.is_some() {
@@ -357,7 +360,6 @@ impl App {
             .collect()
     }
 
-    /// Whether step `i`'s findings are kept out of sight.
     pub fn tour_findings_hidden(&self, i: usize) -> bool {
         self.tour.my_pass_first && !self.tour.revealed.contains(&i)
     }
@@ -379,8 +381,6 @@ impl App {
             self.rebuild_annotations();
         }
     }
-
-    // ----- opening, stepping, leaving -----
 
     /// `T` or the Brief's button: the start card, or straight back to the step left with `Esc`.
     pub fn start_tour(&mut self, tx: &mut Tx) {
@@ -599,7 +599,7 @@ impl App {
         self.drop_tour_spot();
         self.refresh_hidden();
         let n = self.tour_uncovered().len();
-        self.status = format!("Tour done · not covered by the tour: {n} file(s) · Esc closes");
+        self.status = format!("Tour done · not covered by the tour: {n} file(s) · {}", end_closes());
         self.save_tour();
     }
 
@@ -663,7 +663,13 @@ impl App {
     fn tour_status(&self) -> String {
         match self.tour.stage {
             TourStage::Start => "Tour · Enter starts · Esc skips to the reader".into(),
-            TourStage::End => crate::keys::with_hints("Tour done", &[(Command::PrevHunk, "last step")]) + " · Esc closes",
+            TourStage::End => {
+                format!(
+                    "{} · {}",
+                    crate::keys::with_hints("Tour done", &[(Command::PrevHunk, "last step")]),
+                    end_closes()
+                )
+            }
             TourStage::Step => {
                 let n = self.tour_views().len();
                 let changed = self.tour_current().and_then(|v| v.at).is_some_and(|a| a.changed);
@@ -680,8 +686,6 @@ impl App {
             }
         }
     }
-
-    // ----- driven from outside -----
 
     /// `POST /api/highlight` with a step: the tour opens at step `i` of the brief when it has one
     /// for that file, else on a live step of the agent's. False when `step` is `None`.
@@ -808,14 +812,19 @@ impl App {
         true
     }
 
-    /// The tour's keys: `n` `p` `Space` on a step, `Enter`/`Space` on the start card, `Enter` to
-    /// resume after `Esc`. `None` lets the key through.
+    /// The tour's keys: `n` `p` `Space` on a step, `Enter`/`Space` on the start card, `n`
+    /// `Enter` `Space` to close the end card, `Enter` to resume after `Esc`. `None` lets the key
+    /// through.
     pub(crate) fn tour_key(&mut self, ev: &KeyEvent, tx: &mut Tx) -> Option<bool> {
         let m = ev.mods;
         if self.tour_open() {
             match (self.tour.stage, crate::keys::command_of(ev)) {
                 (TourStage::Step, Some(Command::NextHunk)) => {
                     self.tour_next(tx);
+                    return Some(true);
+                }
+                (TourStage::End, Some(Command::NextHunk)) => {
+                    self.leave_tour();
                     return Some(true);
                 }
                 (TourStage::Step | TourStage::End, Some(Command::PrevHunk)) => {
@@ -847,8 +856,6 @@ impl App {
         }
         Some(true)
     }
-
-    // ----- kept per session -----
 
     fn tour_path(&self) -> Option<PathBuf> {
         self.autosave.as_ref()?;
@@ -911,8 +918,6 @@ impl App {
     fn tour_save_error(&self) -> Option<String> {
         self.tour.saves.error.lock().unwrap_or_else(|e| e.into_inner()).take()
     }
-
-    // ----- scenes -----
 
     /// Scenes: the story brief, the agent's two findings, the tour at `stage` (a step shows
     /// step 1 with its findings hidden).

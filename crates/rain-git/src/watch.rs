@@ -126,3 +126,21 @@ pub fn watch_git(repo: &Path, on_change: impl Fn() + Send + 'static) -> Result<G
 fn watch_error(repo: &Path, e: impl std::fmt::Display) -> GitError {
     GitError::Io(std::io::Error::other(format!("watching {}: {e}", repo.display())))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_head_refs_and_the_index_wake_the_watch() {
+        let git = Path::new("repo").join(".git");
+        let refs = git.join("refs");
+        for woken in ["HEAD", "index", "index.lock", "packed-refs", "ORIG_HEAD", "refs/heads/main"] {
+            assert!(relevant(&git.join(woken), &refs), "{woken}");
+        }
+        for ignored in ["config", "COMMIT_EDITMSG", "objects/ab/cdef", "logs/HEAD.old"] {
+            assert!(!relevant(&git.join(ignored), &refs), "{ignored}");
+        }
+        assert!(!relevant(&Path::new("repo").join("src").join("a.cs"), &refs), "a worktree file");
+    }
+}

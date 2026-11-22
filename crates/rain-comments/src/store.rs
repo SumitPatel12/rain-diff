@@ -113,9 +113,56 @@ impl SessionFile {
         }
     }
 
+    /// Where the session the last save replaced is kept: `<id>.json.bak`, one generation.
+    pub fn backup_path(path: &Path) -> PathBuf {
+        let mut bak = path.as_os_str().to_owned();
+        bak.push(".bak");
+        bak.into()
+    }
+
+    /// The session the last save replaced, when that copy is there and readable.
+    pub fn load_backup(path: &Path) -> Option<Session> {
+        serde_json::from_slice(&std::fs::read(Self::backup_path(path)).ok()?).ok()
+    }
+
+    /// [`SessionFile::load`], or [`SessionFile::load_backup`] when the file is there but is not a
+    /// session; `true` says the backup was used. Nothing on disk changes.
+    pub fn load_or_backup(path: &Path) -> io::Result<(Session, bool)> {
+        match Self::load(path) {
+            Ok(s) => Ok((s, false)),
+            Err(e) if e.kind() == io::ErrorKind::InvalidData => Self::load_backup(path).map(|s| (s, true)).ok_or(e),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Moves an unreadable session file out of the way as `<id>.json.corrupt` (with a timestamp
+    /// when that name is taken) and returns where it went.
+    pub fn set_aside(path: &Path) -> io::Result<PathBuf> {
+        let mut kept = path.with_extension("json.corrupt");
+        if kept.exists() {
+            let ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_millis());
+            kept = path.with_extension(format!("json.{ms}.corrupt"));
+        }
+        std::fs::rename(path, &kept)?;
+        Ok(kept)
+    }
+
+    /// What the window says after opening the backup of an unreadable session file.
+    pub fn backup_notice(path: &Path, kept: Option<&Path>) -> String {
+        let name = |p: &Path| p.file_name().unwrap_or_default().to_string_lossy().into_owned();
+        let mut notice = format!("{} was unreadable: opened the save before it", name(path));
+        if let Some(kept) = kept {
+            notice.push_str(&format!("; the unreadable file is kept as {}", name(kept)));
+        }
+        notice
+    }
+
     /// Writes compact JSON next to `path` and renames it over, so a crash never leaves half a file.
     pub fn save(path: &Path, session: &Session) -> io::Result<()> {
         let bytes = serde_json::to_vec(session).map_err(io::Error::other)?;
+        keep_backup(path);
         write_atomic(path, &bytes)
     }
 
@@ -152,9 +199,29 @@ impl Snapshot {
         if self.seq < *last {
             return Ok(());
         }
+        keep_backup(&self.path);
         write_atomic(&self.path, &self.bytes)?;
         *last = self.seq;
         Ok(())
+    }
+}
+
+/// A name beside `path` no other writer uses.
+fn temp_beside(path: &Path) -> PathBuf {
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    let mut tmp = path.as_os_str().to_owned();
+    tmp.push(format!(".{}-{}.tmp", std::process::id(), SEQ.fetch_add(1, Ordering::Relaxed)));
+    tmp.into()
+}
+
+/// Gives the session file at `path` a second name, [`SessionFile::backup_path`], just before a
+/// save replaces it: a hard link, so no bytes are written. A save never fails for its backup.
+fn keep_backup(path: &Path) {
+    let tmp = temp_beside(path);
+    let kept = std::fs::hard_link(path, &tmp).and_then(|()| std::fs::rename(&tmp, SessionFile::backup_path(path)));
+    // A rename onto another name of the same file does nothing and leaves both.
+    if kept.is_err() || cfg!(unix) {
+        let _ = std::fs::remove_file(&tmp);
     }
 }
 
@@ -163,10 +230,7 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
-    static SEQ: AtomicU64 = AtomicU64::new(0);
-    let mut tmp = path.as_os_str().to_owned();
-    tmp.push(format!(".{}-{}.tmp", std::process::id(), SEQ.fetch_add(1, Ordering::Relaxed)));
-    let tmp = PathBuf::from(tmp);
+    let tmp = temp_beside(path);
     // Flushed before the rename: NTFS journals the rename, not the data, so a power cut could
     // otherwise leave the session file empty.
     let written = std::fs::File::create(&tmp).and_then(|mut f| {
@@ -377,5 +441,117 @@ mod tests {
         assert_eq!(std::fs::read_to_string(new.join("sessions").join("a.json")).unwrap(), "{}");
         assert!(!copy_once(&old, &new).unwrap(), "an existing folder is left alone");
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("rain-store-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn version(n: u64) -> Session {
+        Session {
+            id: "s".into(),
+            version: n,
+            ..Session::default()
+        }
+    }
+
+    fn names(dir: &Path) -> Vec<String> {
+        let mut names: Vec<String> = std::fs::read_dir(dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        names
+    }
+
+    #[test]
+    fn a_save_keeps_the_session_it_replaces_as_the_one_backup() {
+        let dir = scratch("backup");
+        let path = dir.join("s.json");
+        SessionFile::save(&path, &version(1)).unwrap();
+        assert_eq!(names(&dir), ["s.json"], "nothing to keep on the first save");
+        assert_eq!(SessionFile::load_backup(&path), None);
+        SessionFile::save(&path, &version(2)).unwrap();
+        assert_eq!(SessionFile::load_backup(&path), Some(version(1)));
+        SessionFile::snapshot(&path, &version(3)).unwrap().write().unwrap();
+        assert_eq!(SessionFile::load_backup(&path), Some(version(2)), "a snapshot keeps one too");
+        assert_eq!(SessionFile::load(&path).unwrap(), version(3));
+        assert_eq!(names(&dir), ["s.json", "s.json.bak"], "one backup and no temp files");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn the_backup_is_a_second_name_for_the_old_file_not_a_second_write() {
+        let dir = scratch("backup-link");
+        let path = dir.join("s.json");
+        std::fs::write(&path, b"old").unwrap();
+        keep_backup(&path);
+        let mut main = std::fs::OpenOptions::new().append(true).open(&path).unwrap();
+        std::io::Write::write_all(&mut main, b" and more").unwrap();
+        drop(main);
+        assert_eq!(
+            std::fs::read(SessionFile::backup_path(&path)).unwrap(),
+            b"old and more",
+            "one file under two names: keeping it copied no bytes"
+        );
+        assert_eq!(names(&dir), ["s.json", "s.json.bak"]);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_backup_that_already_names_the_session_file_leaves_no_litter() {
+        let dir = scratch("backup-same");
+        let path = dir.join("s.json");
+        SessionFile::save(&path, &version(1)).unwrap();
+        std::fs::hard_link(&path, SessionFile::backup_path(&path)).unwrap();
+        SessionFile::save(&path, &version(2)).unwrap();
+        assert_eq!(names(&dir), ["s.json", "s.json.bak"]);
+        assert_eq!(SessionFile::load_backup(&path), Some(version(1)));
+        assert_eq!(SessionFile::load(&path).unwrap(), version(2));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn an_unreadable_session_file_falls_back_to_its_backup() {
+        let dir = scratch("backup-load");
+        let path = dir.join("s.json");
+        SessionFile::save(&path, &version(1)).unwrap();
+        SessionFile::save(&path, &version(2)).unwrap();
+        assert_eq!(SessionFile::load_or_backup(&path).unwrap(), (version(2), false));
+
+        std::fs::write(&path, b"{\"threads\": [").unwrap();
+        assert_eq!(SessionFile::load_or_backup(&path).unwrap(), (version(1), true));
+        assert_eq!(std::fs::read(&path).unwrap(), b"{\"threads\": [", "reading moves nothing");
+
+        let kept = SessionFile::set_aside(&path).unwrap();
+        assert_eq!(kept, dir.join("s.json.corrupt"));
+        assert_eq!(
+            SessionFile::backup_notice(&path, Some(&kept)),
+            "s.json was unreadable: opened the save before it; the unreadable file is kept as s.json.corrupt"
+        );
+        SessionFile::save(&path, &version(1)).unwrap();
+        assert_eq!(
+            SessionFile::load_backup(&path),
+            Some(version(1)),
+            "the good backup outlives the recovery"
+        );
+        assert_eq!(names(&dir), ["s.json", "s.json.bak", "s.json.corrupt"]);
+
+        std::fs::write(&path, b"not json").unwrap();
+        std::fs::write(SessionFile::backup_path(&path), b"nor this").unwrap();
+        let e = SessionFile::load_or_backup(&path).unwrap_err();
+        assert_eq!(e.kind(), io::ErrorKind::InvalidData, "both unreadable: the error load gives today");
+
+        std::fs::remove_file(&path).unwrap();
+        std::fs::write(SessionFile::backup_path(&path), serde_json::to_vec(&version(1)).unwrap()).unwrap();
+        assert_eq!(
+            SessionFile::load_or_backup(&path).unwrap(),
+            (Session::default(), false),
+            "a missing file is an empty session, not its old backup"
+        );
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

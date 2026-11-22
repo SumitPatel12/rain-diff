@@ -43,4 +43,8 @@ pub struct Launch {
     pub context: Option<u32>,
     /// Another window holds the session: show it, never save it.
     pub read_only: bool,
+    /// What else made the window read-only, for its status line.
+    pub read_only_reason: Option<String>,
+    /// What happened to the saved session at start (its backup was opened), for the status line.
+    pub session_notice: Option<String>,
 }

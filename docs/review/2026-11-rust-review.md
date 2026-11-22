@@ -67,7 +67,7 @@ What was already safe:
 - Paths are absolute, so none starts with `-`.
 
 What was broken:
-- cmd expands `%NAME%` even inside quotes, and has no escape for it on a `/C` line. A repo file `a%USERNAME%.cs` opened `asumit.cs`.
+- cmd expands `%NAME%` even inside quotes, and has no escape for it on a `/C` line. For a user named `reviewer`, a repo file `a%USERNAME%.cs` opened `areviewer.cs`.
 - `!` is expanded the same way when delayed expansion is on in the registry.
 
 This was not code execution: `:` is illegal in file names, so substring and replace expansions can't be formed.
@@ -128,15 +128,15 @@ Fixed (cheap and safe):
 Skipped, with reasons:
 - **17. `settings.window` is read but never written** (`rain-app/src/lib.rs:321`). Persisting the window size is a product decision, not a bug fix.
 - **18. `Diagram` clones the whole `Layout` on every build** (`rain-diagram/src/draw.rs:255`). Fixing it means changing `Diagram::new` to take `Rc<Layout>` across crates and app state. That is a perf-only refactor with no measurement behind it.
-- **19. Syntect fallback grammars highlight on the UI thread** (`rain-diffview/src/state.rs:1366`). The only real fix is off-thread prefetch or paint-then-repaint, which is a design change. Not cheap.
-- **20. Autosave holds the session lock through up to about 2.1 s of rename retries** (`rain-comments/src/store.rs:157-163`). This is deliberate: it guarantees an older snapshot never lands after a newer one. Splitting the locks adds moving parts, and nothing has been observed to hitch.
+- **19. Syntect fallback grammars highlight on the UI thread** (`rain-diffview/src/state.rs:1366`). The only real fix is off-thread prefetch or paint-then-repaint, which is a design change. Not cheap. *Since done:* these languages now draw plain first and a worker colours them (`docs/decisions.md`, entry 15).
+- **20. Autosave holds the session lock through up to about 2.1 s of rename retries** (`rain-comments/src/store.rs:157-163`). This is deliberate: it guarantees an older snapshot never lands after a newer one. Splitting the locks adds moving parts, and nothing has been observed to hitch. *Since changed:* the session is serialised under the lock and written after it is let go; numbered snapshots keep the order (`docs/decisions.md`, entry 5).
 - **21. One OS thread per HTTP request; `/api/events` holds one for up to 60 s** (`rain-server/src/lib.rs:76-82`). Only local, non-browser clients can reach it. A pool is not worth the complexity.
 - **22. A failed save is logged, but the route still answers 200** (`rain-server/src/lib.rs:146-152`). The change stays in memory and is saved again on the next change and at exit. Changing the reply would alter the difit-compatible contract in `docs/compat.md`.
 - **23. Poisoned locks are recovered with `into_inner`** (`rain-core/src/session.rs:113`). This is documented and deliberate: one panicking request must not take the UI down.
 - **24. `u32` text-arena offsets wrap past 4 GiB of diff text in one file** (`rain-core/src/diff.rs:166`). Only a single file diff over 4 GiB could trigger it, which is not realistic.
 - **25. Generated-file checks compare extensions case-sensitively** (`rain-git/src/generated.rs:192-216`). This is a byte-for-byte port of difit's `generated-file-check.ts`. Changing it would make the two disagree.
 - **26. The CLI reports a read timeout as "Cannot connect"** (`rain-cli/src/client.rs:50`). Cosmetic, and the text matches difit's error.
-- **27. `Settings::save` is not atomic** (`rain-app/src/settings.rs:92`). Low value: the file is small and rewritten whole on the next change, and #6 now protects a broken file from being overwritten.
+- **27. `Settings::save` is not atomic** (`rain-app/src/settings.rs:92`). Low value: the file is small and rewritten whole on the next change, and #6 now protects a broken file from being overwritten. *Since done:* `Settings::save` and `save_merged` go through `write_atomic`, the same temp-file, flush and rename as the session.
 
 ## Checked and not a problem
 - **Server:**
@@ -162,7 +162,7 @@ Skipped, with reasons:
 
 ## What's already good
 - **Server defences are layered** (Origin, then Host, then Content-Type, then size), and each layer is tested in `tests/routes.rs`.
-- **Saving is ordered:** the HTTP routes and autosave both save under the session lock with tmp-and-rename, so an older snapshot can never land last.
+- **Saving is ordered:** the HTTP routes and autosave both save under the session lock with tmp-and-rename, so an older snapshot can never land last. (Now: serialised under the lock, written after it, in snapshot order.)
 - **The streaming git driver** serves stdin and stderr on threads, so pipes can't deadlock. It kills the child on drop. The parser is fuzzed (`hostile_and_fuzzed_patches_never_panic_or_blow_up`).
 - **The 1M-row diff state** uses 16-byte rows, `row_of` by arithmetic or binary search, and UTF-8-safe byte/column round trips throughout.
 

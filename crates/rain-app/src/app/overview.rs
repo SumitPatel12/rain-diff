@@ -141,8 +141,6 @@ impl App {
         self.set_reader_tab(ReaderTab::Overview);
     }
 
-    // ----- selection -----
-
     /// Whether text selected in an Overview section shows its toolbar: nothing covers it.
     pub fn overview_toolbar_shown(&self) -> bool {
         self.brief.selection.is_some()
@@ -199,8 +197,6 @@ impl App {
         }
         shown
     }
-
-    // ----- peek -----
 
     /// A chip's hover: in starts the dwell, out starts the grace.
     pub fn peek_hover(&mut self, target: PeekTarget, inside: bool, tx: &mut Tx) {
@@ -360,7 +356,9 @@ impl App {
                 old: l.old,
                 new: l.new,
                 kind: l.kind,
-                text: f.line_text(i as u32).trim_end_matches(['\r', '\n']).to_owned(),
+                text: rain_diffview::drawn_part(f.line_text(i as u32))
+                    .trim_end_matches(['\r', '\n'])
+                    .to_owned(),
                 words: self.diff.word_changes(g, i as u32),
                 cited: cited.is_some_and(|(a, b)| n != 0 && n >= a && n <= b),
                 gap_before,

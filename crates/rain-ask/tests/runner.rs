@@ -47,7 +47,13 @@ fn stdout_and_exit_code_come_back_and_stdin_is_the_prompt() {
     };
     assert_eq!(run(env, "", Duration::from_secs(20)).stdout.trim(), "k3x9f2");
 
-    let o = run(shell("echo bad 1>&2 & exit 4"), "", Duration::from_secs(20));
+    // `&` sequences commands in cmd, but backgrounds the echo in a POSIX shell.
+    let error = if cfg!(windows) {
+        "echo bad 1>&2 & exit 4"
+    } else {
+        "echo bad 1>&2; exit 4"
+    };
+    let o = run(shell(error), "", Duration::from_secs(20));
     assert_eq!(o.code, Some(4));
     assert!(o.error().starts_with("exit 4: bad"), "{}", o.error());
 }
@@ -112,4 +118,13 @@ fn cancel_ends_the_run_within_half_a_second() {
     assert!(t.elapsed() < Duration::from_millis(500), "{:?}", t.elapsed());
     let o = h.try_wait().unwrap();
     assert!(o.cancelled && !o.timed_out);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_successful_command_does_not_leave_children_holding_its_output() {
+    let o = run(shell("sleep 6 & printf answer"), "", Duration::from_secs(20));
+    assert_eq!(o.code, Some(0));
+    assert_eq!(o.stdout, "answer", "a descendant must not keep the output pipe open");
+    assert!(o.answered());
 }

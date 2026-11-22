@@ -1,8 +1,9 @@
 //! Small parts the redesign repeats: key caps, ghost and outlined buttons, chips, separators.
 
+use std::ops::Range;
 use std::rc::Rc;
 
-use rune::{Cursor, El, Icon, Key, KeyEvent, Mods, Tx, el, row, text};
+use rune::{Color, Cursor, El, Icon, Key, KeyEvent, Mods, TextHighlight, Tx, el, row, text};
 use rune_kit::Kit;
 
 use super::icons;
@@ -38,7 +39,6 @@ impl Activate for El {
     }
 }
 
-/// The scheme's surfaces and roles for a kit from `theme::look`.
 pub(crate) fn sr(k: &Kit) -> (Surfaces, Roles) {
     (surfaces_of(k), roles_of(k))
 }
@@ -79,6 +79,23 @@ pub(crate) fn md_style(k: &Kit) -> rune_kit::MarkdownStyle {
         .heading_font(1, TextStyle::new(18.0, 600.0).lh(26.0))
         .heading_font(2, TextStyle::new(16.0, 600.0).lh(24.0))
         .heading_font(3, TextStyle::new(16.0, 600.0).lh(24.0))
+}
+
+/// The ink of the letters a query matched: the one hue that reads on a row, a hovered row and
+/// the selected row in every scheme, and the hue find's hits have in the diff.
+pub(crate) fn match_ink(k: &Kit) -> Color {
+    k.c.warning.fg
+}
+
+/// A row's label with the letters its query matched (`marks`, byte ranges) in [`match_ink`].
+/// Painted over the shaped text: a styled span could shape the label again and move its glyphs.
+pub(crate) fn matched(label: impl Into<String>, marks: &[Range<usize>], k: &Kit) -> El {
+    let ink = match_ink(k);
+    text(label).font(TYPE.ui).color(k.c.text_base).text_highlights(
+        marks
+            .iter()
+            .map(|r| TextHighlight::new(r.clone(), Color::TRANSPARENT).color(ink).pad(0.0)),
+    )
 }
 
 /// A 1 × 16 point divider between toolbar groups.
