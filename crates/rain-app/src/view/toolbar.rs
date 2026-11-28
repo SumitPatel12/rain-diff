@@ -330,7 +330,8 @@ fn refs_shown(s: &App) -> bool {
     !repo_names(s).is_empty()
 }
 
-pub(super) fn top_bar(s: &App, look: &Look, layer: &mut Vec<El>) -> El {
+/// `inset`: the points the macOS traffic lights take at the leading edge (`Cx::titlebar_inset`).
+pub(super) fn top_bar(s: &App, look: &Look, inset: f32, layer: &mut Vec<El>) -> El {
     let k = &look.kit;
     let list_open = s.sidebar.is_open() && !s.layout.is_zoomed();
     let toggle = Ghost::new("list-toggle")
@@ -346,8 +347,9 @@ pub(super) fn top_bar(s: &App, look: &Look, layer: &mut Vec<El>) -> El {
         .key("toolbar")
         .w_full()
         .h(space::TOP_BAR)
-        .pl(10.0)
+        .pl(10.0 + inset)
         .pr(12.0)
+        .window_drag()
         .gap(10.0)
         .items_center()
         .fill(look.s.bar)

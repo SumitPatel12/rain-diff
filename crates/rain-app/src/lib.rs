@@ -651,6 +651,7 @@ pub fn run(launch: Launch, shared: Arc<Shared>) -> bool {
     let on_focus = |s: &mut App, focused: bool, _: &mut Tx| s.window_focus(focused);
     let mut app = rune::App::new(spec())
         .modifier_keys()
+        .chrome(CHROME)
         .on_close(on_close)
         .on_focus(on_focus)
         .on_window(|w| {
@@ -663,6 +664,16 @@ pub fn run(launch: Launch, shared: Arc<Shared>) -> bool {
     app.run();
     CLOSE_REQUESTED.load(Ordering::SeqCst)
 }
+
+/// macOS: the content runs under a transparent title bar, the traffic lights centred in the top
+/// bar (14 pt buttons in its 44 pt band), and only `.window_drag()` regions move the window so the
+/// bar's buttons stay clickable. The top bar starts past the lights with `Cx::titlebar_inset`.
+/// Windows and Linux keep the system title bar.
+const CHROME: rune::Chrome = rune::Chrome {
+    full_size_content: true,
+    traffic_lights: Some((16.0, (theme::space::TOP_BAR - rune::Chrome::TRAFFIC_LIGHT) / 2.0)),
+    drag_regions: true,
+};
 
 static CLOSE_REQUESTED: AtomicBool = AtomicBool::new(false);
 

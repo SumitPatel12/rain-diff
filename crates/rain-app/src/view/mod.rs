@@ -75,7 +75,7 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
     let k = &look.kit;
     crate::title_bar::paint(scheme.is_dark(), look.s.bar, k.c.text_base);
     let mut layer: Vec<El> = Vec::new();
-    let top = toolbar::top_bar(s, &look, &mut layer);
+    let top = toolbar::top_bar(s, &look, cx.titlebar_inset(), &mut layer);
     let mut root = col()
         .key("app")
         .w_full()
